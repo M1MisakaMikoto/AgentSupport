@@ -1,0 +1,88 @@
+﻿{
+    "docker_desktop":  "Docker Desktop 4.83.0 (234302)",
+    "engine_version":  "29.6.2",
+    "image":  "python:3.12-slim",
+    "fresh_container_per_task":  {
+                                     "samples":  10,
+                                     "median_ms":  752.896,
+                                     "p95_ms":  819.56,
+                                     "min_ms":  704.912,
+                                     "max_ms":  1105.109
+                                 },
+    "warm_container_exec":  {
+                                "samples":  10,
+                                "median_ms":  223.867,
+                                "p95_ms":  258.11,
+                                "min_ms":  175.832,
+                                "max_ms":  280.916
+                            },
+    "sequential_scale_to_10_ms":  5035.08,
+    "running_container_stats":  [
+                                    {
+                                        "name":  "agent-state-lab-warm",
+                                        "memory":  "512KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    },
+                                    {
+                                        "name":  "agent-state-lab-scale-1",
+                                        "memory":  "440KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    },
+                                    {
+                                        "name":  "agent-state-lab-scale-2",
+                                        "memory":  "432KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    },
+                                    {
+                                        "name":  "agent-state-lab-scale-3",
+                                        "memory":  "440KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    },
+                                    {
+                                        "name":  "agent-state-lab-scale-4",
+                                        "memory":  "444KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    },
+                                    {
+                                        "name":  "agent-state-lab-scale-5",
+                                        "memory":  "444KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    },
+                                    {
+                                        "name":  "agent-state-lab-scale-6",
+                                        "memory":  "436KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    },
+                                    {
+                                        "name":  "agent-state-lab-scale-7",
+                                        "memory":  "436KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    },
+                                    {
+                                        "name":  "agent-state-lab-scale-8",
+                                        "memory":  "448KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    },
+                                    {
+                                        "name":  "agent-state-lab-scale-9",
+                                        "memory":  "440KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    },
+                                    {
+                                        "name":  "agent-state-lab-scale-10",
+                                        "memory":  "444KiB / 15.58GiB",
+                                        "cpu":  "0.00%",
+                                        "pids":  "1"
+                                    }
+                                ]
+}

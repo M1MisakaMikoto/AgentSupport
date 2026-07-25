@@ -1,0 +1,125 @@
+{
+  "estimation_note": "Token 数为字符数除以 4 的粗略估算，不代表任何具体模型的账单用量。",
+  "cases": [
+    {
+      "name": "empty",
+      "turns": 0,
+      "skills": 0,
+      "tools": 0,
+      "skill_loading": "manifest_only",
+      "history_loading": "full",
+      "characters": 125,
+      "utf8_bytes": 143,
+      "estimated_tokens_chars_div_4": 32,
+      "serialization_ms": 0.022
+    },
+    {
+      "name": "10_turns_20_tools",
+      "turns": 10,
+      "skills": 0,
+      "tools": 20,
+      "skill_loading": "manifest_only",
+      "history_loading": "full",
+      "characters": 14146,
+      "utf8_bytes": 33284,
+      "estimated_tokens_chars_div_4": 3537,
+      "serialization_ms": 0.107
+    },
+    {
+      "name": "50_turns_20_tools",
+      "turns": 50,
+      "skills": 0,
+      "tools": 20,
+      "skill_loading": "manifest_only",
+      "history_loading": "full",
+      "characters": 44746,
+      "utf8_bytes": 119404,
+      "estimated_tokens_chars_div_4": 11187,
+      "serialization_ms": 0.287
+    },
+    {
+      "name": "50_turns_10_skill_manifests_20_tools",
+      "turns": 50,
+      "skills": 10,
+      "tools": 20,
+      "skill_loading": "manifest_only",
+      "history_loading": "full",
+      "characters": 47227,
+      "utf8_bytes": 123685,
+      "estimated_tokens_chars_div_4": 11807,
+      "serialization_ms": 0.236
+    },
+    {
+      "name": "50_turns_10_full_skills_20_tools",
+      "turns": 50,
+      "skills": 10,
+      "tools": 20,
+      "skill_loading": "all_sources",
+      "history_loading": "full",
+      "characters": 56657,
+      "utf8_bytes": 151015,
+      "estimated_tokens_chars_div_4": 14165,
+      "serialization_ms": 0.272
+    },
+    {
+      "name": "50_turns_50_skill_manifests_20_tools",
+      "turns": 50,
+      "skills": 50,
+      "tools": 20,
+      "skill_loading": "manifest_only",
+      "history_loading": "full",
+      "characters": 57227,
+      "utf8_bytes": 140885,
+      "estimated_tokens_chars_div_4": 14307,
+      "serialization_ms": 0.343
+    },
+    {
+      "name": "50_turns_50_full_skills_20_tools",
+      "turns": 50,
+      "skills": 50,
+      "tools": 20,
+      "skill_loading": "all_sources",
+      "history_loading": "full",
+      "characters": 104417,
+      "utf8_bytes": 277575,
+      "estimated_tokens_chars_div_4": 26105,
+      "serialization_ms": 0.573
+    },
+    {
+      "name": "50_turns_10_skill_manifests_100_tools",
+      "turns": 50,
+      "skills": 10,
+      "tools": 100,
+      "skill_loading": "manifest_only",
+      "history_loading": "full",
+      "characters": 72828,
+      "utf8_bytes": 170246,
+      "estimated_tokens_chars_div_4": 18207,
+      "serialization_ms": 0.734
+    },
+    {
+      "name": "optimized_100_turns_50_skill_manifests_20_tools",
+      "turns": 100,
+      "skills": 50,
+      "tools": 20,
+      "skill_loading": "manifest_only",
+      "history_loading": "summary_plus_5_recent",
+      "characters": 23476,
+      "utf8_bytes": 45874,
+      "estimated_tokens_chars_div_4": 5869,
+      "serialization_ms": 0.212
+    },
+    {
+      "name": "eager_100_turns_50_full_skills_100_tools",
+      "turns": 100,
+      "skills": 50,
+      "tools": 100,
+      "skill_loading": "all_sources",
+      "history_loading": "full",
+      "characters": 168270,
+      "utf8_bytes": 431788,
+      "estimated_tokens_chars_div_4": 42068,
+      "serialization_ms": 1.49
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "trae_version": "trae-cli, version 0.1.0",
+  "lifecycle": {
+    "same_core_object_reused": true,
+    "first_task_message_count": 2,
+    "second_task_message_count": 2,
+    "prior_marker_retained_by_second_task": false,
+    "lifecycle_counts_for_two_tasks": {
+      "mcp_init": 2,
+      "execute": 2,
+      "mcp_cleanup": 2
+    }
+  },
+  "startup": {
+    "agent_object_creation_ms": {
+      "median": 659.153,
+      "p95": 709.572
+    },
+    "cli_process_start_ms": {
+      "median": 2885.825,
+      "p95": 2991.54
+    }
+  }
+}

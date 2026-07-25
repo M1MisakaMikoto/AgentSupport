@@ -1,0 +1,45 @@
+{
+  "provider": "openai-compatible-dashscope",
+  "model": "qwen3.7-plus",
+  "runtime": "DockerCliRuntimeDriver / agent-session:dev",
+  "state_after_pause": "PAUSED",
+  "checkpoint_created": true,
+  "old_container_after_pause": "missing",
+  "final_state": "COMPLETED",
+  "approvals": 2,
+  "tool_calls": [
+    "str_replace_based_edit_tool",
+    "str_replace_based_edit_tool",
+    "bash"
+  ],
+  "event_types": [
+    "run.started",
+    "run.running",
+    "run.started",
+    "tool.call",
+    "tool.authorization",
+    "interaction.requested",
+    "checkpoint.requested",
+    "checkpoint.created",
+    "run.paused",
+    "approval.decided",
+    "checkpoint.restored",
+    "tool.call",
+    "tool.authorization",
+    "tool.result",
+    "tool.call",
+    "tool.authorization",
+    "interaction.requested",
+    "approval.decided",
+    "tool.result",
+    "trajectory.recorded",
+    "message",
+    "run.completed"
+  ],
+  "workspace_file": {
+    "name": "REQUIRED-QWEN-RESUME",
+    "content": "REQUIRED-QWEN-RESUME"
+  },
+  "active_container_after": null,
+  "credential_persistence": "none"
+}

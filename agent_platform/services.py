@@ -1,0 +1,1092 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path, PurePosixPath
+from typing import Any
+from uuid import UUID, uuid4
+
+from .checkpoint import tool_policy_hash, tool_versions_hash, validate_checkpoint
+from .config import Settings, settings
+from .core_runtime import TraeCoreRunnerRuntime
+from .domain import (
+    TERMINAL_STATES,
+    Checkpoint,
+    ContextBundle,
+    Conversation,
+    ExecutionState,
+    Session,
+    Workspace,
+)
+from .events import EventEnvelope, InMemoryEventStore
+from .repository import PostgresRepository, RepositoryConflict
+from .runtime import DockerCliRuntimeDriver, DockerRuntimeDriver, default_session_container_env
+from .skills import LocalSkillProvider
+from .storage import LocalWorkspaceProvider
+from .tool_gateway import ToolBatch
+
+
+class ServiceError(Exception):
+    def __init__(
+        self, code: str, message: str, status_code: int = 400, details: dict[str, Any] | None = None
+    ):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.details = details or {}
+
+
+def _hash_request(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass
+class IdempotencyRecord:
+    request_hash: str
+    resource_id: UUID
+
+
+class PlatformService:
+    """First-release application service with replaceable persistence ports."""
+
+    def __init__(self, config: Settings = settings) -> None:
+        self.config = config
+        self.workspaces: dict[UUID, Workspace] = {}
+        self.sessions: dict[UUID, Session] = {}
+        self.conversations: dict[UUID, Conversation] = {}
+        self.checkpoints: dict[UUID, Checkpoint] = {}
+        self.events_store = InMemoryEventStore()
+        self.workspace_provider = LocalWorkspaceProvider(config.workspace_root)
+        self.skill_provider = LocalSkillProvider(config.skills_root)
+        self.enabled_skills = [
+            item.strip() for item in config.enabled_skills.split(",") if item.strip()
+        ]
+        self.runtime_driver = (
+            DockerCliRuntimeDriver(
+                context=config.runtime_context,
+                stop_grace_seconds=config.runtime_stop_grace_seconds,
+                startup_timeout_seconds=config.runtime_start_timeout_seconds,
+                container_env=default_session_container_env(),
+            )
+            if config.runtime_driver == "docker_cli"
+            else DockerRuntimeDriver()
+        )
+        self.core_runtime = (
+            TraeCoreRunnerRuntime(
+                config.core_runner_url or "http://runner",
+                timeout_seconds=config.core_runner_timeout_seconds,
+            )
+            if config.core_runner_url or config.runtime_driver == "docker_cli"
+            else None
+        )
+        self.idempotency: dict[tuple[str, str], IdempotencyRecord] = {}
+        self.workspace_leases: dict[UUID, UUID] = {}
+        self._health_failures: dict[UUID, int] = {}
+        self._scheduler_lock = asyncio.Lock()
+        self.repository = (
+            PostgresRepository(config.database_url, create_schema=True)
+            if config.persistence_mode == "postgres"
+            else None
+        )
+        if self.repository:
+            self._load_persisted_state()
+
+    def _load_persisted_state(self) -> None:
+        assert self.repository is not None
+        self.workspaces = {item.id: item for item in self.repository.list_workspaces()}
+        self.sessions = {item.id: item for item in self.repository.list_sessions()}
+        self.conversations = {item.id: item for item in self.repository.list_conversations()}
+        for session in self.sessions.values():
+            if session.active_container_id:
+                self.workspace_leases[session.workspace_id] = session.id
+        for conversation in self.conversations.values():
+            for event in self.repository.list_events(conversation.id):
+                self.events_store.append(conversation.id, event)
+
+    def _idempotent(self, scope: str, key: str | None, payload: dict[str, Any]) -> UUID | None:
+        if not key:
+            return None
+        record = self.idempotency.get((scope, key))
+        request_hash = _hash_request(payload)
+        if record:
+            if record.request_hash != request_hash:
+                raise ServiceError(
+                    "IDEMPOTENCY_CONFLICT",
+                    "idempotency key was reused with a different request",
+                    409,
+                )
+            return record.resource_id
+        return None
+
+    async def _runner_endpoint(self, session: Session) -> str | None:
+        if session.active_container_id:
+            endpoint_method = getattr(self.runtime_driver, "endpoint", None)
+            if endpoint_method is not None:
+                endpoint = await endpoint_method(session.active_container_id)
+                if endpoint:
+                    return endpoint
+        return self.config.core_runner_url
+
+    async def _register_core_endpoint(self, session: Session, run_id: UUID) -> str | None:
+        endpoint = await self._runner_endpoint(session)
+        if self.core_runtime is not None:
+            register = getattr(self.core_runtime, "register_run_endpoint", None)
+            if register is not None:
+                register(run_id, endpoint)
+        return endpoint
+
+    @staticmethod
+    def _tool_policy() -> dict[str, Any]:
+        return {
+            "allowed_tools": [
+                "bash",
+                "str_replace_based_edit_tool",
+                "json_edit_tool",
+                "sequentialthinking",
+                "task_done",
+            ],
+            "approval_required_tools": [
+                "bash",
+                "str_replace_based_edit_tool",
+                "json_edit_tool",
+            ],
+        }
+
+    def _remember(
+        self, scope: str, key: str | None, payload: dict[str, Any], resource_id: UUID
+    ) -> None:
+        if key:
+            self.idempotency[(scope, key)] = IdempotencyRecord(_hash_request(payload), resource_id)
+
+    def _remember_persisted(
+        self,
+        scope: str,
+        key: str | None,
+        payload: dict[str, Any],
+        resource_id: UUID,
+        response: dict[str, Any],
+    ) -> None:
+        self._remember(scope, key, payload, resource_id)
+        if self.repository and key:
+            try:
+                self.repository.remember_idempotent(
+                    scope, key, _hash_request(payload), resource_id, response
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+
+    def create_workspace(self, name: str, idempotency_key: str | None = None) -> Workspace:
+        payload = {"name": name}
+        existing = self._idempotent("workspace", idempotency_key, payload)
+        if existing:
+            return self.workspaces[existing]
+        if self.repository and idempotency_key:
+            try:
+                existing = self.repository.find_idempotent(
+                    "workspace", idempotency_key, _hash_request(payload)
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            if existing:
+                workspace = self.repository.get_workspace(existing)
+                if workspace:
+                    self.workspaces[workspace.id] = workspace
+                    self._remember("workspace", idempotency_key, payload, workspace.id)
+                    return workspace
+        workspace_id, path = self.workspace_provider.create(name)
+        workspace = Workspace(id=workspace_id, name=name, root_path=path)
+        if self.repository:
+            try:
+                workspace = self.repository.create_workspace(
+                    name, path, _hash_request(payload), idempotency_key
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+        self.workspaces[workspace.id] = workspace
+        self._remember("workspace", idempotency_key, payload, workspace.id)
+        return workspace
+
+    def create_session(self, workspace_id: UUID, idempotency_key: str | None = None) -> Session:
+        workspace = self.workspaces.get(workspace_id)
+        if not workspace and self.repository:
+            workspace = self.repository.get_workspace(workspace_id)
+            if workspace:
+                self.workspaces[workspace.id] = workspace
+        if not workspace:
+            raise ServiceError("WORKSPACE_NOT_FOUND", "workspace does not exist", 404)
+        payload = {"workspace_id": workspace_id}
+        existing = self._idempotent("session", idempotency_key, payload)
+        if existing:
+            return self.sessions[existing]
+        session = Session(workspace_id=workspace_id)
+        if self.repository:
+            try:
+                session = self.repository.create_session(
+                    workspace, _hash_request(payload), idempotency_key
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+        self.sessions[session.id] = session
+        self._remember("session", idempotency_key, payload, session.id)
+        return session
+
+    def _append(
+        self,
+        conversation: Conversation,
+        event_type: str,
+        payload: dict[str, Any],
+        source: str = "platform",
+    ) -> EventEnvelope:
+        seq = conversation.run.last_seq + 1
+        event = EventEnvelope(
+            run_id=conversation.run.run_id,
+            seq=seq,
+            type=event_type,
+            payload=payload,
+            source=source,
+        )
+        if self.repository:
+            try:
+                self.repository.append_event(conversation, event)
+            except RepositoryConflict as exc:
+                raise ServiceError("EVENT_CONFLICT", str(exc), 409) from exc
+        self.events_store.append(conversation.id, event)
+        conversation.run.last_seq = seq
+        try:
+            asyncio.get_running_loop().create_task(
+                self.events_store.publish(conversation.id, event)
+            )
+        except RuntimeError:
+            pass
+        return event
+
+    async def _acquire_container(self, session: Session) -> bool:
+        async with self._scheduler_lock:
+            return await self._acquire_container_locked(session)
+
+    async def _acquire_container_locked(self, session: Session) -> bool:
+        active = sum(1 for item in self.sessions.values() if item.active_container_id)
+        if self.repository:
+            active = max(active, self.repository.active_container_count())
+        if active >= self.config.max_active_sessions:
+            return False
+        lease_holder = self.workspace_leases.get(session.workspace_id)
+        if lease_holder is not None and lease_holder != session.id:
+            return False
+        workspace = self.workspaces.get(session.workspace_id)
+        if workspace is None and self.repository:
+            workspace = self.repository.get_workspace(session.workspace_id)
+            if workspace:
+                self.workspaces[workspace.id] = workspace
+        if workspace is None:
+            raise ServiceError("WORKSPACE_NOT_FOUND", "workspace does not exist", 404)
+        session.lease_epoch += 1
+        operation_id = (
+            self.repository.create_runtime_operation("start", str(session.id))
+            if self.repository
+            else None
+        )
+        try:
+            session.active_container_id = await asyncio.wait_for(
+                self.runtime_driver.start(
+                    session.id,
+                    workspace.root_path,
+                    session.lease_epoch,
+                    session.workspace_id,
+                    self.skill_provider.read_only_mounts(self.enabled_skills),
+                    runtime_operation_id=operation_id,
+                ),
+                timeout=self.config.runtime_start_timeout_seconds,
+            )
+        except Exception as exc:
+            if self.repository and operation_id:
+                self.repository.finish_runtime_operation(
+                    operation_id, "FAILED", {"error": str(exc)}
+                )
+            raise
+        if self.repository and not self.repository.try_acquire_workspace_lease(
+            session.workspace_id,
+            session.id,
+            session.lease_epoch,
+            session.active_container_id,
+            operation_id,
+        ):
+            await self.runtime_driver.stop(session.active_container_id)
+            if operation_id:
+                self.repository.finish_runtime_operation(
+                    operation_id, "FAILED", {"error": "workspace lease unavailable"}
+                )
+            session.active_container_id = None
+            return False
+        if self.repository and operation_id:
+            self.repository.finish_runtime_operation(
+                operation_id, "SUCCEEDED", {"container_id": session.active_container_id}
+            )
+        self.workspace_leases[session.workspace_id] = session.id
+        if self.repository:
+            self.repository.save_session(session)
+        return True
+
+    async def create_conversation(
+        self,
+        session_id: UUID,
+        task: str,
+        parent_conversation_id: UUID | None = None,
+        idempotency_key: str | None = None,
+    ) -> Conversation:
+        session = self.sessions.get(session_id)
+        if not session and self.repository:
+            session = self.repository.get_session(session_id)
+            if session:
+                self.sessions[session.id] = session
+        if not session:
+            raise ServiceError("SESSION_NOT_FOUND", "session does not exist", 404)
+        if parent_conversation_id:
+            parent = self.conversations.get(parent_conversation_id)
+            if not parent and self.repository:
+                parent = self.repository.get_conversation(parent_conversation_id)
+                if parent:
+                    self.conversations[parent.id] = parent
+            if not parent or parent.session_id != session_id:
+                raise ServiceError("PARENT_NOT_FOUND", "parent conversation is invalid", 404)
+        payload = {
+            "session_id": session_id,
+            "task": task,
+            "parent_conversation_id": parent_conversation_id,
+        }
+        existing = self._idempotent("conversation", idempotency_key, payload)
+        if existing:
+            return self.conversations[existing]
+        conversation = Conversation(
+            session_id=session_id, task=task, parent_conversation_id=parent_conversation_id
+        )
+        if self.repository:
+            try:
+                persisted = self.repository.create_conversation(
+                    conversation, _hash_request(payload), idempotency_key
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            if persisted.id != conversation.id:
+                self.conversations[persisted.id] = persisted
+                return persisted
+            conversation = persisted
+        self.conversations[conversation.id] = conversation
+        if session.active_run_id:
+            conversation.run.state = ExecutionState.QUEUED
+            self._append(conversation, "conversation.queued", {"session_id": str(session_id)})
+        else:
+            queued = sum(
+                1
+                for item in self.conversations.values()
+                if item.id != conversation.id and item.run.state == ExecutionState.QUEUED
+            )
+            if queued >= self.config.max_queued_conversations:
+                self.conversations.pop(conversation.id, None)
+                if self.repository:
+                    self.repository.delete_conversation(conversation.id, idempotency_key)
+                raise ServiceError("RESOURCE_EXHAUSTED", "conversation queue is full", 429)
+            try:
+                acquired = await self._acquire_container(session)
+            except TimeoutError:
+                conversation.run.state = ExecutionState.FAILED
+                self._append(
+                    conversation,
+                    "run.failed",
+                    {
+                        "code": "CONTAINER_START_TIMEOUT",
+                        "message": "Session container did not start before the configured timeout",
+                    },
+                )
+                self._remember_persisted(
+                    "conversation",
+                    idempotency_key,
+                    payload,
+                    conversation.id,
+                    conversation.model_dump(mode="json"),
+                )
+                return conversation
+            except Exception as exc:  # noqa: BLE001 - startup errors become run events
+                conversation.run.state = ExecutionState.FAILED
+                self._append(
+                    conversation,
+                    "run.failed",
+                    {"code": "CONTAINER_START_FAILED", "message": str(exc)},
+                )
+                self._remember_persisted(
+                    "conversation",
+                    idempotency_key,
+                    payload,
+                    conversation.id,
+                    conversation.model_dump(mode="json"),
+                )
+                return conversation
+            if not acquired:
+                conversation.run.state = ExecutionState.QUEUED
+                self._append(conversation, "conversation.queued", {"session_id": str(session_id)})
+            else:
+                session.active_run_id = conversation.run.run_id
+                if self.repository:
+                    self.repository.save_session(session)
+                conversation.run.state = ExecutionState.STARTING
+                self._append(conversation, "run.started", {"session_id": str(session_id)})
+                conversation.run.state = ExecutionState.RUNNING
+                self._append(
+                    conversation, "run.running", {"container_id": session.active_container_id}
+                )
+                if self.core_runtime:
+                    await self._run_core(conversation, session)
+        self._remember("conversation", idempotency_key, payload, conversation.id)
+        return conversation
+
+    async def _run_core(self, conversation: Conversation, session: Session) -> None:
+        async def event_sink(event: EventEnvelope) -> None:
+            self._apply_core_event(conversation, event)
+
+        workspace = self.workspaces[session.workspace_id]
+        workspace_ref = (
+            str(
+                PurePosixPath(
+                    "/" + str(self.config.core_runner_workspace_root).replace("\\", "/").lstrip("/")
+                )
+                / Path(workspace.root_path).name
+            )
+            if self.config.core_runner_workspace_root
+            else "/workspace"
+        )
+        runner_endpoint = await self._runner_endpoint(session)
+        if runner_endpoint and not self.config.core_runner_url:
+            workspace_ref = "/workspace"
+        tool_policy = self._tool_policy()
+        request = {
+            "run_id": str(conversation.run.run_id),
+            "conversation_id": str(conversation.id),
+            "session_id": str(session.id),
+            "container_id": session.active_container_id or "unassigned",
+            "lease_epoch": session.lease_epoch,
+            "fence_epoch": session.lease_epoch,
+            "correlation_id": str(uuid4()),
+            "context_bundle": {
+                "task": conversation.task,
+                "conversation_id": str(conversation.id),
+                "workspace_ref": workspace_ref,
+                "recent_events": [
+                    event.model_dump(mode="json")
+                    for event in self.events_store.list(conversation.id)
+                ],
+                "skill_manifest": self.skill_provider.manifest(self.enabled_skills),
+                "tool_policy": tool_policy,
+                "mcp_refs": [],
+            },
+            "workspace_ref": workspace_ref,
+            "tool_policy": tool_policy,
+            "core_version": "0.1.0",
+        }
+        runner_endpoint = await self._register_core_endpoint(session, conversation.run.run_id)
+        if runner_endpoint:
+            request["runner_url"] = runner_endpoint
+        try:
+            await self.core_runtime.run(request, event_sink)
+        except Exception as exc:  # noqa: BLE001 - runtime failures become platform events
+            conversation.run.state = ExecutionState.FAILED
+            self._append(
+                conversation,
+                "run.failed",
+                {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
+            )
+        if conversation.run.state in TERMINAL_STATES:
+            await self._release_session(session, conversation)
+
+    def _apply_core_event(self, conversation: Conversation, event: EventEnvelope) -> None:
+        if event.type == "interaction.requested":
+            conversation.run.pending_interaction = event.payload
+            conversation.run.state = ExecutionState.WAITING_INPUT
+        elif event.type == "run.completed":
+            conversation.run.pending_interaction = None
+            conversation.run.state = ExecutionState.COMPLETED
+            conversation.run.result_summary = event.payload.get("result", event.payload)
+        elif event.type == "run.failed":
+            conversation.run.state = ExecutionState.FAILED
+        elif event.type == "run.lost":
+            conversation.run.state = ExecutionState.LOST
+        elif event.type == "run.cancelled":
+            conversation.run.state = ExecutionState.CANCELLED
+        self._append(conversation, event.type, event.payload, source=event.source)
+
+    async def _forward_core_events(
+        self, conversation: Conversation, response: dict[str, Any]
+    ) -> None:
+        for raw_event in response.get("events", []):
+            self._apply_core_event(conversation, EventEnvelope.model_validate(raw_event))
+
+    async def _release_session(
+        self, session: Session, conversation: Conversation | None = None
+    ) -> bool:
+        if session.active_container_id:
+            operation_id = (
+                self.repository.create_runtime_operation("stop", session.active_container_id)
+                if self.repository
+                else None
+            )
+            try:
+                stopped = await self.runtime_driver.stop(session.active_container_id)
+            except Exception as exc:  # noqa: BLE001 - runtime failures keep the lease fenced
+                if self.repository and operation_id:
+                    self.repository.finish_runtime_operation(
+                        operation_id, "FAILED", {"error": str(exc)}
+                    )
+                stopped = False
+            if not stopped:
+                if self.repository and operation_id:
+                    self.repository.finish_runtime_operation(
+                        operation_id, "FAILED", {"error": "container stop unconfirmed"}
+                    )
+                if conversation:
+                    self._append(
+                        conversation,
+                        "container_stop_unconfirmed",
+                        {"container_id": session.active_container_id},
+                    )
+                return False
+            if self.repository and operation_id:
+                self.repository.finish_runtime_operation(operation_id, "SUCCEEDED", {})
+        session.active_container_id = None
+        session.active_run_id = None
+        if conversation and self.core_runtime is not None:
+            unregister = getattr(self.core_runtime, "unregister_run_endpoint", None)
+            if unregister is not None:
+                unregister(conversation.run.run_id)
+        if self.repository:
+            self.repository.release_session_leases(session)
+            self.repository.save_session(session)
+        if self.workspace_leases.get(session.workspace_id) == session.id:
+            self.workspace_leases.pop(session.workspace_id, None)
+        await self._drain_session_queue(session)
+        return True
+
+    async def _drain_session_queue(self, session: Session) -> None:
+        queued = sorted(
+            (
+                item
+                for item in self.conversations.values()
+                if item.run.state == ExecutionState.QUEUED
+            ),
+            key=lambda item: item.created_at,
+        )
+        for conversation in queued:
+            candidate = self.sessions.get(conversation.session_id)
+            if candidate is None and self.repository:
+                candidate = self.repository.get_session(conversation.session_id)
+                if candidate:
+                    self.sessions[candidate.id] = candidate
+            if candidate is None or candidate.active_run_id:
+                continue
+            if not await self._acquire_container(candidate):
+                continue
+            candidate.active_run_id = conversation.run.run_id
+            if self.repository:
+                self.repository.save_session(candidate)
+            conversation.run.state = ExecutionState.STARTING
+            self._append(conversation, "run.started", {"session_id": str(candidate.id)})
+            conversation.run.state = ExecutionState.RUNNING
+            self._append(
+                conversation, "run.running", {"container_id": candidate.active_container_id}
+            )
+            if self.core_runtime:
+                await self._run_core(conversation, candidate)
+            return
+
+    def _conversation(self, conversation_id: UUID) -> Conversation:
+        conversation = self.conversations.get(conversation_id)
+        if not conversation and self.repository:
+            conversation = self.repository.get_conversation(conversation_id)
+            if conversation:
+                self.conversations[conversation.id] = conversation
+                for event in self.repository.list_events(conversation.id):
+                    if not self.events_store.list(conversation.id, event.seq - 1):
+                        self.events_store.append(conversation.id, event)
+        if not conversation:
+            raise ServiceError("CONVERSATION_NOT_FOUND", "conversation does not exist", 404)
+        return conversation
+
+    def _checkpoint(self, conversation: Conversation) -> Checkpoint | None:
+        checkpoint_id = conversation.run.checkpoint_id
+        if checkpoint_id is None:
+            return None
+        checkpoint = self.checkpoints.get(checkpoint_id)
+        if checkpoint is None and self.repository:
+            checkpoint = self.repository.get_checkpoint(checkpoint_id)
+            if checkpoint:
+                self.checkpoints[checkpoint.checkpoint_id] = checkpoint
+        return checkpoint
+
+    def request_interaction(
+        self, conversation_id: UUID, interaction: dict[str, Any]
+    ) -> Conversation:
+        conversation = self._conversation(conversation_id)
+        if conversation.run.state != ExecutionState.RUNNING:
+            raise ServiceError("INVALID_STATE", "interaction requires RUNNING conversation", 409)
+        conversation.run.pending_interaction = interaction
+        conversation.run.state = ExecutionState.WAITING_INPUT
+        self._append(conversation, "interaction.requested", interaction)
+        return conversation
+
+    async def submit_input(
+        self,
+        conversation_id: UUID,
+        interaction_id: str,
+        value: Any,
+        expected_seq: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> Conversation:
+        conversation = self._conversation(conversation_id)
+        payload = {
+            "conversation_id": conversation_id,
+            "interaction_id": interaction_id,
+            "value": value,
+            "expected_seq": expected_seq,
+        }
+        existing = self._idempotent("input", idempotency_key, payload)
+        if existing:
+            return self._conversation(existing)
+        if self.repository and idempotency_key:
+            try:
+                existing = self.repository.find_idempotent(
+                    "input", idempotency_key, _hash_request(payload)
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            if existing:
+                self._remember("input", idempotency_key, payload, existing)
+                return self._conversation(existing)
+        self._check_expected_seq(conversation, expected_seq)
+        self._check_interaction(conversation, interaction_id)
+        was_paused = conversation.run.state == ExecutionState.PAUSED
+        checkpoint = self._checkpoint(conversation) if was_paused else None
+        if was_paused:
+            if checkpoint is None:
+                raise ServiceError(
+                    "CHECKPOINT_NOT_FOUND", "conversation checkpoint is missing", 409
+                )
+            try:
+                validate_checkpoint(
+                    checkpoint,
+                    lease_epoch=self.sessions[conversation.session_id].lease_epoch,
+                    expected_tool_policy_hash=tool_policy_hash(self._tool_policy()),
+                )
+            except ValueError as exc:
+                raise ServiceError("CHECKPOINT_INVALID", str(exc), 409) from exc
+        if conversation.run.state == ExecutionState.PAUSED:
+            await self._resume_session(conversation)
+        conversation.run.pending_interaction = None
+        conversation.run.state = ExecutionState.RUNNING
+        self._append(
+            conversation, "interaction.input", {"interaction_id": interaction_id, "value": value}
+        )
+        if self.core_runtime:
+            try:
+                await self._register_core_endpoint(
+                    self.sessions[conversation.session_id], conversation.run.run_id
+                )
+                if was_paused:
+
+                    async def sink(event: EventEnvelope) -> None:
+                        self._apply_core_event(conversation, event)
+
+                    response = await self.core_runtime.resume(checkpoint, value, sink)
+                    response = {**response, "events": []}
+                else:
+                    response = await self.core_runtime.accept_input(
+                        conversation.run.run_id, interaction_id, value
+                    )
+                await self._forward_core_events(conversation, response)
+            except ServiceError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - runtime errors become run failures
+                conversation.run.state = ExecutionState.FAILED
+                self._append(
+                    conversation,
+                    "run.failed",
+                    {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
+                )
+        if conversation.run.state in TERMINAL_STATES:
+            await self._release_session(self.sessions[conversation.session_id], conversation)
+        self._remember_persisted(
+            "input", idempotency_key, payload, conversation.id, conversation.model_dump(mode="json")
+        )
+        return conversation
+
+    async def submit_approval(
+        self,
+        conversation_id: UUID,
+        approval_id: str,
+        decision: str,
+        expected_seq: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> Conversation:
+        if decision not in {"APPROVE_ONCE", "REJECT"}:
+            raise ServiceError("INVALID_DECISION", "decision must be APPROVE_ONCE or REJECT", 422)
+        conversation = self._conversation(conversation_id)
+        payload = {
+            "conversation_id": conversation_id,
+            "approval_id": approval_id,
+            "decision": decision,
+            "expected_seq": expected_seq,
+        }
+        existing = self._idempotent("approval", idempotency_key, payload)
+        if existing:
+            return self._conversation(existing)
+        if self.repository and idempotency_key:
+            try:
+                existing = self.repository.find_idempotent(
+                    "approval", idempotency_key, _hash_request(payload)
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            if existing:
+                self._remember("approval", idempotency_key, payload, existing)
+                return self._conversation(existing)
+        self._check_expected_seq(conversation, expected_seq)
+        self._check_interaction(conversation, approval_id)
+        was_paused = conversation.run.state == ExecutionState.PAUSED
+        checkpoint = self._checkpoint(conversation) if was_paused else None
+        if was_paused:
+            if checkpoint is None:
+                raise ServiceError(
+                    "CHECKPOINT_NOT_FOUND", "conversation checkpoint is missing", 409
+                )
+            try:
+                validate_checkpoint(
+                    checkpoint,
+                    lease_epoch=self.sessions[conversation.session_id].lease_epoch,
+                    expected_tool_policy_hash=tool_policy_hash(self._tool_policy()),
+                )
+            except ValueError as exc:
+                raise ServiceError("CHECKPOINT_INVALID", str(exc), 409) from exc
+        if conversation.run.state == ExecutionState.PAUSED:
+            await self._resume_session(conversation)
+        conversation.run.pending_interaction = None
+        conversation.run.state = ExecutionState.RUNNING
+        self._append(
+            conversation, "approval.decided", {"approval_id": approval_id, "decision": decision}
+        )
+        if self.core_runtime:
+            try:
+                await self._register_core_endpoint(
+                    self.sessions[conversation.session_id], conversation.run.run_id
+                )
+                if was_paused:
+
+                    async def sink(event: EventEnvelope) -> None:
+                        self._apply_core_event(conversation, event)
+
+                    response = await self.core_runtime.resume(checkpoint, decision, sink)
+                    response = {**response, "events": []}
+                else:
+                    response = await self.core_runtime.accept_approval(
+                        conversation.run.run_id, approval_id, decision
+                    )
+                await self._forward_core_events(conversation, response)
+            except ServiceError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - runtime errors become run failures
+                conversation.run.state = ExecutionState.FAILED
+                self._append(
+                    conversation,
+                    "run.failed",
+                    {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
+                )
+        if conversation.run.state in TERMINAL_STATES:
+            await self._release_session(self.sessions[conversation.session_id], conversation)
+        self._remember_persisted(
+            "approval",
+            idempotency_key,
+            payload,
+            conversation.id,
+            conversation.model_dump(mode="json"),
+        )
+        return conversation
+
+    def _check_expected_seq(self, conversation: Conversation, expected_seq: int | None) -> None:
+        if expected_seq is not None and expected_seq != conversation.run.last_seq:
+            raise ServiceError("CONFLICT", "expected_seq does not match conversation", 409)
+
+    def _check_interaction(self, conversation: Conversation, interaction_id: str) -> None:
+        pending = conversation.run.pending_interaction
+        if (
+            conversation.run.state not in {ExecutionState.WAITING_INPUT, ExecutionState.PAUSED}
+            or not pending
+        ):
+            raise ServiceError("INVALID_STATE", "conversation is not waiting for input", 409)
+        if pending.get("interaction_id") != interaction_id:
+            raise ServiceError(
+                "INTERACTION_NOT_FOUND", "interaction does not match pending interaction", 409
+            )
+
+    async def pause(
+        self, conversation_id: UUID, reason: str = "waiting_input_timeout"
+    ) -> Conversation:
+        conversation = self._conversation(conversation_id)
+        if conversation.run.state != ExecutionState.WAITING_INPUT:
+            raise ServiceError("INVALID_STATE", "only WAITING_INPUT can be paused", 409)
+        conversation.run.state = ExecutionState.SUSPENDING
+        self._append(conversation, "checkpoint.requested", {"reason": reason})
+        if self.core_runtime:
+            await self.core_runtime.checkpoint(conversation.run.run_id, reason)
+        self.create_checkpoint(conversation_id, reason)
+        session = self.sessions[conversation.session_id]
+        if not await self._release_session(session, conversation):
+            return conversation
+        conversation.run.state = ExecutionState.PAUSED
+        self._append(conversation, "run.paused", {"reason": reason})
+        return conversation
+
+    async def pause_expired_waiting(self, now: datetime | None = None) -> int:
+        """Pause WAITING_INPUT conversations whose last interaction has expired."""
+
+        current_time = now or datetime.now(UTC)
+        paused = 0
+        for conversation in list(self.conversations.values()):
+            if conversation.run.state != ExecutionState.WAITING_INPUT:
+                continue
+            requested = [
+                event.occurred_at
+                for event in self.events_store.list(conversation.id)
+                if event.type == "interaction.requested"
+            ]
+            if not requested:
+                continue
+            if (
+                current_time - max(requested)
+            ).total_seconds() < self.config.waiting_input_timeout_seconds:
+                continue
+            await self.pause(conversation.id, reason="waiting_input_timeout")
+            paused += 1
+        return paused
+
+    async def supervise_active_sessions(self) -> int:
+        """Mark sessions LOST only after repeated failed container health checks."""
+
+        lost = 0
+        for session in list(self.sessions.values()):
+            if not session.active_container_id:
+                self._health_failures.pop(session.id, None)
+                continue
+            try:
+                inspection = await self.runtime_driver.inspect(session.active_container_id)
+                healthy = (
+                    inspection.get("status") in {"running", "created"}
+                    and session.active_run_id is not None
+                )
+                if healthy and self.core_runtime is not None and session.active_run_id is not None:
+                    endpoint = await self._runner_endpoint(session)
+                    register = getattr(self.core_runtime, "register_run_endpoint", None)
+                    if register is not None:
+                        register(session.active_run_id, endpoint)
+                    health = await self.core_runtime.health(session.active_run_id)
+                    healthy = health.get("live", {}).get("status") == "ok" and health.get(
+                        "ready", {}
+                    ).get("status") in {"ok", "ready"}
+            except Exception:  # noqa: BLE001 - health failures are counted, not raised
+                healthy = False
+            if healthy:
+                self._health_failures.pop(session.id, None)
+                continue
+            failures = self._health_failures.get(session.id, 0) + 1
+            self._health_failures[session.id] = failures
+            if failures < self.config.health_failure_threshold:
+                continue
+            if session.active_run_id is None:
+                if await self._release_session(session):
+                    self._health_failures.pop(session.id, None)
+                    lost += 1
+                continue
+            conversation = next(
+                (
+                    item
+                    for item in self.conversations.values()
+                    if item.run.run_id == session.active_run_id
+                ),
+                None,
+            )
+            if conversation is None:
+                continue
+            conversation.run.state = ExecutionState.LOST
+            self._append(
+                conversation,
+                "run.lost",
+                {"container_id": session.active_container_id, "health_failures": failures},
+            )
+            await self._release_session(session, conversation)
+            self._health_failures.pop(session.id, None)
+            lost += 1
+        return lost
+
+    def create_checkpoint(self, conversation_id: UUID, reason: str) -> Checkpoint:
+        conversation = self._conversation(conversation_id)
+        session = self.sessions[conversation.session_id]
+        pending_interaction = conversation.run.pending_interaction
+        pending_tool_calls: list[dict[str, Any]] = []
+        tool_batch_hash: str | None = None
+        if pending_interaction:
+            raw_batch = pending_interaction.get("tool_batch")
+            if isinstance(raw_batch, dict):
+                try:
+                    batch = ToolBatch.model_validate(raw_batch)
+                except Exception as exc:
+                    raise ServiceError(
+                        "CHECKPOINT_INVALID", "pending tool batch is invalid", 409
+                    ) from exc
+                pending_tool_calls = [call.model_dump(mode="json") for call in batch.calls]
+                tool_batch_hash = batch.batch_hash
+            else:
+                pending_tool_calls = list(pending_interaction.get("pending_tool_calls", []))
+                tool_batch_hash = pending_interaction.get("tool_batch_hash")
+        raw_tool_policy = pending_interaction.get("tool_policy", {}) if pending_interaction else {}
+        tool_policy: dict[str, Any] = self._tool_policy()
+        tool_policy.update(raw_tool_policy)
+        tool_policy["reason"] = reason
+        if pending_tool_calls:
+            tool_policy["pending_tool_calls"] = pending_tool_calls
+        if tool_batch_hash:
+            tool_policy["tool_batch_hash"] = tool_batch_hash
+        checkpoint_tool_policy_hash = tool_policy_hash(tool_policy)
+        raw_tools = list(tool_policy.get("tools", []))
+        checkpoint_tool_versions_hash = tool_versions_hash(raw_tools) if raw_tools else None
+        tool_policy["tool_policy_hash"] = checkpoint_tool_policy_hash
+        if checkpoint_tool_versions_hash:
+            tool_policy["tool_versions_hash"] = checkpoint_tool_versions_hash
+        context = ContextBundle(
+            task=conversation.task,
+            conversation_id=conversation.id,
+            workspace_ref="/workspace",
+            recent_events=[
+                event.model_dump(mode="json") for event in self.events_store.list(conversation.id)
+            ],
+            tool_policy=tool_policy,
+        )
+        context_hash = hashlib.sha256(
+            json.dumps(
+                context.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        checkpoint = Checkpoint(
+            conversation_id=conversation.id,
+            run_id=conversation.run.run_id,
+            last_event_seq=conversation.run.last_seq,
+            context_bundle=context,
+            pending_interaction=pending_interaction,
+            pending_tool_calls=pending_tool_calls,
+            tool_batch_hash=tool_batch_hash,
+            tool_policy_hash=checkpoint_tool_policy_hash,
+            tool_versions_hash=checkpoint_tool_versions_hash,
+            workspace_ref="/workspace",
+            workspace_write_lease_epoch=session.lease_epoch,
+            context_bundle_hash=context_hash,
+        )
+        self.checkpoints[checkpoint.checkpoint_id] = checkpoint
+        conversation.run.checkpoint_id = checkpoint.checkpoint_id
+        event = EventEnvelope(
+            run_id=conversation.run.run_id,
+            seq=conversation.run.last_seq + 1,
+            type="checkpoint.created",
+            payload={"checkpoint_id": str(checkpoint.checkpoint_id)},
+            source="platform",
+        )
+        if self.repository:
+            try:
+                self.repository.save_checkpoint_and_append_event(checkpoint, conversation, event)
+            except RepositoryConflict as exc:
+                raise ServiceError("CHECKPOINT_CONFLICT", str(exc), 409) from exc
+        self.events_store.append(conversation.id, event)
+        conversation.run.last_seq = event.seq
+        try:
+            asyncio.get_running_loop().create_task(
+                self.events_store.publish(conversation.id, event)
+            )
+        except RuntimeError:
+            pass
+        return checkpoint
+
+    async def _resume_session(self, conversation: Conversation) -> None:
+        session = self.sessions[conversation.session_id]
+        if not session.active_container_id and not await self._acquire_container(session):
+            raise ServiceError("RESOURCE_EXHAUSTED", "session container capacity is exhausted", 429)
+        session.active_run_id = conversation.run.run_id
+        await self._register_core_endpoint(session, conversation.run.run_id)
+        if self.repository:
+            self.repository.save_session(session)
+
+    async def cancel(
+        self,
+        conversation_id: UUID,
+        expected_seq: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> Conversation:
+        conversation = self._conversation(conversation_id)
+        payload = {"conversation_id": conversation_id, "expected_seq": expected_seq}
+        existing = self._idempotent("cancel", idempotency_key, payload)
+        if existing:
+            return self._conversation(existing)
+        if self.repository and idempotency_key:
+            try:
+                existing = self.repository.find_idempotent(
+                    "cancel", idempotency_key, _hash_request(payload)
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            if existing:
+                self._remember("cancel", idempotency_key, payload, existing)
+                return self._conversation(existing)
+        if conversation.run.state in TERMINAL_STATES:
+            self._remember_persisted(
+                "cancel",
+                idempotency_key,
+                payload,
+                conversation.id,
+                conversation.model_dump(mode="json"),
+            )
+            return conversation
+        self._check_expected_seq(conversation, expected_seq)
+        if self.core_runtime and conversation.run.state in {
+            ExecutionState.RUNNING,
+            ExecutionState.WAITING_INPUT,
+        }:
+            try:
+                await self._register_core_endpoint(
+                    self.sessions[conversation.session_id], conversation.run.run_id
+                )
+                response = await self.core_runtime.cancel(conversation.run.run_id)
+                await self._forward_core_events(conversation, response)
+            except Exception as exc:  # noqa: BLE001 - runtime errors become run failures
+                conversation.run.state = ExecutionState.FAILED
+                self._append(
+                    conversation,
+                    "run.failed",
+                    {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
+                )
+        if conversation.run.state not in TERMINAL_STATES:
+            conversation.run.state = ExecutionState.CANCELLED
+            self._append(conversation, "run.cancelled", {})
+        session = self.sessions[conversation.session_id]
+        if session.active_run_id == conversation.run.run_id:
+            await self._release_session(session, conversation)
+        self._remember_persisted(
+            "cancel",
+            idempotency_key,
+            payload,
+            conversation.id,
+            conversation.model_dump(mode="json"),
+        )
+        return conversation
+
+    def events(self, conversation_id: UUID, after_seq: int = 0) -> list[EventEnvelope]:
+        self._conversation(conversation_id)
+        if self.repository:
+            return self.repository.list_events(conversation_id, after_seq)
+        return self.events_store.list(conversation_id, after_seq)

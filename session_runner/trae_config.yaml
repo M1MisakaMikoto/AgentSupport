@@ -1,0 +1,29 @@
+agents:
+  trae_agent:
+    enable_lakeview: false
+    model: session_model
+    max_steps: 8
+    tools:
+      - bash
+      - str_replace_based_edit_tool
+      - json_edit_tool
+      - task_done
+
+allow_mcp_servers: []
+mcp_servers: {}
+
+model_providers:
+  anthropic:
+    api_key: ""
+    provider: anthropic
+
+models:
+  session_model:
+    model_provider: anthropic
+    model: claude-sonnet-4-20250514
+    max_tokens: 2048
+    temperature: 0
+    top_p: 1
+    top_k: 0
+    max_retries: 1
+    parallel_tool_calls: false
