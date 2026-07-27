@@ -47,6 +47,19 @@ async def test_workspace_session_conversation_and_idempotency(service):
 
 
 @pytest.mark.asyncio
+async def test_debug_acceptance_ui_is_served(service):
+    app = create_app(service)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/debug/")
+        script = await client.get("/debug/app.js")
+
+    assert response.status_code == 200
+    assert "AgentSupport" in response.text
+    assert script.status_code == 200
+    assert "EventSource" in script.text
+
+
+@pytest.mark.asyncio
 async def test_conversation_sse_replays_events_after_cursor(service):
     workspace = service.create_workspace("sse")
     session = service.create_session(workspace.id)

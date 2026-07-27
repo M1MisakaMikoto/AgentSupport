@@ -79,6 +79,11 @@ The verified environment uses Docker Desktop 29.6.2, WSL2, PostgreSQL 16 and the
 `agent-session:dev` image. The Compose API is exposed at `http://localhost:8000` and
 PostgreSQL at `localhost:5432`.
 
+The temporary acceptance console is served by the API at
+`http://localhost:8000/debug/`. It creates the Workspace, Session and Conversation
+through public platform routes and exposes event replay, SSE status, approvals, input
+and cancellation. It never accepts or stores model credentials.
+
 `docker compose up --build` starts the API container and PostgreSQL in
 `AGENT_PLATFORM_PERSISTENCE_MODE=postgres` mode. The API runs the explicit schema
 initializer before startup, and resources/events survive an API container restart.

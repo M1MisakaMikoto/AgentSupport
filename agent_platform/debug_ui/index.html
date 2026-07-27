@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>AgentSupport 验收控制台</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true">AS</span>
+        <div>
+          <p class="product-name">AgentSupport</p>
+          <h1>验收控制台</h1>
+        </div>
+      </div>
+      <div class="connection-block">
+        <label for="api-base">API 地址</label>
+        <div class="inline-control">
+          <input id="api-base" type="url" spellcheck="false" autocomplete="off">
+          <button id="connect-button" class="button secondary" type="button">检查连接</button>
+        </div>
+        <div class="connection-state" aria-live="polite">
+          <span id="api-dot" class="status-dot neutral"></span>
+          <span id="api-status">尚未检查</span>
+          <span class="divider">/</span>
+          <span id="stream-status">事件流未连接</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace-shell">
+      <aside class="setup-panel" aria-labelledby="setup-title">
+        <div class="section-heading">
+          <p class="section-index">运行配置</p>
+          <h2 id="setup-title">新建验收任务</h2>
+        </div>
+
+        <form id="run-form">
+          <label for="workspace-name">Workspace 名称</label>
+          <input id="workspace-name" name="workspaceName" maxlength="120" required>
+
+          <label for="task-text">任务</label>
+          <textarea id="task-text" name="task" rows="8" required></textarea>
+
+          <button id="start-button" class="button primary full-width" type="submit">创建并运行</button>
+        </form>
+
+        <div class="resource-block">
+          <div class="resource-heading">
+            <h3>当前资源</h3>
+            <button id="clear-button" class="text-button" type="button">清除</button>
+          </div>
+          <dl class="resource-list">
+            <div><dt>Workspace</dt><dd id="workspace-id">-</dd></div>
+            <div><dt>Session</dt><dd id="session-id">-</dd></div>
+            <div><dt>Conversation</dt><dd id="conversation-id">-</dd></div>
+          </dl>
+        </div>
+      </aside>
+
+      <section class="event-panel" aria-labelledby="events-title">
+        <div class="panel-toolbar">
+          <div class="section-heading compact">
+            <p class="section-index">事件日志</p>
+            <h2 id="events-title">执行轨道</h2>
+          </div>
+          <div class="toolbar-actions">
+            <span id="event-count" class="event-count">0 条</span>
+            <button id="refresh-button" class="button secondary" type="button">刷新</button>
+            <button id="cancel-button" class="button danger" type="button" disabled>取消运行</button>
+          </div>
+        </div>
+
+        <div class="run-strip">
+          <div>
+            <span class="field-label">运行状态</span>
+            <strong id="run-state" class="state-value neutral">IDLE</strong>
+          </div>
+          <div>
+            <span class="field-label">最后序号</span>
+            <strong id="last-seq" class="mono-value">0</strong>
+          </div>
+          <div>
+            <span class="field-label">运行 ID</span>
+            <strong id="run-id" class="mono-value">-</strong>
+          </div>
+        </div>
+
+        <div id="event-empty" class="empty-state">
+          <span class="empty-seq">000</span>
+          <p>等待运行事件</p>
+        </div>
+        <ol id="event-list" class="event-list" aria-live="polite"></ol>
+      </section>
+
+      <aside class="decision-panel" aria-labelledby="decision-title">
+        <div class="section-heading">
+          <p class="section-index">人工关口</p>
+          <h2 id="decision-title">待处理交互</h2>
+        </div>
+
+        <div id="interaction-empty" class="interaction-empty">
+          <span class="gate-symbol" aria-hidden="true"></span>
+          <p>当前没有待处理交互</p>
+        </div>
+
+        <div id="interaction-content" class="interaction-content" hidden>
+          <div class="interaction-meta">
+            <span id="interaction-kind" class="kind-badge">APPROVAL</span>
+            <span id="interaction-id" class="mono-value"></span>
+          </div>
+
+          <div id="approval-view">
+            <div class="hash-row">
+              <span class="field-label">批次哈希</span>
+              <code id="batch-hash">-</code>
+            </div>
+            <div id="tool-calls" class="tool-calls"></div>
+            <div class="decision-actions">
+              <button id="reject-button" class="button danger" type="button">拒绝</button>
+              <button id="approve-button" class="button approve" type="button">仅批准本次</button>
+            </div>
+          </div>
+
+          <form id="input-form" hidden>
+            <label for="interaction-value">回复内容</label>
+            <textarea id="interaction-value" rows="5" required></textarea>
+            <button class="button primary full-width" type="submit">提交回复</button>
+          </form>
+        </div>
+
+        <div class="raw-panel">
+          <div class="resource-heading">
+            <h3>最近响应</h3>
+            <button id="copy-button" class="text-button" type="button">复制 JSON</button>
+          </div>
+          <pre id="raw-output">{}</pre>
+        </div>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

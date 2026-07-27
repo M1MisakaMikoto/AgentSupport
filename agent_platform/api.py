@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .services import PlatformService, ServiceError
@@ -198,6 +200,12 @@ def create_app(service: PlatformService | None = None) -> FastAPI:
                 "capabilities": ["run", "input", "checkpoint", "cancel", "events"],
             }
         ]
+
+    app.mount(
+        "/debug",
+        StaticFiles(directory=Path(__file__).parent / "debug_ui", html=True),
+        name="debug-ui",
+    )
 
     return app
 
