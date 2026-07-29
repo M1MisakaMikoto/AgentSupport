@@ -10,8 +10,23 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://agent:agent@localhost:5432/agent_platform"
     persistence_mode: str = "memory"
+    auto_create_schema: bool = True
+    execution_mode: str = "inline"
+    instance_id: str = ""
+    job_lease_seconds: int = 30
+    job_heartbeat_seconds: int = 10
+    worker_poll_interval_seconds: float = 0.25
+    event_poll_interval_seconds: float = 0.25
+    redis_url: str | None = None
+    max_job_attempts: int = 3
     runtime_driver: str = "memory"
     runtime_context: str = "desktop-linux"
+    runner_image: str = "agent-session:dev"
+    kubernetes_api_server: str = "https://kubernetes.default.svc"
+    kubernetes_namespace: str = "default"
+    kubernetes_pvc_size: str = "10Gi"
+    kubernetes_storage_class: str | None = None
+    kubernetes_runner_secret_name: str | None = None
     core_runner_url: str | None = None
     core_runner_timeout_seconds: float = 300.0
     core_runner_workspace_root: Path | None = None

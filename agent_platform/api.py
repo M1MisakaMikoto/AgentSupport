@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Header, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -49,6 +49,10 @@ def create_app(service: PlatformService | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if selected_service.distributed:
+            yield
+            return
+
         async def pause_worker() -> None:
             while True:
                 await asyncio.sleep(selected_service.config.pause_worker_interval_seconds)
@@ -79,6 +83,7 @@ def create_app(service: PlatformService | None = None) -> FastAPI:
         request.state.correlation_id = request.headers.get("X-Correlation-ID") or str(uuid4())
         response = await call_next(request)
         response.headers["X-Correlation-ID"] = request.state.correlation_id
+        response.headers["X-Agent-Instance"] = app.state.service.instance_id
         return response
 
     @app.exception_handler(ServiceError)
@@ -98,6 +103,17 @@ def create_app(service: PlatformService | None = None) -> FastAPI:
     @app.get("/live")
     async def live() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/ready")
+    async def ready() -> dict[str, Any]:
+        return app.state.service.readiness()
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    async def metrics() -> str:
+        values = app.state.service.metrics()
+        return "".join(
+            f"agent_platform_{name} {value}\n" for name, value in sorted(values.items())
+        )
 
     @app.post("/workspaces", status_code=201)
     async def create_workspace(
@@ -130,26 +146,14 @@ def create_app(service: PlatformService | None = None) -> FastAPI:
         app.state.service._conversation(conversation_id)
 
         async def body():
-            async for event in app.state.service.events_store.stream(conversation_id, after_seq):
+            async for event in app.state.service.stream_events(conversation_id, after_seq):
                 yield f"id: {event.seq}\ndata: {json.dumps(event.model_dump(mode='json'))}\n\n"
 
         return StreamingResponse(body(), media_type="text/event-stream")
 
     @app.get("/sessions/{session_id}/events")
     async def session_events(session_id: UUID, after_seq: int = Query(default=0, ge=0)):
-        if session_id not in app.state.service.sessions:
-            raise ServiceError("SESSION_NOT_FOUND", "session does not exist", 404)
-        conversations = [
-            conversation
-            for conversation in app.state.service.conversations.values()
-            if conversation.session_id == session_id
-        ]
-        events = [
-            event
-            for conversation in conversations
-            for event in app.state.service.events_store.list(conversation.id, after_seq)
-        ]
-        return sorted(events, key=lambda event: event.occurred_at)
+        return app.state.service.session_events(session_id, after_seq)
 
     @app.post("/conversations/{conversation_id}/input")
     async def submit_input(

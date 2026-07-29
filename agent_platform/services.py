@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import socket
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -21,11 +24,12 @@ from .domain import (
     Session,
     Workspace,
 )
+from .event_notifier import create_event_notifier
 from .events import EventEnvelope, InMemoryEventStore
 from .repository import PostgresRepository, RepositoryConflict
 from .runtime import DockerCliRuntimeDriver, DockerRuntimeDriver, default_session_container_env
 from .skills import LocalSkillProvider
-from .storage import LocalWorkspaceProvider
+from .storage import KubernetesWorkspaceProvider, LocalWorkspaceProvider
 from .tool_gateway import ToolBatch
 
 
@@ -56,12 +60,19 @@ class PlatformService:
 
     def __init__(self, config: Settings = settings) -> None:
         self.config = config
+        self.distributed = config.execution_mode == "distributed"
+        self.instance_id = config.instance_id or f"{socket.gethostname()}:{os.getpid()}"
         self.workspaces: dict[UUID, Workspace] = {}
         self.sessions: dict[UUID, Session] = {}
         self.conversations: dict[UUID, Conversation] = {}
         self.checkpoints: dict[UUID, Checkpoint] = {}
         self.events_store = InMemoryEventStore()
-        self.workspace_provider = LocalWorkspaceProvider(config.workspace_root)
+        self.event_notifier = create_event_notifier(config.redis_url)
+        self.workspace_provider = (
+            KubernetesWorkspaceProvider()
+            if config.runtime_driver == "kubernetes"
+            else LocalWorkspaceProvider(config.workspace_root)
+        )
         self.skill_provider = LocalSkillProvider(config.skills_root)
         self.enabled_skills = [
             item.strip() for item in config.enabled_skills.split(",") if item.strip()
@@ -89,11 +100,13 @@ class PlatformService:
         self._health_failures: dict[UUID, int] = {}
         self._scheduler_lock = asyncio.Lock()
         self.repository = (
-            PostgresRepository(config.database_url, create_schema=True)
+            PostgresRepository(config.database_url, create_schema=config.auto_create_schema)
             if config.persistence_mode == "postgres"
             else None
         )
-        if self.repository:
+        if self.distributed and self.repository is None:
+            raise ValueError("distributed execution requires PostgreSQL persistence")
+        if self.repository and not self.distributed:
             self._load_persisted_state()
 
     def _load_persisted_state(self) -> None:
@@ -212,7 +225,7 @@ class PlatformService:
         return workspace
 
     def create_session(self, workspace_id: UUID, idempotency_key: str | None = None) -> Session:
-        workspace = self.workspaces.get(workspace_id)
+        workspace = None if self.distributed else self.workspaces.get(workspace_id)
         if not workspace and self.repository:
             workspace = self.repository.get_workspace(workspace_id)
             if workspace:
@@ -339,7 +352,7 @@ class PlatformService:
         parent_conversation_id: UUID | None = None,
         idempotency_key: str | None = None,
     ) -> Conversation:
-        session = self.sessions.get(session_id)
+        session = None if self.distributed else self.sessions.get(session_id)
         if not session and self.repository:
             session = self.repository.get_session(session_id)
             if session:
@@ -347,7 +360,7 @@ class PlatformService:
         if not session:
             raise ServiceError("SESSION_NOT_FOUND", "session does not exist", 404)
         if parent_conversation_id:
-            parent = self.conversations.get(parent_conversation_id)
+            parent = None if self.distributed else self.conversations.get(parent_conversation_id)
             if not parent and self.repository:
                 parent = self.repository.get_conversation(parent_conversation_id)
                 if parent:
@@ -365,6 +378,21 @@ class PlatformService:
         conversation = Conversation(
             session_id=session_id, task=task, parent_conversation_id=parent_conversation_id
         )
+        if self.distributed:
+            assert self.repository is not None
+            if self.repository.queue_depth() >= self.config.max_queued_conversations:
+                raise ServiceError("RESOURCE_EXHAUSTED", "conversation queue is full", 429)
+            try:
+                persisted, _ = self.repository.create_conversation_and_enqueue(
+                    conversation,
+                    session.workspace_id,
+                    _hash_request(payload),
+                    idempotency_key,
+                    max_attempts=self.config.max_job_attempts,
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            return persisted
         if self.repository:
             try:
                 persisted = self.repository.create_conversation(
@@ -515,6 +543,7 @@ class PlatformService:
         elif event.type == "run.lost":
             conversation.run.state = ExecutionState.LOST
         elif event.type == "run.cancelled":
+            conversation.run.pending_interaction = None
             conversation.run.state = ExecutionState.CANCELLED
         self._append(conversation, event.type, event.payload, source=event.source)
 
@@ -602,10 +631,10 @@ class PlatformService:
             return
 
     def _conversation(self, conversation_id: UUID) -> Conversation:
-        conversation = self.conversations.get(conversation_id)
+        conversation = None if self.distributed else self.conversations.get(conversation_id)
         if not conversation and self.repository:
             conversation = self.repository.get_conversation(conversation_id)
-            if conversation:
+            if conversation and not self.distributed:
                 self.conversations[conversation.id] = conversation
                 for event in self.repository.list_events(conversation.id):
                     if not self.events_store.list(conversation.id, event.seq - 1):
@@ -651,6 +680,20 @@ class PlatformService:
             "value": value,
             "expected_seq": expected_seq,
         }
+        if self.distributed:
+            assert self.repository is not None
+            try:
+                _, persisted = self.repository.enqueue_conversation_command(
+                    conversation_id,
+                    "input",
+                    {"interaction_id": interaction_id, "value": value},
+                    idempotency_key or uuid4().hex,
+                    expected_seq=expected_seq,
+                    interaction_id=interaction_id,
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("COMMAND_CONFLICT", str(exc), 409) from exc
+            return persisted
         existing = self._idempotent("input", idempotency_key, payload)
         if existing:
             return self._conversation(existing)
@@ -738,6 +781,20 @@ class PlatformService:
             "decision": decision,
             "expected_seq": expected_seq,
         }
+        if self.distributed:
+            assert self.repository is not None
+            try:
+                _, persisted = self.repository.enqueue_conversation_command(
+                    conversation_id,
+                    "approval",
+                    {"approval_id": approval_id, "decision": decision},
+                    idempotency_key or uuid4().hex,
+                    expected_seq=expected_seq,
+                    interaction_id=approval_id,
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("COMMAND_CONFLICT", str(exc), 409) from exc
+            return persisted
         existing = self._idempotent("approval", idempotency_key, payload)
         if existing:
             return self._conversation(existing)
@@ -1030,6 +1087,19 @@ class PlatformService:
     ) -> Conversation:
         conversation = self._conversation(conversation_id)
         payload = {"conversation_id": conversation_id, "expected_seq": expected_seq}
+        if self.distributed:
+            assert self.repository is not None
+            try:
+                _, persisted = self.repository.enqueue_conversation_command(
+                    conversation_id,
+                    "cancel",
+                    {},
+                    idempotency_key or uuid4().hex,
+                    expected_seq=expected_seq,
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("COMMAND_CONFLICT", str(exc), 409) from exc
+            return persisted
         existing = self._idempotent("cancel", idempotency_key, payload)
         if existing:
             return self._conversation(existing)
@@ -1071,6 +1141,7 @@ class PlatformService:
                     {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
                 )
         if conversation.run.state not in TERMINAL_STATES:
+            conversation.run.pending_interaction = None
             conversation.run.state = ExecutionState.CANCELLED
             self._append(conversation, "run.cancelled", {})
         session = self.sessions[conversation.session_id]
@@ -1090,3 +1161,92 @@ class PlatformService:
         if self.repository:
             return self.repository.list_events(conversation_id, after_seq)
         return self.events_store.list(conversation_id, after_seq)
+
+    async def stream_events(
+        self, conversation_id: UUID, after_seq: int = 0
+    ) -> AsyncIterator[EventEnvelope]:
+        self._conversation(conversation_id)
+        if not self.distributed:
+            async for event in self.events_store.stream(conversation_id, after_seq):
+                yield event
+            return
+        cursor = after_seq
+        while True:
+            events = self.events(conversation_id, cursor)
+            if events:
+                for event in events:
+                    cursor = event.seq
+                    yield event
+                continue
+            try:
+                await self.event_notifier.wait(
+                    "conversation.events",
+                    conversation_id,
+                    self.config.event_poll_interval_seconds,
+                )
+            except Exception:  # noqa: BLE001 - database polling remains authoritative
+                await asyncio.sleep(self.config.event_poll_interval_seconds)
+
+    def session_events(self, session_id: UUID, after_seq: int = 0) -> list[EventEnvelope]:
+        session = (
+            self.repository.get_session(session_id)
+            if self.distributed and self.repository
+            else self.sessions.get(session_id)
+        )
+        if session is None:
+            raise ServiceError("SESSION_NOT_FOUND", "session does not exist", 404)
+        conversations = (
+            self.repository.list_conversations()
+            if self.distributed and self.repository
+            else list(self.conversations.values())
+        )
+        events = [
+            event
+            for conversation in conversations
+            if conversation.session_id == session_id
+            for event in self.events(conversation.id, after_seq)
+        ]
+        return sorted(events, key=lambda event: event.occurred_at)
+
+    def readiness(self) -> dict[str, Any]:
+        if self.repository:
+            self.repository.health_check()
+        return {
+            "status": "ready",
+            "execution_mode": self.config.execution_mode,
+            "persistence_mode": self.config.persistence_mode,
+            "instance_id": self.instance_id,
+        }
+
+    def metrics(self) -> dict[str, int]:
+        if self.repository:
+            return self.repository.coordination_metrics()
+        return {
+            "queue_ready": sum(
+                item.run.state == ExecutionState.QUEUED
+                for item in self.conversations.values()
+            ),
+            "queue_oldest_ready_seconds": 0,
+            "jobs_claimed": 0,
+            "jobs_running": sum(
+                item.run.state == ExecutionState.RUNNING
+                for item in self.conversations.values()
+            ),
+            "jobs_waiting": sum(
+                item.run.state == ExecutionState.WAITING_INPUT
+                for item in self.conversations.values()
+            ),
+            "jobs_paused": sum(
+                item.run.state == ExecutionState.PAUSED
+                for item in self.conversations.values()
+            ),
+            "claims_expired": 0,
+            "active_runtimes": sum(
+                item.active_container_id is not None for item in self.sessions.values()
+            ),
+            "runner_starting": 0,
+            "runner_reconciliation_needed": 0,
+            "workspace_lease_contention": 0,
+            "outbox_pending": 0,
+            "outbox_publication_lag_seconds": 0,
+        }

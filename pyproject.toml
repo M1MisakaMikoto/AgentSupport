@@ -23,6 +23,10 @@ dev = [
   "pytest-asyncio>=0.24,<1",
   "ruff>=0.6,<1",
 ]
+distributed = [
+  "alembic>=1.13,<2",
+  "redis>=5,<6",
+]
 trae = [
   "anthropic>=0.54.0,<=0.60.0",
   "asyncclick>=8.0.0",
@@ -48,7 +52,7 @@ trae = [
 include = ["agent_platform*", "session_runner*"]
 
 [tool.setuptools.package-data]
-agent_platform = ["debug_ui/*"]
+agent_platform = ["debug_ui/*", "control_ui/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

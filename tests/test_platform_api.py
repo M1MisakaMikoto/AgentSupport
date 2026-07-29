@@ -18,6 +18,27 @@ def service(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_operational_endpoints_report_readiness_metrics_and_instance(service):
+    app = create_app(service)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        live = await client.get("/live")
+        ready = await client.get("/ready")
+        metrics = await client.get("/metrics")
+
+    assert live.json() == {"status": "ok"}
+    assert ready.json()["status"] == "ready"
+    assert ready.json()["instance_id"] == service.instance_id
+    assert live.headers["X-Agent-Instance"] == service.instance_id
+    assert "agent_platform_active_runtimes 0\n" in metrics.text
+    assert "agent_platform_queue_ready 0\n" in metrics.text
+    assert "agent_platform_claims_expired 0\n" in metrics.text
+    assert "agent_platform_outbox_publication_lag_seconds 0\n" in metrics.text
+    assert "agent_platform_runner_reconciliation_needed 0\n" in metrics.text
+    assert "agent_platform_workspace_lease_contention 0\n" in metrics.text
+    assert metrics.headers["content-type"].startswith("text/plain")
+
+
+@pytest.mark.asyncio
 async def test_workspace_session_conversation_and_idempotency(service):
     app = create_app(service)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -57,6 +78,7 @@ async def test_debug_acceptance_ui_is_served(service):
     assert "AgentSupport" in response.text
     assert script.status_code == 200
     assert "EventSource" in script.text
+    assert "projectRunState" in script.text
 
 
 @pytest.mark.asyncio
@@ -307,10 +329,26 @@ async def test_platform_forwards_cancel_to_runner(service):
     conversation = await service.cancel(conversation.id, idempotency_key="cancel-1")
     duplicate = await service.cancel(conversation.id, idempotency_key="cancel-1")
     assert conversation.run.state == "CANCELLED"
+    assert conversation.run.pending_interaction is None
     assert duplicate.id == conversation.id
+    assert duplicate.run.pending_interaction is None
     assert service.events(conversation.id)[-1].type == "run.cancelled"
     assert service.events(conversation.id)[-1].source == "session_runner"
     assert [event.type for event in service.events(conversation.id)].count("run.cancelled") == 1
+
+
+@pytest.mark.asyncio
+async def test_local_cancel_clears_pending_interaction(service):
+    workspace = service.create_workspace("local-cancel")
+    session = service.create_session(workspace.id)
+    conversation = await service.create_conversation(session.id, "wait locally")
+    service.request_interaction(conversation.id, {"interaction_id": "local-input", "kind": "input"})
+
+    cancelled = await service.cancel(conversation.id)
+
+    assert cancelled.run.state == "CANCELLED"
+    assert cancelled.run.pending_interaction is None
+    assert service.events(conversation.id)[-1].type == "run.cancelled"
 
 
 @pytest.mark.asyncio
