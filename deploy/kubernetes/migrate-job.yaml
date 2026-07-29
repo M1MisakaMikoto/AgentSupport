@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-platform-db-migrate
+  namespace: agent-platform
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: agentsupport-api:latest
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - secretRef: {name: agent-platform-secrets}
