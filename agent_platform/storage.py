@@ -35,3 +35,19 @@ class LocalWorkspaceStorageDriver(LocalWorkspaceProvider):
     def restore_version(self, workspace_id: UUID, version_id: str) -> None:
         self.path(workspace_id)
         raise NotImplementedError("workspace version restore is deferred past the first release")
+
+
+class KubernetesWorkspaceProvider:
+    """Creates stable PVC references without writing API-local filesystem state."""
+
+    @staticmethod
+    def _reference(workspace_id: UUID) -> str:
+        return f"pvc://workspace-{workspace_id}"
+
+    def create(self, name: str) -> tuple[UUID, str]:
+        del name
+        workspace_id = uuid4()
+        return workspace_id, self._reference(workspace_id)
+
+    def path(self, workspace_id: UUID) -> str:
+        return self._reference(workspace_id)
