@@ -20,6 +20,31 @@ Run the platform API:
 .venv\Scripts\python.exe -m uvicorn agent_platform.main:app --reload
 ```
 
+On Windows, double-click `start-console.cmd`, or run the launcher from PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-console.ps1
+```
+
+The launcher reuses an existing console when possible, otherwise starts it in the background,
+waits for readiness and opens the browser. To start it without opening a browser, pass
+`-NoBrowser`.
+
+The equivalent direct command is:
+
+```powershell
+.venv\Scripts\python.exe -m agent_platform.dev_console
+```
+
+Open `http://127.0.0.1:8010`. The same-origin console provides deployment control at `/` and
+runtime task debugging at `/tasks/`; browser API and SSE traffic is routed through `/platform/`
+to the fixed local platform endpoint. It can build, start, scale and stop the Compose
+stack, display service status and logs, and run the controlled short/PostgreSQL/live acceptance
+suite. It accepts only predefined operations and never removes data volumes. Keep this local
+development process outside the Compose stack so it remains available while API containers are
+being created or replaced. The direct platform debug URL at `http://127.0.0.1:8000/debug/`
+remains available for compatibility.
+
 To run the local API against the real WSL2 Docker Driver instead of the deterministic
 in-memory runtime, set `AGENT_PLATFORM_RUNTIME_DRIVER=docker_cli` and keep
 `AGENT_PLATFORM_RUNTIME_CONTEXT=desktop-linux`.
@@ -84,17 +109,64 @@ The temporary acceptance console is served by the API at
 through public platform routes and exposes event replay, SSE status, approvals, input
 and cancellation. It never accepts or stores model credentials.
 
-`docker compose up --build` starts the API container and PostgreSQL in
-`AGENT_PLATFORM_PERSISTENCE_MODE=postgres` mode. The API runs the explicit schema
-initializer before startup, and resources/events survive an API container restart.
-Local Python execution defaults to the in-memory repository for deterministic tests;
-set `AGENT_PLATFORM_PERSISTENCE_MODE=postgres` when running against PostgreSQL.
+`docker compose up --build` starts PostgreSQL, Redis, a one-shot Alembic migration,
+the stateless API, Nginx gateway, Worker, Reconciler, Event Publisher and Runner.
+PostgreSQL is authoritative; Redis only accelerates subscriber wake-ups, so accepted
+work and event replay continue through database polling during a Redis outage.
+Resources and events survive API, Worker and Runner replacement. Local Python execution
+still defaults to the in-memory repository for deterministic tests.
 
 After PostgreSQL is available, initialize the explicit schema with:
 
 ```powershell
 .venv\Scripts\python.exe -m agent_platform.db
 ```
+
+Production and distributed deployments must use Alembic instead of application startup
+schema creation:
+
+```powershell
+$env:AGENT_PLATFORM_AUTO_CREATE_SCHEMA = "false"
+.venv\Scripts\python.exe -m alembic upgrade head
+```
+
+## Distributed operation
+
+The API is stateless in `AGENT_PLATFORM_EXECUTION_MODE=distributed`. Workers claim durable
+jobs with expiring leases, claim tokens and fence epochs. A Session Runner remains a routed,
+stateful endpoint: it is created per active Session, never load-balanced across unrelated Runs,
+and is removed when the Run becomes terminal. A paused Run releases execution capacity and a
+replacement Runner resumes from its validated checkpoint.
+
+Scale API and Worker processes independently in Compose:
+
+```powershell
+$env:SESSION_RUNNER_MODE = "deterministic"
+docker compose up -d --build --scale api=2 --scale worker=3
+docker compose ps
+Invoke-WebRequest -UseBasicParsing http://localhost:8000/ready
+Invoke-WebRequest -UseBasicParsing http://localhost:8000/metrics
+```
+
+For Kubernetes, PostgreSQL is an external prerequisite. Build and publish both
+`agentsupport-api:latest` and the configured Runner image, then create the namespace and
+secrets before running the migration Job. `agent-platform-secrets` must contain
+`AGENT_PLATFORM_DATABASE_URL`; model credentials belong only in `agent-runner-secrets`.
+
+```powershell
+kubectl apply -f deploy/kubernetes/namespace.yaml
+kubectl -n agent-platform create secret generic agent-platform-secrets --from-literal=AGENT_PLATFORM_DATABASE_URL='<postgresql+psycopg URL>'
+kubectl -n agent-platform create secret generic agent-runner-secrets --from-literal=TRAE_API_KEY='<temporary-api-key>'
+kubectl apply -f deploy/kubernetes/migrate-job.yaml
+kubectl -n agent-platform wait --for=condition=complete job/agent-platform-db-migrate --timeout=5m
+kubectl apply -f deploy/kubernetes/platform.yaml
+```
+
+`platform.yaml` includes a development Redis Deployment. Replace it with managed Redis for
+production if desired; Redis persistence is not part of correctness. Install KEDA first and
+then apply `deploy/kubernetes/keda-worker.yaml` to scale Workers from PostgreSQL queue depth.
+Without KEDA, keep a fixed Worker replica count. Workspace volumes require a StorageClass that
+supports the configured `ReadWriteOnce` PVCs.
 
 ## Implemented first-release boundaries
 
@@ -107,15 +179,22 @@ After PostgreSQL is available, initialize the explicit schema with:
 - Local Workspace provider and a replaceable Docker RuntimeDriver boundary.
 - SQLAlchemy PostgreSQL repository for resource projections, event append, idempotency,
   checkpoints and lease records; SQLite is used for repository unit tests.
+- PostgreSQL job/outbox/command coordination with `SKIP LOCKED`, advisory-lock idempotency,
+  expiring ownership, fencing and independent Worker/Reconciler/Publisher processes.
+- Stateless horizontally scalable API replicas, Redis-assisted SSE notifications with durable
+  polling fallback, operational readiness and queue/runtime/outbox metrics.
+- Kubernetes per-Session Runner Pods, Services and Workspace PVCs, plus Compose and optional
+  KEDA deployment topology for independent API and Worker scaling.
 - Private Runner HTTP contract: health, run, input, approval, checkpoint, cancel and event replay.
 - Deterministic Runner tool batches go through ToolGateway authorization, whole-batch approval,
   result events and call-id deduplication; application-specific handlers are injected by the Runner.
 - Authorized local Skills are hashed into a public manifest and mounted read-only at
   `/opt/agent-skills/<skill_id>`; the first MCP adapter exposes only explicitly allowed servers.
 
-## Deliberately not delivered yet
+## Remaining production boundaries
 
-Redis, Kubernetes, MinIO/S3/Restic versioning, formal authentication, production MCP/Skill
-marketplace adapters, and a real Docker socket/container reconciliation driver remain later
-stages explicitly listed in the accepted plan. The controlled Trae source, Session image,
-ToolGateway boundary, trajectory events, and checkpoint resume path are included in this release.
+MinIO/S3/Restic versioning, formal authentication, production MCP/Skill marketplace adapters,
+multi-region consensus and managed backup/restore remain outside this release. Compose uses a
+shared development Runner; Kubernetes provides the delivered dynamic per-Session RuntimeDriver.
+The controlled Trae source, Session image, ToolGateway boundary, trajectory events and checkpoint
+replacement/resume path are included.
