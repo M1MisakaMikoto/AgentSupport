@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="dev-console-token" content="__DEV_CONSOLE_TOKEN__">
+    <title>AgentSupport 部署控制台</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true">AS</span>
+        <div>
+          <p class="product-name">AgentSupport / Distributed Lab</p>
+          <h1>部署与验收控制台</h1>
+        </div>
+      </div>
+      <nav class="header-nav" aria-label="控制台导航">
+        <a class="nav-link active" href="/">部署控制</a>
+        <a class="nav-link" href="/tasks/">任务调试</a>
+      </nav>
+      <div class="header-state" aria-live="polite">
+        <span id="stack-dot" class="status-dot neutral"></span>
+        <span id="stack-label">正在读取服务状态</span>
+        <button id="refresh-status" class="icon-button" type="button" title="刷新服务状态" aria-label="刷新服务状态">↻</button>
+      </div>
+    </header>
+
+    <main class="console-shell">
+      <aside class="control-panel" aria-labelledby="control-title">
+        <div class="section-heading">
+          <p class="section-index">拓扑配置</p>
+          <h2 id="control-title">启动参数</h2>
+        </div>
+
+        <form id="stack-form">
+          <div class="number-grid">
+            <label class="number-control" for="api-replicas">
+              <span>API 副本</span>
+              <input id="api-replicas" type="number" min="1" max="8" value="2" required>
+            </label>
+            <label class="number-control" for="worker-replicas">
+              <span>Worker 副本</span>
+              <input id="worker-replicas" type="number" min="1" max="16" value="3" required>
+            </label>
+          </div>
+
+          <fieldset class="field-group">
+            <legend>Runner 模式</legend>
+            <div class="segmented-control">
+              <label><input type="radio" name="runner-mode" value="deterministic" checked><span>确定性</span></label>
+              <label><input type="radio" name="runner-mode" value="trae"><span>Trae</span></label>
+            </div>
+          </fieldset>
+
+          <label class="toggle-row" for="rebuild-image">
+            <span>
+              <strong>重新构建镜像</strong>
+              <small>使用当前工作区源码</small>
+            </span>
+            <input id="rebuild-image" type="checkbox" checked>
+          </label>
+
+          <div class="primary-actions">
+            <button id="deploy-button" class="button primary" type="submit"><span aria-hidden="true">▶</span>部署并启动</button>
+            <button id="start-button" class="button secondary" type="button"><span aria-hidden="true">↗</span>直接启动</button>
+          </div>
+          <button id="stop-button" class="button danger ghost full-width" type="button"><span aria-hidden="true">■</span>停止服务</button>
+        </form>
+
+        <section class="acceptance-controls" aria-labelledby="acceptance-title">
+          <div class="section-heading compact">
+            <p class="section-index">验收范围</p>
+            <h2 id="acceptance-title">自动化检查</h2>
+          </div>
+          <label class="check-row"><input id="include-postgres" type="checkbox" checked><span>PostgreSQL 并发</span></label>
+          <label class="check-row"><input id="include-task" type="checkbox" checked><span>真实任务闭环</span></label>
+          <button id="accept-button" class="button approve full-width" type="button"><span aria-hidden="true">✓</span>执行完整验收</button>
+        </section>
+      </aside>
+
+      <section class="operation-panel" aria-labelledby="operation-title">
+        <div class="panel-toolbar">
+          <div class="section-heading compact">
+            <p class="section-index">操作轨道</p>
+            <h2 id="operation-title">等待操作</h2>
+          </div>
+          <span id="operation-status" class="status-badge idle">IDLE</span>
+        </div>
+
+        <ol id="step-track" class="step-track" aria-live="polite">
+          <li class="step-row idle">
+            <span class="step-marker">·</span>
+            <div><strong>尚未开始</strong><small>部署或验收步骤将在此显示</small></div>
+          </li>
+        </ol>
+
+        <div class="terminal-toolbar">
+          <span>实时输出</span>
+          <button id="copy-log" class="text-button" type="button">复制日志</button>
+        </div>
+        <pre id="terminal-output" class="terminal-output" aria-live="polite"><span class="terminal-muted">$ 等待命令</span></pre>
+      </section>
+
+      <aside class="status-panel" aria-labelledby="services-title">
+        <div class="section-heading">
+          <p class="section-index">运行拓扑</p>
+          <h2 id="services-title">服务状态</h2>
+        </div>
+
+        <div class="summary-strip">
+          <div><span>API</span><strong id="api-count">0</strong></div>
+          <div><span>Worker</span><strong id="worker-count">0</strong></div>
+          <div><span>队列</span><strong id="queue-depth">-</strong></div>
+          <div><span>运行时</span><strong id="runtime-count">-</strong></div>
+        </div>
+
+        <div class="service-table-wrap">
+          <table class="service-table">
+            <thead><tr><th>服务</th><th>实例</th><th>状态</th></tr></thead>
+            <tbody id="service-list">
+              <tr><td colspan="3" class="empty-cell">正在读取</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <section class="result-panel" aria-labelledby="result-title">
+          <div class="resource-heading">
+            <h3 id="result-title">最近验收</h3>
+            <span id="result-time" class="mono-value">-</span>
+          </div>
+          <dl id="result-list" class="result-list">
+            <div><dt>API 路由</dt><dd>未执行</dd></div>
+            <div><dt>运行指标</dt><dd>未执行</dd></div>
+            <div><dt>任务闭环</dt><dd>未执行</dd></div>
+          </dl>
+        </section>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

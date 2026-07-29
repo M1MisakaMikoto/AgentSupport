@@ -101,6 +101,8 @@ textarea { resize: vertical; line-height: 1.5; }
 .connection-block input { padding: 8px 10px; border-color: #596a6e; background: #303a3d; color: white; }
 
 .connection-state { margin-top: 7px; gap: 7px; color: #c4cdcf; font-size: 11px; }
+.console-link { color: #8fe2ec; text-decoration: none; }
+.console-link:hover { text-decoration: underline; }
 .divider { color: #68787b; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #7e898b; }
 .status-dot.ok { background: #55bd85; box-shadow: 0 0 0 3px rgb(85 189 133 / 15%); }

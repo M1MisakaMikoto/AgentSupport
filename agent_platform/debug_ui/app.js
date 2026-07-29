@@ -19,6 +19,7 @@ const elements = Object.fromEntries(
     "interaction-empty", "interaction-content", "interaction-kind", "interaction-id",
     "approval-view", "batch-hash", "tool-calls", "reject-button", "approve-button",
     "input-form", "interaction-value", "raw-output", "copy-button", "toast",
+    "control-console-link",
   ].map((id) => [id, document.getElementById(id)])
 );
 
@@ -32,6 +33,12 @@ function makeKey(scope) {
 
 function apiBase() {
   return elements["api-base"].value.trim().replace(/\/$/, "");
+}
+
+function defaultApiBase() {
+  return window.location.pathname.startsWith("/tasks")
+    ? `${window.location.origin}/platform`
+    : window.location.origin;
 }
 
 function showToast(message, isError = false) {
@@ -97,8 +104,29 @@ function eventClass(type) {
   return "lifecycle";
 }
 
+function projectRunState() {
+  if (!state.conversation?.run) return;
+  let projected = state.conversation.run.state;
+  for (const event of state.events) {
+    if (event.type === "conversation.queued") projected = "QUEUED";
+    if (event.type === "run.running") projected = "RUNNING";
+    if (event.type === "interaction.requested") projected = "WAITING_INPUT";
+    if (event.type === "interaction.input" || event.type === "approval.decided") projected = "RUNNING";
+    if (event.type === "run.paused") projected = "PAUSED";
+    if (event.type === "run.resuming") projected = "RESUMING";
+    if (event.type === "run.completed") projected = "COMPLETED";
+    if (event.type === "run.failed") projected = "FAILED";
+    if (event.type === "run.cancelled") projected = "CANCELLED";
+    if (event.type === "run.lost") projected = "LOST";
+  }
+  state.conversation.run.state = projected;
+  state.conversation.run.last_seq = state.events.at(-1)?.seq || 0;
+}
+
 function renderEvents() {
   state.events.sort((a, b) => a.seq - b.seq);
+  projectRunState();
+  updateResources();
   elements["event-list"].replaceChildren();
   elements["event-empty"].hidden = state.events.length > 0;
   elements["event-count"].textContent = `${state.events.length} 条`;
@@ -368,7 +396,10 @@ async function copyRaw() {
 
 function restore() {
   const saved = JSON.parse(localStorage.getItem("agentSupportDebug") || "null");
-  elements["api-base"].value = saved?.apiBase || window.location.origin;
+  elements["api-base"].value = saved?.apiBase || defaultApiBase();
+  elements["control-console-link"].href = window.location.pathname.startsWith("/tasks")
+    ? "/"
+    : "http://127.0.0.1:8010/";
   const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
   elements["workspace-name"].value = `manual-${stamp}`;
   elements["task-text"].value = defaultTask();
