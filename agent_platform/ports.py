@@ -16,20 +16,36 @@ class CoreRuntime(Protocol):
     async def run(self, request: dict[str, Any], event_sink: EventSink) -> dict[str, Any]: ...
 
     async def accept_input(
-        self, run_id: UUID, interaction_id: str, value: Any
+        self,
+        run_id: UUID,
+        interaction_id: str,
+        value: Any,
+        *,
+        command_id: UUID | None = None,
     ) -> dict[str, Any]: ...
 
     async def accept_approval(
-        self, run_id: UUID, approval_id: str, decision: str
+        self,
+        run_id: UUID,
+        approval_id: str,
+        decision: str,
+        *,
+        command_id: UUID | None = None,
     ) -> dict[str, Any]: ...
 
     async def checkpoint(self, run_id: UUID, reason: str) -> Checkpoint: ...
 
     async def resume(
-        self, checkpoint: Checkpoint, value: Any, event_sink: EventSink
+        self,
+        checkpoint: Checkpoint,
+        value: Any,
+        event_sink: EventSink,
+        *,
+        command_id: UUID | None = None,
+        runtime_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
-    async def cancel(self, run_id: UUID) -> dict[str, Any]: ...
+    async def cancel(self, run_id: UUID, *, command_id: UUID | None = None) -> dict[str, Any]: ...
 
 
 class WorkspaceProvider(Protocol):

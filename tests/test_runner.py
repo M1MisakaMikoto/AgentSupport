@@ -40,6 +40,37 @@ async def test_runner_user_input_flow():
 
 
 @pytest.mark.asyncio
+async def test_runner_commands_are_idempotent_by_command_id():
+    app = create_runner_app()
+    run_id = uuid4()
+    command_id = uuid4()
+    request = {
+        "run_id": str(run_id),
+        "conversation_id": str(uuid4()),
+        "session_id": str(uuid4()),
+        "container_id": "container-command-idempotency",
+        "lease_epoch": 1,
+        "correlation_id": "command-idempotency",
+        "context_bundle": {"task": "ask:once"},
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://runner") as client:
+        waiting = (await client.post("/runs", json=request)).json()
+        payload = {
+            "interaction_id": waiting["events"][-1]["payload"]["interaction_id"],
+            "value": "only once",
+            "command_id": str(command_id),
+        }
+
+        first = (await client.post(f"/runs/{run_id}/input", json=payload)).json()
+        duplicate = (await client.post(f"/runs/{run_id}/input", json=payload)).json()
+        events = (await client.get(f"/runs/{run_id}/events")).json()
+
+    assert duplicate == first
+    assert [event["type"] for event in events].count("message") == 1
+    assert [event["type"] for event in events].count("run.completed") == 1
+
+
+@pytest.mark.asyncio
 async def test_runner_duplicate_run_and_cancel_are_idempotent():
     app = create_runner_app()
     run_id = uuid4()

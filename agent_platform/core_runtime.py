@@ -62,22 +62,42 @@ class TraeCoreRunnerRuntime:
             await event_sink(EventEnvelope.model_validate(event))
         return result
 
-    async def accept_input(self, run_id: UUID, interaction_id: str, value: Any) -> dict[str, Any]:
+    async def accept_input(
+        self,
+        run_id: UUID,
+        interaction_id: str,
+        value: Any,
+        *,
+        command_id: UUID | None = None,
+    ) -> dict[str, Any]:
         async with self._client(self._run_url(run_id)) as client:
             response = await client.post(
                 f"/runs/{run_id}/input",
-                json={"interaction_id": interaction_id, "value": value},
+                json={
+                    "interaction_id": interaction_id,
+                    "value": value,
+                    "command_id": str(command_id) if command_id else None,
+                },
             )
             response.raise_for_status()
             return response.json()
 
     async def accept_approval(
-        self, run_id: UUID, approval_id: str, decision: str
+        self,
+        run_id: UUID,
+        approval_id: str,
+        decision: str,
+        *,
+        command_id: UUID | None = None,
     ) -> dict[str, Any]:
         async with self._client(self._run_url(run_id)) as client:
             response = await client.post(
                 f"/runs/{run_id}/approval",
-                json={"approval_id": approval_id, "decision": decision},
+                json={
+                    "approval_id": approval_id,
+                    "decision": decision,
+                    "command_id": str(command_id) if command_id else None,
+                },
             )
             response.raise_for_status()
             return response.json()
@@ -89,12 +109,24 @@ class TraeCoreRunnerRuntime:
             return Checkpoint.model_validate(response.json())
 
     async def resume(
-        self, checkpoint: Checkpoint, value: Any, event_sink: EventSink
+        self,
+        checkpoint: Checkpoint,
+        value: Any,
+        event_sink: EventSink,
+        *,
+        command_id: UUID | None = None,
+        runtime_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        payload = {
+            "checkpoint": checkpoint.model_dump(mode="json"),
+            "value": value,
+            "command_id": str(command_id) if command_id else None,
+            **(runtime_context or {}),
+        }
         async with self._client(self._run_url(checkpoint.run_id)) as client:
             response = await client.post(
                 f"/runs/{checkpoint.run_id}/resume",
-                json={"checkpoint": checkpoint.model_dump(mode="json"), "value": value},
+                json=payload,
             )
             response.raise_for_status()
             result = response.json()
@@ -102,9 +134,14 @@ class TraeCoreRunnerRuntime:
             await event_sink(EventEnvelope.model_validate(event))
         return result
 
-    async def cancel(self, run_id: UUID) -> dict[str, Any]:
+    async def cancel(
+        self, run_id: UUID, *, command_id: UUID | None = None
+    ) -> dict[str, Any]:
         async with self._client(self._run_url(run_id)) as client:
-            response = await client.post(f"/runs/{run_id}/cancel")
+            response = await client.post(
+                f"/runs/{run_id}/cancel",
+                json={"command_id": str(command_id) if command_id else None},
+            )
             response.raise_for_status()
             result = response.json()
         if result.get("status") in {"COMPLETED", "FAILED", "CANCELLED", "LOST"}:

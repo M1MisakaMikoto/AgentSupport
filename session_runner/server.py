@@ -46,11 +46,17 @@ class RunRequest(BaseModel):
 class InputRequest(BaseModel):
     interaction_id: str
     value: Any
+    command_id: UUID | None = None
 
 
 class ApprovalRequest(BaseModel):
     approval_id: str
     decision: str
+    command_id: UUID | None = None
+
+
+class CommandRequest(BaseModel):
+    command_id: UUID | None = None
 
 
 class CheckpointRequest(BaseModel):
@@ -60,6 +66,12 @@ class CheckpointRequest(BaseModel):
 class ResumeRequest(BaseModel):
     checkpoint: dict[str, Any]
     value: Any = None
+    command_id: UUID | None = None
+    session_id: UUID | None = None
+    container_id: str | None = None
+    lease_epoch: int | None = None
+    fence_epoch: int | None = None
+    correlation_id: str | None = None
 
 
 class RunState:
@@ -74,6 +86,7 @@ class RunState:
         self.trae_execution: TraeExecutionAdapter | None = None
         self.background: asyncio.Task[None] | None = None
         self.status_changed = asyncio.Event()
+        self.command_results: dict[str, dict[str, Any]] = {}
 
     def emit(self, event_type: str, payload: dict[str, Any] | None = None) -> EventEnvelope:
         event = EventEnvelope(
@@ -85,6 +98,13 @@ class RunState:
         )
         self.events.append(event)
         return event
+
+    def cached_command(self, command_id: UUID | None) -> dict[str, Any] | None:
+        return self.command_results.get(str(command_id)) if command_id else None
+
+    def remember_command(self, command_id: UUID | None, result: dict[str, Any]) -> None:
+        if command_id:
+            self.command_results[str(command_id)] = result
 
 
 def _validate_container_fence(request: RunRequest) -> None:
@@ -278,6 +298,9 @@ def create_runner_app(
         state = runs.get(run_id)
         if not state:
             raise HTTPException(404, "run not found")
+        cached = state.cached_command(request.command_id)
+        if cached is not None:
+            return cached
         if state.status != "WAITING_INPUT" or not state.pending_interaction:
             raise HTTPException(409, "run is not waiting for input")
         if request.interaction_id != state.pending_interaction["interaction_id"]:
@@ -289,17 +312,22 @@ def create_runner_app(
         state.status = "COMPLETED"
         state.emit("message", {"input": request.value})
         state.emit("run.completed", {"result": {"status": "completed"}})
-        return {
+        result = {
             "run_id": run_id,
             "status": state.status,
             "events": state.events[first_new_event:],
         }
+        state.remember_command(request.command_id, result)
+        return result
 
     @app.post("/runs/{run_id}/approval")
     async def accept_approval(run_id: UUID, request: ApprovalRequest):
         state = runs.get(run_id)
         if not state:
             raise HTTPException(404, "run not found")
+        cached = state.cached_command(request.command_id)
+        if cached is not None:
+            return cached
         if state.status != "WAITING_INPUT" or not state.pending_interaction:
             raise HTTPException(409, "run is not waiting for approval")
         if request.approval_id != state.pending_interaction["interaction_id"]:
@@ -325,11 +353,13 @@ def create_runner_app(
                 "run.completed",
                 {"result": {"status": "completed", "approval": request.decision}},
             )
-        return {
+        result = {
             "run_id": run_id,
             "status": state.status,
             "events": state.events[first_new_event:],
         }
+        state.remember_command(request.command_id, result)
+        return result
 
     @app.post("/runs/{run_id}/checkpoint")
     async def checkpoint(run_id: UUID, request: CheckpointRequest):
@@ -351,6 +381,7 @@ def create_runner_app(
             tool_policy["pending_tool_calls"] = pending_tool_calls
         if state.trae_execution is not None:
             tool_policy.update(state.trae_execution.checkpoint_policy())
+        tool_policy["command_results"] = state.command_results
         checkpoint_tool_policy_hash = tool_policy_hash(tool_policy)
         raw_tools = list(tool_policy.get("tools", []))
         checkpoint_tool_versions_hash = tool_versions_hash(raw_tools) if raw_tools else None
@@ -394,12 +425,18 @@ def create_runner_app(
         return result
 
     @app.post("/runs/{run_id}/cancel")
-    async def cancel(run_id: UUID):
+    async def cancel(run_id: UUID, request: CommandRequest | None = None):
         state = runs.get(run_id)
         if not state:
             raise HTTPException(404, "run not found")
+        command_id = request.command_id if request else None
+        cached = state.cached_command(command_id)
+        if cached is not None:
+            return cached
         if state.status == "CANCELLED":
-            return {"run_id": run_id, "status": state.status, "events": []}
+            result = {"run_id": run_id, "status": state.status, "events": []}
+            state.remember_command(command_id, result)
+            return result
         first_new_event = len(state.events)
         if state.background is not None and not state.background.done():
             state.background.cancel()
@@ -408,11 +445,13 @@ def create_runner_app(
         state.status = "CANCELLED"
         state.pending_interaction = None
         state.emit("run.cancelled")
-        return {
+        result = {
             "run_id": run_id,
             "status": state.status,
             "events": state.events[first_new_event:],
         }
+        state.remember_command(command_id, result)
+        return result
 
     @app.post("/runs/{run_id}/resume")
     async def resume(run_id: UUID, request: ResumeRequest):
@@ -420,21 +459,28 @@ def create_runner_app(
         first_new_event = len(runs[run_id].events) if run_id in runs else 0
         state = runs.get(run_id)
         if state is None:
-            state = RunState(
-                RunRequest(
-                    run_id=run_id,
-                    conversation_id=checkpoint.conversation_id,
-                    session_id=uuid4(),
-                    container_id="restored",
-                    lease_epoch=checkpoint.workspace_write_lease_epoch,
-                    correlation_id="resume",
-                    context_bundle=checkpoint.context_bundle.model_dump(mode="json"),
-                    workspace_ref=checkpoint.workspace_ref,
-                    tool_policy=checkpoint.context_bundle.tool_policy,
-                    core_version=checkpoint.core_version,
-                )
+            run_request = RunRequest(
+                run_id=run_id,
+                conversation_id=checkpoint.conversation_id,
+                session_id=request.session_id or uuid4(),
+                container_id=request.container_id or "restored",
+                lease_epoch=request.lease_epoch or checkpoint.workspace_write_lease_epoch,
+                fence_epoch=request.fence_epoch or 0,
+                correlation_id=request.correlation_id or "resume",
+                context_bundle=checkpoint.context_bundle.model_dump(mode="json"),
+                workspace_ref=checkpoint.workspace_ref,
+                tool_policy=checkpoint.context_bundle.tool_policy,
+                core_version=checkpoint.core_version,
             )
+            _validate_container_fence(run_request)
+            state = RunState(run_request)
             runs[run_id] = state
+            state.command_results = dict(
+                checkpoint.context_bundle.tool_policy.get("command_results", {})
+            )
+        cached = state.cached_command(request.command_id)
+        if cached is not None:
+            return cached
         if mode == "trae" and checkpoint.pending_tool_calls:
             try:
                 decision = ApprovalDecision(str(request.value))
@@ -455,11 +501,13 @@ def create_runner_app(
                     drive_trae(state, checkpoint=checkpoint, decision=decision)
                 )
             await state.status_changed.wait()
-            return {
+            result = {
                 "run_id": run_id,
                 "status": state.status,
                 "events": state.events[first_new_event:],
             }
+            state.remember_command(request.command_id, result)
+            return result
         raw_batch = None
         if checkpoint.pending_interaction:
             raw_batch = checkpoint.pending_interaction.get("tool_batch")
@@ -484,11 +532,13 @@ def create_runner_app(
             state.status = "COMPLETED"
             state.emit("message", {"input": request.value})
             state.emit("run.completed", {"result": {"status": "completed", "resumed": True}})
-        return {
+        result = {
             "run_id": run_id,
             "status": state.status,
             "events": state.events[first_new_event:],
         }
+        state.remember_command(request.command_id, result)
+        return result
 
     @app.get("/runs/{run_id}/events")
     async def events(run_id: UUID, after_seq: int = 0):
