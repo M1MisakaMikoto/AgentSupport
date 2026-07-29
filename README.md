@@ -3,6 +3,10 @@
 This repository contains the first implementation slice from `.dev/lab/confirmation/accepted.md`.
 It is an API-first Python 3.12 service with a private Session Runner contract.
 
+Production Python packages use the `src/` layout. `agent_platform` is the control plane,
+`session_runner` is the execution plane, and `agent_runner_contracts` contains their only shared
+wire models. See `docs/architecture/directory-structure.md` for the dependency rules.
+
 ## Local setup
 
 ```powershell
@@ -33,7 +37,7 @@ waits for readiness and opens the browser. To start it without opening a browser
 The equivalent direct command is:
 
 ```powershell
-.venv\Scripts\python.exe -m agent_platform.dev_console
+.venv\Scripts\python.exe -m devtools.console
 ```
 
 Open `http://127.0.0.1:8010`. The same-origin console provides deployment control at `/` and

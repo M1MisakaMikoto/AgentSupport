@@ -49,13 +49,16 @@ trae = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent_platform*", "session_runner*"]
+where = ["src"]
+include = ["agent_platform*", "agent_runner_contracts*", "session_runner*"]
 
 [tool.setuptools.package-data]
-agent_platform = ["debug_ui/*", "control_ui/*"]
+agent_platform = ["serving/http/static/debug/*"]
+session_runner = ["trae_config.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 asyncio_mode = "auto"
 
 [tool.ruff]

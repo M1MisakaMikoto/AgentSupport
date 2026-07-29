@@ -30,7 +30,7 @@ function Test-ConsoleReady {
 if (-not (Test-ConsoleReady)) {
     $process = Start-Process `
         -FilePath $python `
-        -ArgumentList "-m", "agent_platform.dev_console", "--host", "127.0.0.1", "--port", "8010" `
+        -ArgumentList "-m", "devtools.console", "--host", "127.0.0.1", "--port", "8010" `
         -WorkingDirectory $projectRoot `
         -WindowStyle Hidden `
         -RedirectStandardOutput (Join-Path $tempRoot "dev-console.out.log") `

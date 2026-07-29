@@ -115,7 +115,7 @@ services:
     command: uvicorn session_runner.main:app --host 0.0.0.0 --port 8080
     environment:
       SESSION_RUNNER_MODE: ${SESSION_RUNNER_MODE:-trae}
-      SESSION_RUNNER_TRAE_CONFIG: /app/session_runner/trae_config.yaml
+      SESSION_RUNNER_TRAE_CONFIG: /app/src/session_runner/trae_config.yaml
       SESSION_RUNNER_WORKSPACE_ROOTS: /workspace,/workspace-data
       TRAE_PROVIDER: ${TRAE_PROVIDER:-anthropic}
       TRAE_API_KEY: ${TRAE_API_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}
