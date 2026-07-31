@@ -221,6 +221,9 @@ async def test_one_stop_console_serves_task_ui_and_proxies_api_and_sse():
 
     assert task_ui.status_code == 200
     assert "验收控制台" in task_ui.text
+    assert 'aria-label="控制台导航"' in task_ui.text
+    assert 'id="control-console-link" class="nav-link"' in task_ui.text
+    assert 'class="nav-link active" href="./" aria-current="page"' in task_ui.text
     assert "window.location.origin}/platform" in task_script.text
     assert live_response.json() == {"status": "ok"}
     assert echo_response.json() == {

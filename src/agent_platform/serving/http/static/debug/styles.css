@@ -31,7 +31,7 @@ body {
 
 button, input, textarea { font: inherit; }
 
-button:focus-visible, input:focus-visible, textarea:focus-visible {
+button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--focus) 30%, transparent);
   outline-offset: 1px;
 }
@@ -39,16 +39,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .app-header {
   min-height: 92px;
   padding: 18px 24px;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(360px, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 24px;
   color: #f8faf9;
   background: var(--ink);
   border-bottom: 4px solid var(--signal);
 }
 
-.brand-block, .inline-control, .connection-state, .panel-toolbar,
+.brand-block, .header-nav, .inline-control, .connection-state, .panel-toolbar,
 .toolbar-actions, .resource-heading, .interaction-meta, .decision-actions {
   display: flex;
   align-items: center;
@@ -84,7 +84,21 @@ h1 {
 h2 { margin-bottom: 0; font: 600 21px var(--display); }
 h3 { margin-bottom: 0; font-size: 13px; }
 
-.connection-block { width: min(540px, 52vw); }
+.header-nav { align-self: stretch; }
+.nav-link {
+  min-width: 96px;
+  height: 100%;
+  padding: 0 16px;
+  display: grid;
+  place-items: center;
+  border-bottom: 2px solid transparent;
+  color: #aebabc;
+  text-decoration: none;
+  font-size: 12px;
+}
+.nav-link:hover, .nav-link.active { color: white; border-bottom-color: #8fe2ec; }
+
+.connection-block { width: min(540px, 100%); justify-self: end; }
 .connection-block label { display: block; margin-bottom: 5px; color: #b9c4c5; font-size: 11px; }
 .inline-control { gap: 8px; }
 
@@ -101,8 +115,6 @@ textarea { resize: vertical; line-height: 1.5; }
 .connection-block input { padding: 8px 10px; border-color: #596a6e; background: #303a3d; color: white; }
 
 .connection-state { margin-top: 7px; gap: 7px; color: #c4cdcf; font-size: 11px; }
-.console-link { color: #8fe2ec; text-decoration: none; }
-.console-link:hover { text-decoration: underline; }
 .divider { color: #68787b; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #7e898b; }
 .status-dot.ok { background: #55bd85; box-shadow: 0 0 0 3px rgb(85 189 133 / 15%); }
@@ -239,13 +251,18 @@ form label { display: block; margin: 16px 0 6px; color: var(--ink-soft); font-si
 [hidden] { display: none !important; }
 
 @media (max-width: 1050px) {
+  .app-header { grid-template-columns: 1fr auto; }
+  .header-nav { grid-row: 2; grid-column: 1 / -1; min-height: 36px; justify-content: center; }
+  .connection-block { grid-column: 2; grid-row: 1; }
   .workspace-shell { height: auto; min-height: calc(100vh - 118px); grid-template-columns: 280px 1fr; }
   .decision-panel { grid-column: 1 / -1; border-top: 1px solid var(--line); }
   .decision-panel .raw-panel { max-width: 100%; }
 }
 
 @media (max-width: 720px) {
-  .app-header { align-items: stretch; flex-direction: column; padding: 15px; }
+  .app-header { display: flex; align-items: stretch; flex-direction: column; padding: 15px; }
+  .header-nav { order: 3; width: 100%; min-height: 38px; }
+  .nav-link { height: 38px; flex: 1; }
   .connection-block { width: 100%; }
   .workspace-shell { display: block; }
   .setup-panel, .decision-panel { padding: 20px 15px; }
