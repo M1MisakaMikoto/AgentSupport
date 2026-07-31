@@ -17,6 +17,7 @@ class LLMProvider(Enum):
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    DEEPSEEK_ANTHROPIC = "deepseek_anthropic"
     AZURE = "azure"
     OLLAMA = "ollama"
     OPENROUTER = "openrouter"
@@ -40,6 +41,10 @@ class LLMClient:
                 from .anthropic_client import AnthropicClient
 
                 self.client = AnthropicClient(model_config)
+            case LLMProvider.DEEPSEEK_ANTHROPIC:
+                from .deepseek_anthropic_client import DeepSeekAnthropicClient
+
+                self.client = DeepSeekAnthropicClient(model_config)
             case LLMProvider.AZURE:
                 from .azure_client import AzureClient
 

@@ -67,21 +67,25 @@ Notes for using the `str_replace` command:
                 name="file_text",
                 type="string",
                 description="Required parameter of `create` command, with the content of the file to be created.",
+                required=False,
             ),
             ToolParameter(
                 name="insert_line",
                 type="integer",
                 description="Required parameter of `insert` command. The `new_str` will be inserted AFTER the line `insert_line` of `path`.",
+                required=False,
             ),
             ToolParameter(
                 name="new_str",
                 type="string",
                 description="Optional parameter of `str_replace` command containing the new string (if not given, no string will be added). Required parameter of `insert` command containing the string to insert.",
+                required=False,
             ),
             ToolParameter(
                 name="old_str",
                 type="string",
                 description="Required parameter of `str_replace` command containing the string in `path` to replace.",
+                required=False,
             ),
             ToolParameter(
                 name="path",
@@ -94,6 +98,7 @@ Notes for using the `str_replace` command:
                 type="array",
                 description="Optional parameter of `view` command when `path` points to a file. If none is given, the full file is shown. If provided, the file will be shown in the indicated line number range, e.g. [11, 12] will show lines 11 and 12. Indexing at 1 to start. Setting `[start_line, -1]` shows all lines from `start_line` to the end of the file.",
                 items={"type": "integer"},
+                required=False,
             ),
         ]
 

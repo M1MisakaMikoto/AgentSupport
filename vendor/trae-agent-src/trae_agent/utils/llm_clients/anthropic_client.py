@@ -19,6 +19,9 @@ from trae_agent.utils.llm_clients.retry_utils import retry_with
 class AnthropicClient(BaseLLMClient):
     """Anthropic client wrapper with tool schema generation."""
 
+    provider_name = "anthropic"
+    retry_provider_name = "Anthropic"
+
     def __init__(self, model_config: ModelConfig):
         super().__init__(model_config)
 
@@ -32,6 +35,23 @@ class AnthropicClient(BaseLLMClient):
     def set_chat_history(self, messages: list[LLMMessage]) -> None:
         """Set the chat history."""
         self.message_history = self.parse_messages(messages)
+
+    def _build_tool_schema(self, tool: Tool) -> anthropic.types.ToolUnionParam:
+        if tool.name == "str_replace_based_edit_tool":
+            return TextEditor20250429(
+                name="str_replace_based_edit_tool",
+                type="text_editor_20250429",
+            )
+        if tool.name == "bash":
+            return anthropic.types.ToolBash20250124Param(
+                name="bash",
+                type="bash_20250124",
+            )
+        return anthropic.types.ToolParam(
+            name=tool.name,
+            description=tool.description,
+            input_schema=tool.get_input_schema(),
+        )
 
     def _create_anthropic_response(
         self,
@@ -71,32 +91,12 @@ class AnthropicClient(BaseLLMClient):
             anthropic.NOT_GIVEN
         )
         if tools:
-            tool_schemas = []
-            for tool in tools:
-                if tool.name == "str_replace_based_edit_tool":
-                    tool_schemas.append(
-                        TextEditor20250429(
-                            name="str_replace_based_edit_tool",
-                            type="text_editor_20250429",
-                        )
-                    )
-                elif tool.name == "bash":
-                    tool_schemas.append(
-                        anthropic.types.ToolBash20250124Param(name="bash", type="bash_20250124")
-                    )
-                else:
-                    tool_schemas.append(
-                        anthropic.types.ToolParam(
-                            name=tool.name,
-                            description=tool.description,
-                            input_schema=tool.get_input_schema(),
-                        )
-                    )
+            tool_schemas = [self._build_tool_schema(tool) for tool in tools]
 
         # Apply retry decorator to the API call
         retry_decorator = retry_with(
             func=self._create_anthropic_response,
-            provider_name="Anthropic",
+            provider_name=self.retry_provider_name,
             max_retries=model_config.max_retries,
         )
         response = retry_decorator(model_config, tool_schemas)
@@ -145,7 +145,7 @@ class AnthropicClient(BaseLLMClient):
             self.trajectory_recorder.record_llm_interaction(
                 messages=messages,
                 response=llm_response,
-                provider="anthropic",
+                provider=self.provider_name,
                 model=model_config.model,
                 tools=tools,
             )

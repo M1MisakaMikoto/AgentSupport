@@ -16,6 +16,9 @@ model_providers:
   anthropic:
     api_key: ""
     provider: anthropic
+  deepseek_anthropic:
+    api_key: ""
+    provider: deepseek_anthropic
 
 models:
   session_model:

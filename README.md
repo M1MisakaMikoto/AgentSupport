@@ -104,6 +104,17 @@ are passed to the Runner process only and are never written to the YAML config o
 The vendored MIT source snapshot is under `vendor/trae-agent-src` and is invoked only
 through Trae's `_tool_caller` boundary.
 
+For DeepSeek's Anthropic-compatible endpoint, select its dedicated provider so local tools use
+the custom-tool subset documented by DeepSeek instead of Anthropic's native versioned tools:
+
+```powershell
+$env:TRAE_PROVIDER = "deepseek_anthropic"
+$env:TRAE_API_KEY = "<temporary-api-key>"
+$env:TRAE_MODEL_BASE_URL = "https://api.deepseek.com/anthropic"
+$env:TRAE_MODEL = "deepseek-v4-pro"
+wsl.exe --distribution $distro --cd $PWD.Path --exec docker compose up -d --force-recreate --no-build
+```
+
 For an OpenAI-compatible provider, override the provider and model in the same shell:
 
 ```powershell
