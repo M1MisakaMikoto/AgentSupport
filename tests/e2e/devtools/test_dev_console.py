@@ -10,7 +10,10 @@ from httpx import ASGITransport, AsyncClient
 from devtools.console.app import (
     AcceptanceRequest,
     CommandResult,
+    ConsoleOperation,
     DevConsoleController,
+    DockerTargetRequest,
+    StackRequest,
     create_dev_console_app,
 )
 
@@ -50,7 +53,7 @@ async def _wait_for_operation(client, operation_id, token):
 @pytest.mark.asyncio
 async def test_dev_console_requires_token_and_runs_fixed_deploy_commands(monkeypatch):
     runner = FakeCommandRunner()
-    controller = DevConsoleController(command_runner=runner)
+    controller = DevConsoleController(command_runner=runner, docker_transport="local")
 
     async def ready():
         return {"status": "ready"}
@@ -77,14 +80,17 @@ async def test_dev_console_requires_token_and_runs_fixed_deploy_commands(monkeyp
     assert denied.status_code == 403
     assert accepted.status_code == 202
     assert operation["status"] == "succeeded"
-    assert runner.calls[0]["command"][-2:] == ["compose", "build"]
-    assert runner.calls[1]["command"][-4:] == [
+    commands = [call["command"] for call in runner.calls]
+    assert any(command[-3:] == ["compose", "version", "--short"] for command in commands)
+    assert any(command[-2:] == ["compose", "build"] for command in commands)
+    up_call = next(call for call in runner.calls if "up" in call["command"])
+    assert up_call["command"][-4:] == [
         "--scale",
         "api=2",
         "--scale",
         "worker=3",
     ]
-    assert runner.calls[1]["env"] == {"SESSION_RUNNER_MODE": "deterministic"}
+    assert up_call["env"] == {"SESSION_RUNNER_MODE": "deterministic"}
 
 
 @pytest.mark.asyncio
@@ -98,6 +104,23 @@ async def test_dev_console_rejects_out_of_range_replica_counts():
         )
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_stop_without_body_uses_default_docker_target():
+    runner = FakeCommandRunner()
+    controller = DevConsoleController(command_runner=runner, docker_transport="local")
+    app = create_dev_console_app(controller, token="stop-token")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/actions/stop",
+            headers={"X-Dev-Console-Token": "stop-token"},
+        )
+        operation = await _wait_for_operation(client, response.json()["id"], "stop-token")
+
+    assert response.status_code == 202
+    assert operation["status"] == "succeeded"
+    assert runner.calls[-1]["command"] == ["docker", "compose", "stop"]
 
 
 @pytest.mark.asyncio
@@ -136,6 +159,122 @@ async def test_dev_console_status_normalizes_compose_json(monkeypatch):
         }
     ]
     assert status["ready"] is None
+
+
+def test_dev_console_builds_direct_wsl2_docker_command(tmp_path):
+    controller = DevConsoleController(
+        project_root=tmp_path,
+        command_runner=FakeCommandRunner(),
+        docker_transport="local",
+    )
+    target = DockerTargetRequest(
+        docker_transport="wsl2",
+        wsl_distribution="Ubuntu-24.04",
+    )
+
+    command = controller._docker("compose", "ps", target=target)
+
+    assert command == [
+        "wsl.exe",
+        "--distribution",
+        "Ubuntu-24.04",
+        "--cd",
+        str(tmp_path.resolve()),
+        "--exec",
+        "docker",
+        "compose",
+        "ps",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_wsl2_build_uses_native_staging_context(tmp_path):
+    runner = FakeCommandRunner()
+    controller = DevConsoleController(
+        project_root=tmp_path,
+        command_runner=runner,
+        docker_transport="wsl2",
+    )
+    operation = ConsoleOperation(id="build-operation", action="deploy")
+    request = StackRequest(
+        docker_transport="wsl2",
+        wsl_distribution="Ubuntu",
+    )
+
+    await controller._build_images(
+        operation,
+        request,
+        {"SESSION_RUNNER_MODE": "deterministic"},
+    )
+
+    commands = [call["command"] for call in runner.calls]
+    assert commands[0][:5] == ["wsl.exe", "--distribution", "Ubuntu", "--cd", str(tmp_path)]
+    assert "--exclude=.pytest_cache" in commands[0]
+    assert "vendor/trae-agent-src" in commands[0]
+    docker_build = next(command for command in commands if "build" in command)
+    assert docker_build[-4:] == [
+        "build",
+        "--tag",
+        "agentsupport-api",
+        "/tmp/agentsupport-build-build-operation",
+    ]
+    assert not any(command[-2:] == ["compose", "build"] for command in commands)
+    assert commands[-1][-5:] == [
+        "--recursive",
+        "--force",
+        "--",
+        "/tmp/agentsupport-build-build-operation",
+        "/tmp/agentsupport-build-build-operation.tar",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_wsl2_commands_forward_only_compose_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRAE_API_KEY", "secret")
+    monkeypatch.setenv("UNRELATED_VALUE", "not-forwarded")
+    runner = FakeCommandRunner()
+    controller = DevConsoleController(
+        project_root=tmp_path,
+        command_runner=runner,
+        docker_transport="wsl2",
+    )
+    operation = ConsoleOperation(id="wsl-env", action="deploy")
+    target = DockerTargetRequest(docker_transport="wsl2")
+
+    await controller._command(
+        operation,
+        controller._docker("compose", "config", target=target),
+        env={"SESSION_RUNNER_MODE": "trae"},
+    )
+
+    forwarded = runner.calls[0]["env"]["WSLENV"].split(":")
+    assert "SESSION_RUNNER_MODE" in forwarded
+    assert "TRAE_API_KEY" in forwarded
+    assert "UNRELATED_VALUE" not in forwarded
+    assert "TRAE_API_KEY" not in runner.calls[0]["env"]
+
+
+@pytest.mark.asyncio
+async def test_environment_diagnostic_reports_unavailable_docker():
+    class UnavailableRunner:
+        async def run(self, command, *, cwd, env, emit):
+            raise FileNotFoundError(command[0])
+
+    controller = DevConsoleController(
+        command_runner=UnavailableRunner(),
+        docker_transport="wsl2",
+    )
+    app = create_dev_console_app(controller, token="diagnostic-token")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/environment?docker_transport=wsl2&wsl_distribution=Ubuntu",
+            headers={"X-Dev-Console-Token": "diagnostic-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["available"] is False
+    assert response.json()["target"]["label"] == "WSL2: Ubuntu"
+    assert "wsl.exe" in response.json()["error"]
 
 
 @pytest.mark.asyncio

@@ -34,24 +34,60 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+WSL_COMPOSE_ENV_KEYS = {
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "COMPOSE_PROFILES",
+    "COMPOSE_PROJECT_NAME",
+    "SESSION_RUNNER_MODE",
+    "TRAE_API_KEY",
+    "TRAE_MAX_STEPS",
+    "TRAE_MODEL",
+    "TRAE_MODEL_BASE_URL",
+    "TRAE_PROVIDER",
+}
+WSL_BUILD_SOURCES = (
+    "Dockerfile",
+    ".dockerignore",
+    "pyproject.toml",
+    "requirements.txt",
+    "alembic.ini",
+    "alembic",
+    "src",
+    "vendor/trae-agent-src",
+)
+WSL_BUILD_EXCLUDES = (
+    ".git",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tmp",
+    "__pycache__",
+    "*.pyc",
+)
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
-class StackRequest(BaseModel):
+class DockerTargetRequest(BaseModel):
+    docker_transport: Literal["auto", "local", "context", "wsl2"] = "auto"
+    docker_context: str = Field(default="", max_length=128)
+    wsl_distribution: str = Field(default="", max_length=128)
+
+
+class StackRequest(DockerTargetRequest):
     api_replicas: int = Field(default=2, ge=1, le=8)
     worker_replicas: int = Field(default=3, ge=1, le=16)
     runner_mode: Literal["deterministic", "trae"] = "deterministic"
     rebuild: bool = True
 
 
-class AcceptanceRequest(BaseModel):
+class AcceptanceRequest(DockerTargetRequest):
     expected_api_replicas: int = Field(default=2, ge=1, le=8)
     include_postgres: bool = True
     include_task_smoke: bool = True
-
 
 @dataclass(slots=True)
 class CommandResult:
@@ -146,14 +182,25 @@ class DevConsoleController:
         *,
         project_root: Path = PROJECT_ROOT,
         command_runner: SubprocessCommandRunner | None = None,
+        docker_transport: str | None = None,
         docker_context: str | None = None,
+        wsl_distribution: str | None = None,
         platform_url: str | None = None,
         platform_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.project_root = project_root.resolve()
         self.command_runner = command_runner or SubprocessCommandRunner()
-        self.docker_context = docker_context or os.getenv(
-            "AGENT_DEV_DOCKER_CONTEXT", "desktop-linux"
+        self.docker_context = docker_context or os.getenv("AGENT_DEV_DOCKER_CONTEXT", "")
+        configured_transport = docker_transport or os.getenv("AGENT_DEV_DOCKER_TRANSPORT", "")
+        if not configured_transport:
+            configured_transport = "context" if self.docker_context else (
+                "wsl2" if os.name == "nt" else "local"
+            )
+        if configured_transport not in {"local", "context", "wsl2"}:
+            raise ValueError(f"unsupported Docker transport: {configured_transport}")
+        self.docker_transport = configured_transport
+        self.wsl_distribution = wsl_distribution or os.getenv(
+            "AGENT_DEV_WSL_DISTRIBUTION", ""
         )
         self.platform_url = (platform_url or os.getenv(
             "AGENT_DEV_PLATFORM_URL", "http://127.0.0.1:8000"
@@ -164,8 +211,62 @@ class DevConsoleController:
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task[None]] = set()
 
-    def _docker(self, *arguments: str) -> list[str]:
-        return ["docker", "--context", self.docker_context, *arguments]
+    def _target(self, request: DockerTargetRequest | StackRequest | AcceptanceRequest | None) -> dict[str, str]:
+        requested_transport = request.docker_transport if request else "auto"
+        transport = self.docker_transport if requested_transport == "auto" else requested_transport
+        context = (request.docker_context if request else "") or self.docker_context
+        distribution = (request.wsl_distribution if request else "") or self.wsl_distribution
+        if transport == "context" and not context:
+            raise ValueError("Docker context 模式需要填写 context 名称")
+        return {
+            "transport": transport,
+            "docker_context": context,
+            "wsl_distribution": distribution,
+        }
+
+    def _docker(
+        self,
+        *arguments: str,
+        target: DockerTargetRequest | StackRequest | AcceptanceRequest | None = None,
+    ) -> list[str]:
+        selected = self._target(target)
+        if selected["transport"] == "local":
+            return ["docker", *arguments]
+        if selected["transport"] == "context":
+            return ["docker", "--context", selected["docker_context"], *arguments]
+        return self._wsl("docker", *arguments, target=target, project_cwd=True)
+
+    def _wsl(
+        self,
+        *arguments: str,
+        target: DockerTargetRequest | StackRequest | AcceptanceRequest,
+        project_cwd: bool = False,
+    ) -> list[str]:
+        selected = self._target(target)
+        if selected["transport"] != "wsl2":
+            raise ValueError("WSL command requires the wsl2 Docker transport")
+        command = ["wsl.exe"]
+        if selected["wsl_distribution"]:
+            command.extend(["--distribution", selected["wsl_distribution"]])
+        if project_cwd:
+            command.extend(["--cd", str(self.project_root)])
+        command.extend(["--exec", *arguments])
+        return command
+
+    def target_details(
+        self, request: DockerTargetRequest | StackRequest | AcceptanceRequest | None
+    ) -> dict[str, str]:
+        selected = self._target(request)
+        label = {
+            "local": "本机 Docker CLI",
+            "context": f"Docker context: {selected['docker_context']}",
+            "wsl2": (
+                f"WSL2: {selected['wsl_distribution']}"
+                if selected["wsl_distribution"]
+                else "WSL2: 默认发行版"
+            ),
+        }[selected["transport"]]
+        return {**selected, "label": label}
 
     async def _command(
         self,
@@ -174,10 +275,22 @@ class DevConsoleController:
         *,
         env: dict[str, str] | None = None,
     ) -> CommandResult:
+        effective_env = dict(env or {})
+        if command and Path(command[0]).name.lower() == "wsl.exe":
+            forwarded = {
+                key
+                for key in WSL_COMPOSE_ENV_KEYS
+                if key in effective_env or key in os.environ
+            }
+            inherited = [item for item in os.getenv("WSLENV", "").split(":") if item]
+            inherited_names = {item.partition("/")[0] for item in inherited}
+            effective_env["WSLENV"] = ":".join(
+                [*inherited, *sorted(forwarded - inherited_names)]
+            )
         return await self.command_runner.run(
             command,
             cwd=self.project_root,
-            env=env,
+            env=effective_env or None,
             emit=operation.add_log,
         )
 
@@ -199,6 +312,89 @@ class DevConsoleController:
         step["status"] = "succeeded"
         step["finished_at"] = _now().isoformat()
         return result
+
+    async def _verify_docker(
+        self,
+        operation: ConsoleOperation,
+        target: DockerTargetRequest | StackRequest | AcceptanceRequest,
+    ) -> dict[str, str]:
+        version = await self._command(
+            operation,
+            self._docker("version", "--format", "{{.Server.Version}}", target=target),
+        )
+        compose = await self._command(
+            operation,
+            self._docker("compose", "version", "--short", target=target),
+        )
+        return {
+            "docker_version": next((line for line in version.stdout if line.strip()), "unknown"),
+            "compose_version": next((line for line in compose.stdout if line.strip()), "unknown"),
+        }
+
+    async def _build_images(
+        self, operation: ConsoleOperation, request: StackRequest, environment: dict[str, str]
+    ) -> None:
+        if self._target(request)["transport"] != "wsl2":
+            await self._command(
+                operation,
+                self._docker("compose", "build", target=request),
+                env=environment,
+            )
+            return
+
+        staging_root = f"/tmp/agentsupport-build-{operation.id}"
+        archive = f"{staging_root}.tar"
+        try:
+            await self._command(
+                operation,
+                self._wsl(
+                    "tar",
+                    "--create",
+                    "--file",
+                    archive,
+                    *(f"--exclude={pattern}" for pattern in WSL_BUILD_EXCLUDES),
+                    *WSL_BUILD_SOURCES,
+                    target=request,
+                    project_cwd=True,
+                ),
+            )
+            await self._command(
+                operation,
+                self._wsl("mkdir", "--parents", staging_root, target=request),
+            )
+            await self._command(
+                operation,
+                self._wsl(
+                    "tar",
+                    "--extract",
+                    "--file",
+                    archive,
+                    "--directory",
+                    staging_root,
+                    target=request,
+                ),
+            )
+            await self._command(
+                operation,
+                self._docker("build", "--tag", "agentsupport-api", staging_root, target=request),
+                env=environment,
+            )
+        finally:
+            try:
+                await self._command(
+                    operation,
+                    self._wsl(
+                        "rm",
+                        "--recursive",
+                        "--force",
+                        "--",
+                        staging_root,
+                        archive,
+                        target=request,
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - cleanup must not hide build failures
+                operation.add_log("warning", f"清理 WSL 构建暂存目录失败: {exc}")
 
     async def start(self, action: str, payload: BaseModel | None = None) -> ConsoleOperation:
         async with self._lock:
@@ -222,7 +418,8 @@ class DevConsoleController:
                 assert isinstance(payload, StackRequest)
                 await self._start_stack(operation, payload)
             elif operation.action == "stop":
-                await self._stop_stack(operation)
+                assert isinstance(payload, DockerTargetRequest)
+                await self._stop_stack(operation, payload)
             elif operation.action == "accept":
                 assert isinstance(payload, AcceptanceRequest)
                 await self._accept(operation, payload)
@@ -242,11 +439,14 @@ class DevConsoleController:
 
     async def _start_stack(self, operation: ConsoleOperation, request: StackRequest) -> None:
         environment = {"SESSION_RUNNER_MODE": request.runner_mode}
+        connection = await self._step(
+            operation, "检查 Docker 与 Compose", self._verify_docker(operation, request)
+        )
         if operation.action == "deploy" and request.rebuild:
             await self._step(
                 operation,
                 "构建服务镜像",
-                self._command(operation, self._docker("compose", "build"), env=environment),
+                self._build_images(operation, request, environment),
             )
         await self._step(
             operation,
@@ -262,6 +462,7 @@ class DevConsoleController:
                     f"api={request.api_replicas}",
                     "--scale",
                     f"worker={request.worker_replicas}",
+                    target=request,
                 ),
                 env=environment,
             ),
@@ -272,15 +473,25 @@ class DevConsoleController:
             "api_replicas": request.api_replicas,
             "worker_replicas": request.worker_replicas,
             "runner_mode": request.runner_mode,
+            "connection": {**self.target_details(request), **connection},
         }
 
-    async def _stop_stack(self, operation: ConsoleOperation) -> None:
+    async def _stop_stack(
+        self, operation: ConsoleOperation, request: DockerTargetRequest
+    ) -> None:
+        connection = await self._step(
+            operation, "检查 Docker 与 Compose", self._verify_docker(operation, request)
+        )
         await self._step(
             operation,
             "停止服务并保留数据卷",
-            self._command(operation, self._docker("compose", "stop")),
+            self._command(operation, self._docker("compose", "stop", target=request)),
         )
-        operation.result = {"stopped": True, "volumes_preserved": True}
+        operation.result = {
+            "stopped": True,
+            "volumes_preserved": True,
+            "connection": {**self.target_details(request), **connection},
+        }
 
     async def _wait_ready(self, timeout: float = 90) -> dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + timeout
@@ -307,10 +518,16 @@ class DevConsoleController:
     ) -> None:
         temp_root = f".pytest-debug/console-{operation.id}"
         python = sys.executable
+        connection = await self._step(
+            operation, "检查 Docker 与 Compose", self._verify_docker(operation, request)
+        )
         await self._step(
             operation,
             "校验 Compose 配置",
-            self._command(operation, self._docker("compose", "config", "--quiet")),
+            self._command(
+                operation,
+                self._docker("compose", "config", "--quiet", target=request),
+            ),
         )
         await self._step(
             operation,
@@ -361,7 +578,10 @@ class DevConsoleController:
             "验证运行中的分布式服务",
             self._live_acceptance(request, operation),
         )
-        operation.result = live_result
+        operation.result = {
+            **live_result,
+            "connection": {**self.target_details(request), **connection},
+        }
 
     async def _live_acceptance(
         self, request: AcceptanceRequest, operation: ConsoleOperation
@@ -449,9 +669,66 @@ class DevConsoleController:
     def operation(self, operation_id: str) -> ConsoleOperation | None:
         return self.operations.get(operation_id)
 
-    async def stack_status(self) -> dict[str, Any]:
+    async def deployment_environment(
+        self, request: DockerTargetRequest
+    ) -> dict[str, Any]:
+        selected = self.target_details(request)
+        distributions: list[str] = []
+        wsl_error: str | None = None
+        if os.name == "nt":
+            try:
+                listed = await self.command_runner.run(
+                    ["wsl.exe", "--list", "--quiet"],
+                    cwd=self.project_root,
+                    env=None,
+                    emit=lambda _stream, _message: None,
+                )
+                distributions = [
+                    line.replace("\x00", "").replace("\ufeff", "").strip()
+                    for line in listed.stdout
+                    if line.replace("\x00", "").replace("\ufeff", "").strip()
+                ]
+            except Exception as exc:  # noqa: BLE001 - diagnostics report unavailable tools
+                wsl_error = str(exc)
+
+        try:
+            version = await self.command_runner.run(
+                self._docker("version", "--format", "{{.Server.Version}}", target=request),
+                cwd=self.project_root,
+                env=None,
+                emit=lambda _stream, _message: None,
+            )
+            compose = await self.command_runner.run(
+                self._docker("compose", "version", "--short", target=request),
+                cwd=self.project_root,
+                env=None,
+                emit=lambda _stream, _message: None,
+            )
+        except Exception as exc:  # noqa: BLE001 - diagnostics are returned to the UI
+            result: dict[str, Any] = {
+                "available": False,
+                "target": selected,
+                "distributions": distributions,
+                "error": str(exc),
+            }
+            if wsl_error:
+                result["wsl_error"] = wsl_error
+            return result
+
+        return {
+            "available": True,
+            "target": selected,
+            "distributions": distributions,
+            "docker_version": next((line for line in version.stdout if line.strip()), "unknown"),
+            "compose_version": next((line for line in compose.stdout if line.strip()), "unknown"),
+            **({"wsl_error": wsl_error} if wsl_error else {}),
+        }
+
+    async def stack_status(
+        self, request: DockerTargetRequest | None = None
+    ) -> dict[str, Any]:
         result = await self.command_runner.run(
-            self._docker("compose", "ps", "--format", "json"),
+            self._docker("compose", "ps", "--format", "json", target=request),
             cwd=self.project_root,
             env=None,
             emit=lambda _stream, _message: None,
@@ -494,7 +771,12 @@ class DevConsoleController:
                             metrics[name.removeprefix("agent_platform_")] = int(float(value))
         except Exception as exc:  # noqa: BLE001 - stopped stack is a valid status
             dependency_error = str(exc)
-        result_payload = {"services": services, "ready": ready, "metrics": metrics}
+        result_payload = {
+            "services": services,
+            "ready": ready,
+            "metrics": metrics,
+            "target": self.target_details(request),
+        }
         if dependency_error:
             result_payload["error"] = dependency_error
         return result_payload
@@ -583,13 +865,49 @@ def create_dev_console_app(
 
     @app.get("/api/status")
     async def status(
+        docker_transport: Literal["auto", "local", "context", "wsl2"] = "auto",
+        docker_context: str = "",
+        wsl_distribution: str = "",
         x_dev_console_token: str | None = Header(default=None),
     ):
         authorize(x_dev_console_token)
+        target = DockerTargetRequest(
+            docker_transport=docker_transport,
+            docker_context=docker_context,
+            wsl_distribution=wsl_distribution,
+        )
         try:
-            return await selected.stack_status()
+            target_details = selected.target_details(target)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        try:
+            return await selected.stack_status(target)
         except Exception as exc:  # noqa: BLE001 - Docker unavailable is rendered as status
-            return {"services": [], "ready": None, "metrics": {}, "error": str(exc)}
+            return {
+                "services": [],
+                "ready": None,
+                "metrics": {},
+                "target": target_details,
+                "error": str(exc),
+            }
+
+    @app.get("/api/environment")
+    async def environment(
+        docker_transport: Literal["auto", "local", "context", "wsl2"] = "auto",
+        docker_context: str = "",
+        wsl_distribution: str = "",
+        x_dev_console_token: str | None = Header(default=None),
+    ):
+        authorize(x_dev_console_token)
+        target = DockerTargetRequest(
+            docker_transport=docker_transport,
+            docker_context=docker_context,
+            wsl_distribution=wsl_distribution,
+        )
+        try:
+            return await selected.deployment_environment(target)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @app.get("/api/operations/{operation_id}")
     async def operation(
@@ -626,9 +944,12 @@ def create_dev_console_app(
         return await begin("start", payload)
 
     @app.post("/api/actions/stop", status_code=202)
-    async def stop(x_dev_console_token: str | None = Header(default=None)):
+    async def stop(
+        payload: DockerTargetRequest | None = None,
+        x_dev_console_token: str | None = Header(default=None),
+    ):
         authorize(x_dev_console_token)
-        return await begin("stop", None)
+        return await begin("stop", payload or DockerTargetRequest())
 
     @app.post("/api/actions/accept", status_code=202)
     async def accept(

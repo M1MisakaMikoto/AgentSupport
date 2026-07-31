@@ -49,9 +49,21 @@ development process outside the Compose stack so it remains available while API 
 being created or replaced. The direct platform debug URL at `http://127.0.0.1:8000/debug/`
 remains available for compatibility.
 
-To run the local API against the real WSL2 Docker Driver instead of the deterministic
-in-memory runtime, set `AGENT_PLATFORM_RUNTIME_DRIVER=docker_cli` and keep
-`AGENT_PLATFORM_RUNTIME_CONTEXT=desktop-linux`.
+The deployment console supports three Docker transports: direct WSL2 execution, a local
+`docker` CLI, and a named Docker context. On Windows, automatic mode uses the default WSL2
+distribution and does not require Docker Desktop or a Windows `docker.exe`. Select a distribution
+in the console when the WSL default is not the one that hosts Docker. The equivalent console
+defaults can be set before launching it:
+
+```powershell
+$env:AGENT_DEV_DOCKER_TRANSPORT = "wsl2"
+$env:AGENT_DEV_WSL_DISTRIBUTION = "Ubuntu-24.04"
+.\start-console.ps1
+```
+
+For a remote or Docker Desktop context, set `AGENT_DEV_DOCKER_TRANSPORT=context` and
+`AGENT_DEV_DOCKER_CONTEXT=<context-name>`. Use `local` when `docker` is directly available on
+the host PATH.
 
 Run the private runner:
 
@@ -61,23 +73,29 @@ Run the private runner:
 
 ## WSL2 Docker development
 
-This project is verified with Docker Desktop's `desktop-linux` WSL2 context. From
-PowerShell or a WSL shell, use the context explicitly when the Windows named-pipe
-`default` context is unavailable:
+Install Docker Engine and the Compose plugin inside a WSL2 distribution, then run Compose from
+PowerShell without installing Docker Desktop or a Windows Docker CLI:
 
 ```powershell
-docker context use desktop-linux
-docker compose up -d --build
-docker compose ps
+$distro = "Ubuntu-24.04"
+wsl.exe --distribution $distro --cd $PWD.Path --exec docker version
+wsl.exe --distribution $distro --cd $PWD.Path --exec docker compose config --quiet
+wsl.exe --distribution $distro --cd $PWD.Path --exec docker compose ps
 Invoke-WebRequest -UseBasicParsing http://localhost:8000/live
 ```
 
-If the WSL backend has stopped, start Docker Desktop from the approved installation
-path and wait for the server to respond before running Compose:
+Use the deployment console for builds from a project stored on a Windows drive. It stages only
+the Dockerfile inputs under WSL `/tmp` before invoking BuildKit, avoiding DrvFS `xattr` failures
+caused by Windows-owned cache directories. A manual `docker compose build` from `/mnt/c` or
+`/mnt/d` can still hit that limitation; manual builds should use a clone stored in the WSL-native
+filesystem.
+
+If Docker is not running in the distribution, start its service there and rerun the console
+connection check:
 
 ```powershell
-Start-Process -FilePath 'E:\Docker\Docker Desktop.exe'
-docker --context desktop-linux version
+wsl.exe --distribution $distro --user root --exec service docker start
+wsl.exe --distribution $distro --exec docker version
 ```
 
 Compose starts the Session Runner in real Trae mode. Set `TRAE_API_KEY` and, when
@@ -93,20 +111,19 @@ $env:TRAE_PROVIDER = "openai"
 $env:TRAE_API_KEY = "<temporary-api-key>"
 $env:TRAE_MODEL_BASE_URL = "https://example.com/compatible-mode/v1"
 $env:TRAE_MODEL = "<model-name>"
-docker --context desktop-linux compose up -d --force-recreate --no-build
+wsl.exe --distribution $distro --cd $PWD.Path --exec docker compose up -d --force-recreate --no-build
 ```
 
 For rapid source-only iterations after the first successful image build, reuse the
 existing dependency image and avoid pip index downloads:
 
 ```powershell
-docker --context desktop-linux build --build-arg BASE_IMAGE=agentsupport-api:latest --build-arg INSTALL_DEPS=false -t agentsupport-api:latest .
-docker --context desktop-linux compose up -d --force-recreate --no-build
+wsl.exe --distribution $distro --cd $PWD.Path --exec docker build --build-arg BASE_IMAGE=agentsupport-api:latest --build-arg INSTALL_DEPS=false -t agentsupport-api:latest .
+wsl.exe --distribution $distro --cd $PWD.Path --exec docker compose up -d --force-recreate --no-build
 ```
 
-The verified environment uses Docker Desktop 29.6.2, WSL2, PostgreSQL 16 and the
-`agent-session:dev` image. The Compose API is exposed at `http://localhost:8000` and
-PostgreSQL at `localhost:5432`.
+The Compose API is exposed at `http://localhost:8000` and PostgreSQL at `localhost:5432`.
+WSL localhost forwarding must be enabled for those endpoints to be reachable from Windows.
 
 The temporary acceptance console is served by the API at
 `http://localhost:8000/debug/`. It creates the Workspace, Session and Conversation

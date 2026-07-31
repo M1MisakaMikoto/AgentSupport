@@ -37,6 +37,33 @@
         </div>
 
         <form id="stack-form">
+          <fieldset class="field-group connection-group">
+            <legend>Docker 连接</legend>
+            <label class="select-control" for="docker-transport">
+              <span>执行位置</span>
+              <select id="docker-transport">
+                <option value="auto">自动</option>
+                <option value="wsl2">WSL2 发行版</option>
+                <option value="local">本机 Docker CLI</option>
+                <option value="context">Docker context</option>
+              </select>
+            </label>
+            <label id="wsl-distribution-field" class="text-control" for="wsl-distribution">
+              <span>WSL 发行版</span>
+              <input id="wsl-distribution" type="text" maxlength="128" list="wsl-distributions" placeholder="默认发行版">
+              <datalist id="wsl-distributions"></datalist>
+            </label>
+            <label id="docker-context-field" class="text-control" for="docker-context" hidden>
+              <span>Context 名称</span>
+              <input id="docker-context" type="text" maxlength="128" placeholder="default">
+            </label>
+            <div class="connection-state">
+              <span id="connection-dot" class="status-dot neutral" aria-hidden="true"></span>
+              <span id="connection-label">尚未检测</span>
+              <button id="probe-connection" class="icon-button compact-icon" type="button" title="检测 Docker 连接" aria-label="检测 Docker 连接">↻</button>
+            </div>
+          </fieldset>
+
           <div class="number-grid">
             <label class="number-control" for="api-replicas">
               <span>API 副本</span>

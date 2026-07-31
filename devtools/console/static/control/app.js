@@ -14,7 +14,9 @@ const elements = Object.fromEntries(
     "include-postgres", "include-task", "accept-button", "operation-title",
     "operation-status", "step-track", "terminal-output", "copy-log", "api-count",
     "worker-count", "queue-depth", "runtime-count", "service-list", "result-time",
-    "result-list", "toast",
+    "result-list", "toast", "docker-transport", "docker-context", "docker-context-field",
+    "wsl-distribution", "wsl-distribution-field", "wsl-distributions", "connection-dot",
+    "connection-label", "probe-connection",
   ].map((id) => [id, document.getElementById(id)])
 );
 
@@ -46,8 +48,21 @@ function runnerMode() {
   return document.querySelector('input[name="runner-mode"]:checked').value;
 }
 
+function targetPayload() {
+  return {
+    docker_transport: elements["docker-transport"].value,
+    docker_context: elements["docker-context"].value.trim(),
+    wsl_distribution: elements["wsl-distribution"].value.trim(),
+  };
+}
+
+function targetQuery() {
+  return new URLSearchParams(targetPayload()).toString();
+}
+
 function stackPayload(rebuild = elements["rebuild-image"].checked) {
   return {
+    ...targetPayload(),
     api_replicas: Number(elements["api-replicas"].value),
     worker_replicas: Number(elements["worker-replicas"].value),
     runner_mode: runnerMode(),
@@ -58,6 +73,9 @@ function stackPayload(rebuild = elements["rebuild-image"].checked) {
 function setBusy(busy) {
   state.busy = busy;
   ["deploy-button", "start-button", "stop-button", "accept-button"].forEach((id) => {
+    elements[id].disabled = busy;
+  });
+  ["docker-transport", "docker-context", "wsl-distribution", "probe-connection"].forEach((id) => {
     elements[id].disabled = busy;
   });
   elements["operation-status"].classList.toggle("pulse", busy);
@@ -117,10 +135,41 @@ function escapeHtml(value) {
 
 async function refreshStatus(silent = false) {
   try {
-    renderServices(await request("/api/status"));
+    renderServices(await request(`/api/status?${targetQuery()}`));
   } catch (error) {
     elements["stack-dot"].className = "status-dot error";
     elements["stack-label"].textContent = "无法读取服务状态";
+    if (!silent) showToast(error.message, true);
+  }
+}
+
+function updateTargetFields() {
+  const transport = elements["docker-transport"].value;
+  elements["wsl-distribution-field"].hidden = !["auto", "wsl2"].includes(transport);
+  elements["docker-context-field"].hidden = transport !== "context";
+  localStorage.setItem("agentSupportDockerTransport", transport);
+  localStorage.setItem("agentSupportDockerContext", elements["docker-context"].value);
+  localStorage.setItem("agentSupportWslDistribution", elements["wsl-distribution"].value);
+}
+
+async function probeConnection(silent = false) {
+  elements["connection-dot"].className = "status-dot starting";
+  elements["connection-label"].textContent = "正在检测";
+  try {
+    const environment = await request(`/api/environment?${targetQuery()}`);
+    elements["wsl-distributions"].replaceChildren();
+    (environment.distributions || []).forEach((distribution) => {
+      const option = document.createElement("option");
+      option.value = distribution;
+      elements["wsl-distributions"].append(option);
+    });
+    if (!environment.available) throw new Error(environment.error || "Docker 连接不可用");
+    elements["connection-dot"].className = "status-dot ok";
+    elements["connection-label"].textContent = `${environment.target.label} · Docker ${environment.docker_version} · Compose ${environment.compose_version}`;
+    if (!silent) showToast("Docker 连接可用");
+  } catch (error) {
+    elements["connection-dot"].className = "status-dot error";
+    elements["connection-label"].textContent = error.message;
     if (!silent) showToast(error.message, true);
   }
 }
@@ -230,19 +279,38 @@ elements["stack-form"].addEventListener("submit", (event) => {
 
 elements["start-button"].addEventListener("click", () => beginAction("start", stackPayload(false)));
 elements["stop-button"].addEventListener("click", () => {
-  if (window.confirm("停止全部 Compose 服务并保留数据卷？")) beginAction("stop");
+  if (window.confirm("停止全部 Compose 服务并保留数据卷？")) beginAction("stop", targetPayload());
 });
 elements["accept-button"].addEventListener("click", () => beginAction("accept", {
+  ...targetPayload(),
   expected_api_replicas: Number(elements["api-replicas"].value),
   include_postgres: elements["include-postgres"].checked,
   include_task_smoke: elements["include-task"].checked,
 }));
 elements["refresh-status"].addEventListener("click", () => refreshStatus());
+elements["probe-connection"].addEventListener("click", () => probeConnection());
+elements["docker-transport"].addEventListener("change", () => {
+  updateTargetFields();
+  probeConnection(true);
+  refreshStatus(true);
+});
+["docker-context", "wsl-distribution"].forEach((id) => {
+  elements[id].addEventListener("change", () => {
+    updateTargetFields();
+    probeConnection(true);
+    refreshStatus(true);
+  });
+});
 elements["copy-log"].addEventListener("click", async () => {
   await navigator.clipboard.writeText(elements["terminal-output"].textContent);
   showToast("日志已复制");
 });
 
+elements["docker-transport"].value = localStorage.getItem("agentSupportDockerTransport") || "auto";
+elements["docker-context"].value = localStorage.getItem("agentSupportDockerContext") || "";
+elements["wsl-distribution"].value = localStorage.getItem("agentSupportWslDistribution") || "";
+updateTargetFields();
+probeConnection(true);
 refreshStatus(true);
 if (state.activeOperation) pollOperation();
 state.statusTimer = setInterval(() => refreshStatus(true), 5000);
