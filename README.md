@@ -5,7 +5,12 @@ It is an API-first Python 3.12 service with a private Session Runner contract.
 
 Production Python packages use the `src/` layout. `agent_platform` is the control plane,
 `session_runner` is the execution plane, and `agent_runner_contracts` contains their only shared
-wire models. See `docs/architecture/directory-structure.md` for the dependency rules.
+wire models.
+
+## Documentation
+
+- [Platform API reference (Chinese)](docs/api/platform-api.md)
+- [Directory architecture](docs/architecture/directory-structure.md)
 
 ## Local setup
 
