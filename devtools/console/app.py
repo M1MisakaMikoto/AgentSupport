@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONTROL_UI_ROOT = Path(__file__).parent / "static" / "control"
-DEBUG_UI_ROOT = PROJECT_ROOT / "src" / "agent_platform" / "serving" / "http" / "static" / "debug"
+DEBUG_UI_ROOT = PROJECT_ROOT / "src" / "agentsupport" / "serving" / "http" / "static" / "debug"
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -185,13 +185,13 @@ class DevConsoleController:
         docker_transport: str | None = None,
         docker_context: str | None = None,
         wsl_distribution: str | None = None,
-        platform_url: str | None = None,
-        platform_transport: httpx.AsyncBaseTransport | None = None,
+        agentsupport_url: str | None = None,
+        agentsupport_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.project_root = project_root.resolve()
         self.command_runner = command_runner or SubprocessCommandRunner()
-        self.docker_context = docker_context or os.getenv("AGENT_DEV_DOCKER_CONTEXT", "")
-        configured_transport = docker_transport or os.getenv("AGENT_DEV_DOCKER_TRANSPORT", "")
+        self.docker_context = docker_context or os.getenv("AGENTSUPPORT_DEV_DOCKER_CONTEXT", "")
+        configured_transport = docker_transport or os.getenv("AGENTSUPPORT_DEV_DOCKER_TRANSPORT", "")
         if not configured_transport:
             configured_transport = "context" if self.docker_context else (
                 "wsl2" if os.name == "nt" else "local"
@@ -200,12 +200,12 @@ class DevConsoleController:
             raise ValueError(f"unsupported Docker transport: {configured_transport}")
         self.docker_transport = configured_transport
         self.wsl_distribution = wsl_distribution or os.getenv(
-            "AGENT_DEV_WSL_DISTRIBUTION", ""
+            "AGENTSUPPORT_DEV_WSL_DISTRIBUTION", ""
         )
-        self.platform_url = (platform_url or os.getenv(
-            "AGENT_DEV_PLATFORM_URL", "http://127.0.0.1:8000"
+        self.agentsupport_url = (agentsupport_url or os.getenv(
+            "AGENTSUPPORT_DEV_API_URL", "http://127.0.0.1:8000"
         )).rstrip("/")
-        self.platform_transport = platform_transport
+        self.agentsupport_transport = agentsupport_transport
         self.operations: dict[str, ConsoleOperation] = {}
         self._active_id: str | None = None
         self._lock = asyncio.Lock()
@@ -497,9 +497,9 @@ class DevConsoleController:
         deadline = asyncio.get_running_loop().time() + timeout
         last_error = "API has not responded"
         async with httpx.AsyncClient(
-            base_url=self.platform_url,
+            base_url=self.agentsupport_url,
             timeout=5,
-            transport=self.platform_transport,
+            transport=self.agentsupport_transport,
         ) as client:
             while asyncio.get_running_loop().time() < deadline:
                 try:
@@ -534,7 +534,7 @@ class DevConsoleController:
             "运行 Ruff 静态检查",
             self._command(
                 operation,
-                [python, "-m", "ruff", "check", "agent_platform", "session_runner", "tests", "alembic"],
+                [python, "-m", "ruff", "check", "agentsupport", "session_runner", "tests", "alembic"],
             ),
         )
         await self._step(
@@ -588,15 +588,15 @@ class DevConsoleController:
     ) -> dict[str, Any]:
         await self._wait_ready(timeout=30)
         async with httpx.AsyncClient(
-            base_url=self.platform_url,
+            base_url=self.agentsupport_url,
             timeout=10,
-            transport=self.platform_transport,
+            transport=self.agentsupport_transport,
         ) as client:
             instances: set[str] = set()
             for _ in range(24):
                 response = await client.get("/live")
                 response.raise_for_status()
-                if instance := response.headers.get("X-Agent-Instance"):
+                if instance := response.headers.get("X-AgentSupport-Instance"):
                     instances.add(instance)
             expected = min(2, request.expected_api_replicas)
             if len(instances) < expected:
@@ -606,10 +606,10 @@ class DevConsoleController:
             metrics_response = await client.get("/metrics")
             metrics_response.raise_for_status()
             required_metrics = {
-                "agent_platform_queue_ready",
-                "agent_platform_active_runtimes",
-                "agent_platform_claims_expired",
-                "agent_platform_outbox_pending",
+                "agentsupport_queue_ready",
+                "agentsupport_active_runtimes",
+                "agentsupport_claims_expired",
+                "agentsupport_outbox_pending",
             }
             metric_names = {
                 line.split()[0]
@@ -756,9 +756,9 @@ class DevConsoleController:
         dependency_error: str | None = None
         try:
             async with httpx.AsyncClient(
-                base_url=self.platform_url,
+                base_url=self.agentsupport_url,
                 timeout=2,
-                transport=self.platform_transport,
+                transport=self.agentsupport_transport,
             ) as client:
                 ready_response = await client.get("/ready")
                 if ready_response.is_success:
@@ -768,7 +768,7 @@ class DevConsoleController:
                     for line in metrics_response.text.splitlines():
                         name, _, value = line.partition(" ")
                         if name and value:
-                            metrics[name.removeprefix("agent_platform_")] = int(float(value))
+                            metrics[name.removeprefix("agentsupport_")] = int(float(value))
         except Exception as exc:  # noqa: BLE001 - stopped stack is a valid status
             dependency_error = str(exc)
         result_payload = {
@@ -805,14 +805,14 @@ def create_dev_console_app(
         return HTMLResponse(html.replace("__DEV_CONSOLE_TOKEN__", console_token))
 
     @app.api_route(
-        "/platform/{path:path}",
+        "/agentsupport/{path:path}",
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     )
-    async def platform_proxy(path: str, request: Request):
+    async def agentsupport_proxy(path: str, request: Request):
         client = httpx.AsyncClient(
-            base_url=selected.platform_url,
+            base_url=selected.agentsupport_url,
             timeout=None,
-            transport=selected.platform_transport,
+            transport=selected.agentsupport_transport,
         )
         request_headers = {
             name: value
@@ -831,7 +831,7 @@ def create_dev_console_app(
             upstream = await client.send(upstream_request, stream=True)
         except httpx.HTTPError as exc:
             await client.aclose()
-            raise HTTPException(502, f"platform API is unavailable: {exc}") from exc
+            raise HTTPException(502, f"AgentSupport API is unavailable: {exc}") from exc
         response_headers = {
             name: value
             for name, value in upstream.headers.items()

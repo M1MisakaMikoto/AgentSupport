@@ -1,0 +1,231 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentsupport-worker
+  namespace: agentsupport
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agentsupport-runtime-manager
+  namespace: agentsupport
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentsupport-runtime-manager
+  namespace: agentsupport
+subjects:
+  - kind: ServiceAccount
+    name: agentsupport-worker
+    namespace: agentsupport
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agentsupport-runtime-manager
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentsupport-config
+  namespace: agentsupport
+data:
+  AGENTSUPPORT_PERSISTENCE_MODE: postgres
+  AGENTSUPPORT_AUTO_CREATE_SCHEMA: "false"
+  AGENTSUPPORT_EXECUTION_MODE: distributed
+  AGENTSUPPORT_RUNTIME_DRIVER: kubernetes
+  AGENTSUPPORT_KUBERNETES_NAMESPACE: agentsupport
+  AGENTSUPPORT_RUNNER_IMAGE: agentsupport-runner:dev
+  AGENTSUPPORT_KUBERNETES_RUNNER_SECRET_NAME: agentsupport-runner-secrets
+  AGENTSUPPORT_MAX_ACTIVE_SESSIONS: "100"
+  AGENTSUPPORT_REDIS_URL: redis://redis:6379/0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: agentsupport
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis}
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["redis-server", "--appendonly", "yes"]
+          ports: [{name: redis, containerPort: 6379}]
+          readinessProbe: {tcpSocket: {port: redis}, periodSeconds: 5}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: agentsupport
+spec:
+  selector: {app: redis}
+  ports: [{name: redis, port: 6379, targetPort: redis}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentsupport-api
+  namespace: agentsupport
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: agentsupport-api}
+  template:
+    metadata:
+      labels: {app: agentsupport-api}
+    spec:
+      containers:
+        - name: api
+          image: agentsupport-api:latest
+          command: ["uvicorn", "agentsupport.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          envFrom:
+            - configMapRef: {name: agentsupport-config}
+            - secretRef: {name: agentsupport-secrets}
+          ports: [{name: http, containerPort: 8000}]
+          readinessProbe: {httpGet: {path: /ready, port: http}, periodSeconds: 5}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentsupport-api
+  namespace: agentsupport
+spec:
+  selector: {app: agentsupport-api}
+  ports: [{name: http, port: 80, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentsupport-worker
+  namespace: agentsupport
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: agentsupport-worker}
+  template:
+    metadata:
+      labels: {app: agentsupport-worker}
+    spec:
+      serviceAccountName: agentsupport-worker
+      containers:
+        - name: worker
+          image: agentsupport-api:latest
+          command: ["python", "-m", "agentsupport.worker"]
+          envFrom:
+            - configMapRef: {name: agentsupport-config}
+            - secretRef: {name: agentsupport-secrets}
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "2", memory: 2Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentsupport-event-publisher
+  namespace: agentsupport
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: agentsupport-event-publisher}
+  template:
+    metadata:
+      labels: {app: agentsupport-event-publisher}
+    spec:
+      containers:
+        - name: publisher
+          image: agentsupport-api:latest
+          command: ["python", "-m", "agentsupport.event_publisher"]
+          envFrom:
+            - configMapRef: {name: agentsupport-config}
+            - secretRef: {name: agentsupport-secrets}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentsupport-reconciler
+  namespace: agentsupport
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: agentsupport-reconciler}
+  template:
+    metadata:
+      labels: {app: agentsupport-reconciler}
+    spec:
+      serviceAccountName: agentsupport-worker
+      containers:
+        - name: reconciler
+          image: agentsupport-api:latest
+          command: ["python", "-m", "agentsupport.reconciler"]
+          envFrom:
+            - configMapRef: {name: agentsupport-config}
+            - secretRef: {name: agentsupport-secrets}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agentsupport-api
+  namespace: agentsupport
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agentsupport-api
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 65}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agentsupport-internal-ingress
+  namespace: agentsupport
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/managed-by
+        operator: In
+        values: [agentsupport]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-internal-ingress
+  namespace: agentsupport
+spec:
+  podSelector:
+    matchLabels: {app: redis}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - {protocol: TCP, port: 6379}

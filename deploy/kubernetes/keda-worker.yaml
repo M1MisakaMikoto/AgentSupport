@@ -1,11 +1,11 @@
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: agent-platform-worker
-  namespace: agent-platform
+  name: agentsupport-worker
+  namespace: agentsupport
 spec:
   scaleTargetRef:
-    name: agent-platform-worker
+    name: agentsupport-worker
   pollingInterval: 5
   cooldownPeriod: 60
   minReplicaCount: 2
@@ -13,7 +13,7 @@ spec:
   triggers:
     - type: postgresql
       metadata:
-        connectionFromEnv: AGENT_PLATFORM_DATABASE_URL
+        connectionFromEnv: AGENTSUPPORT_DATABASE_URL
         query: >-
           SELECT COUNT(*) FROM execution_jobs
           WHERE state IN ('READY', 'RETRY') AND available_at <= NOW()

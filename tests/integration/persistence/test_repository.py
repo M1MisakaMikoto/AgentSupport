@@ -1,10 +1,10 @@
 from datetime import UTC, datetime
 
-from agent_platform.config import Settings
-from agent_platform.domain import Conversation, ExecutionState
-from agent_platform.events import EventEnvelope
-from agent_platform.repository import PostgresRepository
-from agent_platform.services import PlatformService
+from agentsupport.config import Settings
+from agentsupport.domain import Conversation, ExecutionState
+from agentsupport.events import EventEnvelope
+from agentsupport.repository import PostgresRepository
+from agentsupport.services import AgentSupportService
 
 
 def test_repository_does_not_auto_create_schema_when_disabled(tmp_path, monkeypatch):
@@ -14,14 +14,14 @@ def test_repository_does_not_auto_create_schema_when_disabled(tmp_path, monkeypa
     def unexpected_create_all(*args, **kwargs):
         raise AssertionError("schema creation must be owned by Alembic")
 
-    monkeypatch.setattr("agent_platform.repository.Base.metadata.create_all", unexpected_create_all)
+    monkeypatch.setattr("agentsupport.repository.Base.metadata.create_all", unexpected_create_all)
     repository = PostgresRepository(database_url, create_schema=False)
 
     repository.health_check()
 
 
 def test_sqlalchemy_repository_persists_resources_events_and_leases(tmp_path):
-    repository = PostgresRepository(f"sqlite:///{tmp_path / 'platform.db'}", create_schema=True)
+    repository = PostgresRepository(f"sqlite:///{tmp_path / 'agentsupport.db'}", create_schema=True)
     request_hash = "a" * 64
     workspace = repository.create_workspace("demo", "/workspace/demo", request_hash, "w1")
     duplicate = repository.create_workspace("demo", "/workspace/unused", request_hash, "w1")
@@ -59,14 +59,14 @@ def test_sqlalchemy_repository_persists_resources_events_and_leases(tmp_path):
     assert repository.list_conversations()[0].id == conversation.id
 
 
-async def test_platform_service_hydrates_events_after_restart(tmp_path):
+async def test_agentsupport_service_hydrates_events_after_restart(tmp_path):
     database_url = f"sqlite:///{tmp_path / 'restart.db'}"
     config = Settings(
         workspace_root=tmp_path / "workspaces",
         database_url=database_url,
         persistence_mode="postgres",
     )
-    first = PlatformService(config)
+    first = AgentSupportService(config)
     workspace = first.create_workspace("restart")
     session = first.create_session(workspace.id)
     conversation = await first.create_conversation(session.id, "task")
@@ -74,7 +74,7 @@ async def test_platform_service_hydrates_events_after_restart(tmp_path):
         conversation.id, {"interaction_id": "restart-input", "kind": "question"}
     )
 
-    restarted = PlatformService(config)
+    restarted = AgentSupportService(config)
     loaded = restarted._conversation(conversation.id)
     assert loaded.run.state == ExecutionState.WAITING_INPUT
     assert [event.seq for event in restarted.events(conversation.id)] == [1, 2, 3]
@@ -89,7 +89,7 @@ async def test_cancel_clears_pending_interaction_after_repository_reload(tmp_pat
         database_url=database_url,
         persistence_mode="postgres",
     )
-    first = PlatformService(config)
+    first = AgentSupportService(config)
     workspace = first.create_workspace("cancel-restart")
     session = first.create_session(workspace.id)
     conversation = await first.create_conversation(session.id, "cancel and reload")
@@ -98,7 +98,7 @@ async def test_cancel_clears_pending_interaction_after_repository_reload(tmp_pat
     )
 
     await first.cancel(conversation.id)
-    restarted = PlatformService(config)
+    restarted = AgentSupportService(config)
     loaded = restarted._conversation(conversation.id)
 
     assert loaded.run.state == ExecutionState.CANCELLED

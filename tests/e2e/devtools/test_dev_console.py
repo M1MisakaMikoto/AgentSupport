@@ -317,13 +317,13 @@ async def test_acceptance_operation_uses_controlled_test_commands(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_one_stop_console_serves_task_ui_and_proxies_api_and_sse():
-    platform = FastAPI()
+    agentsupport = FastAPI()
 
-    @platform.get("/live")
+    @agentsupport.get("/live")
     async def live():
         return {"status": "ok"}
 
-    @platform.post("/echo")
+    @agentsupport.post("/echo")
     async def echo(request: Request):
         return {
             "body": await request.json(),
@@ -331,7 +331,7 @@ async def test_one_stop_console_serves_task_ui_and_proxies_api_and_sse():
             "console_token": request.headers.get("X-Dev-Console-Token"),
         }
 
-    @platform.get("/events")
+    @agentsupport.get("/events")
     async def events():
         async def body():
             yield "id: 1\ndata: {\"type\":\"ready\"}\n\n"
@@ -340,30 +340,30 @@ async def test_one_stop_console_serves_task_ui_and_proxies_api_and_sse():
 
     controller = DevConsoleController(
         command_runner=FakeCommandRunner(),
-        platform_url="http://platform.test",
-        platform_transport=ASGITransport(app=platform),
+        agentsupport_url="http://agentsupport.test",
+        agentsupport_transport=ASGITransport(app=agentsupport),
     )
     app = create_dev_console_app(controller, token="proxy-token")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://console") as client:
         task_ui = await client.get("/tasks/")
         task_script = await client.get("/tasks/app.js")
-        live_response = await client.get("/platform/live")
+        live_response = await client.get("/agentsupport/live")
         echo_response = await client.post(
-            "/platform/echo",
+            "/agentsupport/echo",
             headers={
                 "Idempotency-Key": "proxy-once",
                 "X-Dev-Console-Token": "must-not-forward",
             },
             json={"value": "forwarded"},
         )
-        event_response = await client.get("/platform/events")
+        event_response = await client.get("/agentsupport/events")
 
     assert task_ui.status_code == 200
     assert "验收控制台" in task_ui.text
     assert 'aria-label="控制台导航"' in task_ui.text
     assert 'id="control-console-link" class="nav-link"' in task_ui.text
     assert 'class="nav-link active" href="./" aria-current="page"' in task_ui.text
-    assert "window.location.origin}/platform" in task_script.text
+    assert "window.location.origin}/agentsupport" in task_script.text
     assert live_response.json() == {"status": "ok"}
     assert echo_response.json() == {
         "body": {"value": "forwarded"},

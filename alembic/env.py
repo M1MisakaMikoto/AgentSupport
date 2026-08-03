@@ -4,8 +4,8 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
-from agent_platform.config import settings
-from agent_platform.db import Base
+from agentsupport.config import settings
+from agentsupport.db import Base
 from alembic import context
 
 config = context.config

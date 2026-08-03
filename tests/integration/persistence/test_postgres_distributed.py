@@ -7,9 +7,9 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
-from agent_platform.coordination import JobState
-from agent_platform.domain import Conversation
-from agent_platform.repository import PostgresRepository
+from agentsupport.coordination import JobState
+from agentsupport.domain import Conversation
+from agentsupport.repository import PostgresRepository
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_POSTGRES_DISTRIBUTED_TESTS") != "1",
@@ -22,10 +22,10 @@ def postgres_database_url():
     base_url = make_url(
         os.getenv(
             "POSTGRES_DISTRIBUTED_TEST_URL",
-            "postgresql+psycopg://agent:agent@localhost:5432/agent_platform",
+            "postgresql+psycopg://agent:agent@localhost:5432/agentsupport",
         )
     )
-    database_name = f"agent_platform_distributed_{uuid4().hex}"
+    database_name = f"agentsupport_distributed_{uuid4().hex}"
     admin = create_engine(base_url.set(database="postgres"), isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database_name}"'))

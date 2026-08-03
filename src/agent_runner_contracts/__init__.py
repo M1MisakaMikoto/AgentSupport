@@ -1,4 +1,4 @@
-"""Stable wire contracts shared by the platform and session runner."""
+"""Stable wire contracts shared by AgentSupport and Session Runner."""
 
 from .checkpoint import (
     Checkpoint,

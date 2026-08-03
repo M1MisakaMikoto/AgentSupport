@@ -3,15 +3,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from agent_platform.config import Settings
-from agent_platform.coordination import JobState
-from agent_platform.domain import Conversation
-from agent_platform.event_notifier import InMemoryEventNotifier
-from agent_platform.event_publisher import OutboxPublisher
-from agent_platform.reconciler import DistributedReconciler
-from agent_platform.repository import PostgresRepository, StaleClaim
-from agent_platform.runtime import DockerRuntimeDriver
-from agent_platform.services import PlatformService
+from agentsupport.config import Settings
+from agentsupport.coordination import JobState
+from agentsupport.domain import Conversation
+from agentsupport.event_notifier import InMemoryEventNotifier
+from agentsupport.event_publisher import OutboxPublisher
+from agentsupport.reconciler import DistributedReconciler
+from agentsupport.repository import PostgresRepository, StaleClaim
+from agentsupport.runtime import DockerRuntimeDriver
+from agentsupport.services import AgentSupportService
 
 
 def _repository(tmp_path):
@@ -173,7 +173,7 @@ async def test_event_stream_polls_database_when_notifier_is_unavailable(tmp_path
         workspace_root=tmp_path / "workspaces",
         event_poll_interval_seconds=0.01,
     )
-    service = PlatformService(config)
+    service = AgentSupportService(config)
     workspace = service.create_workspace("notifier-fallback")
     session = service.create_session(workspace.id)
     conversation = await service.create_conversation(session.id, "wait for database event")

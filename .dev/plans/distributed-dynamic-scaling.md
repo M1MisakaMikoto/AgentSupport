@@ -89,12 +89,12 @@ API replicas ----- PostgreSQL ----- scheduler/worker replicas
 
 | Area | Existing files | New files |
 | --- | --- | --- |
-| Schema | `agent_platform/db.py` | `alembic/*` |
-| Coordination | `agent_platform/repository.py` | `agent_platform/jobs.py` |
-| API/service | `agent_platform/api.py`, `agent_platform/services.py` | - |
-| Control plane | - | `agent_platform/worker.py`, `agent_platform/reconciler.py` |
-| Events | `agent_platform/events.py` | `agent_platform/event_notifier.py` |
-| Runtime | `agent_platform/runtime.py`, `agent_platform/ports.py` | `agent_platform/kubernetes_runtime.py` |
+| Schema | `agentsupport/db.py` | `alembic/*` |
+| Coordination | `agentsupport/repository.py` | `agentsupport/jobs.py` |
+| API/service | `agentsupport/api.py`, `agentsupport/services.py` | - |
+| Control plane | - | `agentsupport/worker.py`, `agentsupport/reconciler.py` |
+| Events | `agentsupport/events.py` | `agentsupport/event_notifier.py` |
+| Runtime | `agentsupport/runtime.py`, `agentsupport/ports.py` | `agentsupport/kubernetes_runtime.py` |
 | Deployment | `docker-compose.yml`, `Dockerfile` | `deploy/kubernetes/*` |
 
 ## Rollout
@@ -139,7 +139,7 @@ Completed on 2026-07-28.
 - Alembic was verified both from an empty database and incrementally from revision `0001`; SQLite
   and the live Compose PostgreSQL database reached `20260728_0003`.
 - Compose ran 2 API replicas and 3 Worker replicas. Nginx returned two distinct
-  `X-Agent-Instance` values. A capacity test observed 2 waiting jobs plus 1 queued job, promoted
+  `X-AgentSupport-Instance` values. A capacity test observed 2 waiting jobs plus 1 queued job, promoted
   the queued job after release, completed all 3, and returned active runtime count to zero.
 - A waiting Run was paused by the Reconciler, its Runner container was replaced, and input moved
   it through `RESUMING`, `checkpoint.restored`, and `run.completed`.

@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from agent_platform.domain import Checkpoint, ContextBundle
+from agentsupport.domain import Checkpoint, ContextBundle
 from session_runner.server import create_runner_app
 from session_runner.trae_runtime import TraeRuntimeSettings
 

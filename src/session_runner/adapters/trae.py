@@ -138,7 +138,7 @@ def _trae_tool_result(
 
 
 class TraeToolGatewayBridge:
-    """Trae ToolExecutor wrapper that enforces platform batch authorization."""
+    """Trae ToolExecutor wrapper that enforces AgentSupport batch authorization."""
 
     def __init__(
         self,
@@ -430,7 +430,7 @@ class TraeExecutionAdapter:
     def _initialize_agent(self) -> None:
         self.settings.validate()
         self.workspace = self.settings.workspace(self.request.workspace_ref)
-        trajectory_dir = self.workspace / ".agent-platform" / "trajectories"
+        trajectory_dir = self.workspace / ".agentsupport" / "trajectories"
         trajectory_dir.mkdir(parents=True, exist_ok=True)
         self.trajectory = trajectory_dir / f"{self.request.run_id}.json"
         self.agent = self.agent_factory(self.settings, self.request, self.trajectory)

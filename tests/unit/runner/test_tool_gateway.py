@@ -1,6 +1,6 @@
 import pytest
 
-from agent_platform.tool_gateway import (
+from agentsupport.tool_gateway import (
     ApprovalDecision,
     AuthorizationStatus,
     ToolBatch,

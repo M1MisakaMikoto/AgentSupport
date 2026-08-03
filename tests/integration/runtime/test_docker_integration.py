@@ -10,9 +10,9 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
-from agent_platform.config import Settings
-from agent_platform.domain import ExecutionState
-from agent_platform.services import PlatformService
+from agentsupport.config import Settings
+from agentsupport.domain import ExecutionState
+from agentsupport.services import AgentSupportService
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_DOCKER_INTEGRATION") != "1",
@@ -25,10 +25,10 @@ def postgres_docker_database_url():
     base_url = make_url(
         os.getenv(
             "POSTGRES_DOCKER_TEST_URL",
-            "postgresql+psycopg://agent:agent@localhost:5432/agent_platform",
+            "postgresql+psycopg://agent:agent@localhost:5432/agentsupport",
         )
     )
-    database_name = f"agent_platform_docker_{uuid4().hex}"
+    database_name = f"agentsupport_docker_{uuid4().hex}"
     admin = create_engine(base_url.set(database="postgres"), isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database_name}"'))
@@ -48,7 +48,7 @@ def postgres_docker_database_url():
         admin.dispose()
 
 
-def _service(root: Path, **overrides: object) -> PlatformService:
+def _service(root: Path, **overrides: object) -> AgentSupportService:
     values: dict[str, object] = {
         "workspace_root": root,
         "runtime_driver": "docker_cli",
@@ -60,7 +60,7 @@ def _service(root: Path, **overrides: object) -> PlatformService:
         "max_active_sessions": 1,
     }
     values.update(overrides)
-    return PlatformService(Settings(**values))
+    return AgentSupportService(Settings(**values))
 
 
 @pytest.mark.asyncio

@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-platform"
+name = "agentsupport"
 version = "0.1.0"
-description = "API-first agent platform foundation"
+description = "Self-hosted agent execution and orchestration service"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1",
@@ -50,10 +50,10 @@ trae = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["agent_platform*", "agent_runner_contracts*", "session_runner*"]
+include = ["agentsupport*", "agent_runner_contracts*", "session_runner*"]
 
 [tool.setuptools.package-data]
-agent_platform = ["serving/http/static/debug/*"]
+agentsupport = ["serving/http/static/debug/*"]
 session_runner = ["trae_config.yaml"]
 
 [tool.pytest.ini_options]

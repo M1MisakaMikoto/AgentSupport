@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 
-from agent_platform.db import Base
+from agentsupport.db import Base
 from alembic import op
 
 revision: str = "20260728_0001"

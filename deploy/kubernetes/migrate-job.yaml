@@ -1,8 +1,8 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: agent-platform-db-migrate
-  namespace: agent-platform
+  name: agentsupport-db-migrate
+  namespace: agentsupport
 spec:
   backoffLimit: 3
   template:
@@ -13,4 +13,4 @@ spec:
           image: agentsupport-api:latest
           command: ["alembic", "upgrade", "head"]
           envFrom:
-            - secretRef: {name: agent-platform-secrets}
+            - secretRef: {name: agentsupport-secrets}

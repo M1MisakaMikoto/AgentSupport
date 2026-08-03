@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport
 
-from agent_platform.core_runtime import TraeCoreRunnerRuntime
+from agentsupport.core_runtime import TraeCoreRunnerRuntime
 from session_runner.server import create_runner_app
 
 
