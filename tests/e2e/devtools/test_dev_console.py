@@ -77,6 +77,8 @@ async def test_dev_console_requires_token_and_runs_fixed_deploy_commands(monkeyp
 
     assert index.status_code == 200
     assert "test-token" in index.text
+    assert "执行回归验收" in index.text
+    assert "执行完整验收" not in index.text
     assert denied.status_code == 403
     assert accepted.status_code == 202
     assert operation["status"] == "succeeded"
@@ -278,11 +280,12 @@ async def test_environment_diagnostic_reports_unavailable_docker():
 
 
 @pytest.mark.asyncio
-async def test_acceptance_operation_uses_controlled_test_commands(monkeypatch):
+async def test_acceptance_operation_uses_controlled_test_commands(monkeypatch, tmp_path):
     runner = FakeCommandRunner()
-    controller = DevConsoleController(command_runner=runner)
+    controller = DevConsoleController(project_root=tmp_path, command_runner=runner)
 
     async def live_acceptance(request, operation):
+        assert (tmp_path / ".pytest-debug").is_dir()
         return {"api_instances": ["api-a", "api-b"], "conversation_id": "conversation"}
 
     monkeypatch.setattr(controller, "_live_acceptance", live_acceptance)
@@ -301,12 +304,14 @@ async def test_acceptance_operation_uses_controlled_test_commands(monkeypatch):
 
     commands = [call["command"] for call in runner.calls]
     assert operation.status == "succeeded"
-    assert any(command[2:4] == ["ruff", "check"] for command in commands)
+    assert not (tmp_path / ".pytest-debug").exists()
+    ruff_command = next(command for command in commands if command[2:4] == ["ruff", "check"])
+    assert ruff_command[4:] == ["src", "tests", "alembic", "devtools"]
     assert sum("pytest" in command for command in commands) == 2
     postgres_call = next(
         call
         for call in runner.calls
-        if any("test_postgres_distributed.py" in argument for argument in call["command"])
+        if "tests/integration/persistence/test_postgres_distributed.py" in call["command"]
     )
     assert postgres_call["env"] == {
         "PYTHONUTF8": "1",

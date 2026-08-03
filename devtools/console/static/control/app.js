@@ -178,7 +178,7 @@ const actionNames = {
   deploy: "部署分布式服务",
   start: "启动分布式服务",
   stop: "停止分布式服务",
-  accept: "执行完整验收",
+  accept: "执行回归验收",
 };
 
 function renderSteps(operation) {

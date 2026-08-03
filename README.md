@@ -16,6 +16,7 @@ Key capabilities include:
 ## Documentation
 
 - [AgentSupport API reference (Chinese)](docs/api/agentsupport-api.md)
+- [API full-test plan (Chinese)](docs/testing/api-full-test-plan.md)
 - [Directory architecture](docs/architecture/directory-structure.md)
 - [Architecture decision records](docs/adr/)
 
@@ -97,6 +98,10 @@ Use `-NoBrowser` to start it without opening a browser. The equivalent direct co
 Open `http://127.0.0.1:8010`. The console manages the Compose stack, service scaling, status,
 logs, task debugging and the repository's predefined validation suites. It runs outside the
 Compose stack, so it remains available while containers are replaced.
+
+The task UI and regression acceptance cover the main API workflow, but they are not a complete
+API conformance suite. See the [API full-test plan](docs/testing/api-full-test-plan.md) for the
+endpoint matrix, missing cases and release criteria.
 
 The console supports WSL2 Docker Engine, a local `docker` CLI and named Docker contexts. Configure
 the default transport when automatic detection is not suitable:

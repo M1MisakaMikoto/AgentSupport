@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 from collections import deque
@@ -432,6 +433,8 @@ class DevConsoleController:
         else:
             operation.status = "succeeded"
         finally:
+            if operation.action == "accept":
+                shutil.rmtree(self.project_root / ".pytest-debug", ignore_errors=True)
             operation.finished_at = _now()
             async with self._lock:
                 if self._active_id == operation.id:
@@ -516,6 +519,7 @@ class DevConsoleController:
     async def _accept(
         self, operation: ConsoleOperation, request: AcceptanceRequest
     ) -> None:
+        (self.project_root / ".pytest-debug").mkdir(parents=True, exist_ok=True)
         temp_root = f".pytest-debug/console-{operation.id}"
         python = sys.executable
         connection = await self._step(
@@ -534,12 +538,12 @@ class DevConsoleController:
             "运行 Ruff 静态检查",
             self._command(
                 operation,
-                [python, "-m", "ruff", "check", "agentsupport", "session_runner", "tests", "alembic"],
+                [python, "-m", "ruff", "check", "src", "tests", "alembic", "devtools"],
             ),
         )
         await self._step(
             operation,
-            "运行全量短程测试",
+            "运行回归测试",
             self._command(
                 operation,
                 [
@@ -564,7 +568,7 @@ class DevConsoleController:
                         python,
                         "-m",
                         "pytest",
-                        "tests/test_postgres_distributed.py",
+                        "tests/integration/persistence/test_postgres_distributed.py",
                         "-q",
                         "-p",
                         "no:cacheprovider",
