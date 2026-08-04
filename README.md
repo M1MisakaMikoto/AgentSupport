@@ -1,54 +1,62 @@
+> 简体中文 | [English](README.en.md)
+
 # AgentSupport
 
-AgentSupport is a self-hosted service for running coding agents through an HTTP API. It manages
-workspaces, sessions and conversations in a control plane, while isolated Session Runners execute
-tasks, tools and model interactions.
+AgentSupport 是一个自托管服务，通过 HTTP API 运行编码智能体（coding agent）。它在控制面管理
+Workspace、Session 和 Conversation，而隔离的 Session Runner 负责执行任务、工具调用和模型交互。
 
-Key capabilities include:
+核心能力：
 
-- Durable Workspace, Session and Conversation resources.
-- Ordered event history and Server-Sent Events (SSE) replay.
-- Idempotent commands, optimistic concurrency, approvals, cancellation and checkpoint recovery.
-- Inline development mode and distributed PostgreSQL-backed execution.
-- Controlled Trae, MCP, Skill and workspace tool integration.
-- Docker Compose and Kubernetes deployment manifests.
+- 持久的 Workspace、Session 和 Conversation 资源。
+- 有序事件历史与 Server-Sent Events（SSE）回放。
+- 幂等命令、乐观并发、审批、取消与检查点恢复。
+- 内联开发模式与基于 PostgreSQL 的分布式执行。
+- 受控的 Trae、MCP、Skill 和工作区工具集成。
+- Docker Compose 与 Kubernetes 部署清单。
 
-## Documentation
+## 文档
 
-- [AgentSupport API reference (Chinese)](docs/api/agentsupport-api.md)
-- [API full-test plan (Chinese)](docs/testing/api-full-test-plan.md)
-- [Directory architecture](docs/architecture/directory-structure.md)
-- [Architecture decision records](docs/adr/)
+中文为默认文档语言：
 
-## Project structure
+- [AgentSupport API 参考](docs/api/agentsupport-api.md)
+- [API 全量测试设计](docs/testing/api-full-test-plan.md)
+- [目录架构](docs/architecture/directory-structure.md)
+- [架构决策记录（ADR）](docs/adr/)
 
-Production packages use the `src/` layout:
+英文版本：
 
-| Package | Responsibility |
+- [README（English）](README.en.md)
+- [Directory architecture（English）](docs/architecture/directory-structure.en.md)
+- [ADR-001（English）](docs/adr/001-src-layout-and-runtime-boundaries.en.md)
+
+## 项目结构
+
+生产包采用 `src/` 布局：
+
+| 包 | 职责 |
 | --- | --- |
-| `agentsupport` | Control-plane API, orchestration, persistence and distributed workers |
-| `session_runner` | Private execution-plane HTTP service and Trae/MCP/tool adapters |
-| `agent_runner_contracts` | Wire models shared by the control and execution planes |
-| `devtools` | Local deployment and task-debugging console |
+| `agentsupport` | 控制面 API、编排、持久化与分布式 Worker |
+| `session_runner` | 私有执行面 HTTP 服务，以及 Trae/MCP/工具适配器 |
+| `agent_runner_contracts` | 控制面与执行面共享的传输模型（wire models） |
+| `devtools` | 本地部署与任务调试控制台 |
 
-## Requirements
+## 环境要求
 
 - Python 3.12
-- Docker Engine with the Compose plugin for the distributed stack
-- PostgreSQL 16 and Redis 7 when running distributed services outside Compose
-- A Kubernetes cluster and `kubectl` for Kubernetes deployment
+- 分布式栈需要带 Compose 插件的 Docker Engine
+- 在 Compose 之外运行分布式服务时需要 PostgreSQL 16 和 Redis 7
+- Kubernetes 部署需要 Kubernetes 集群和 `kubectl`
 
-## Local development
+## 本地开发
 
-Create a virtual environment and install development dependencies:
+创建虚拟环境并安装开发依赖：
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-Run the test suite. Using a repository-local temporary directory avoids Windows temp-directory
-permission issues:
+运行测试套件。使用仓库本地的临时目录可避免 Windows 临时目录的权限问题：
 
 ```powershell
 $env:TEST_TMP=(New-Item -ItemType Directory -Force .pytest-tmp).FullName
@@ -57,78 +65,75 @@ $env:TMP=$env:TEMP
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-Run the API in its default in-memory, inline execution mode:
+以默认的内存、内联执行模式启动 API：
 
 ```powershell
 .venv\Scripts\python.exe -m uvicorn agentsupport.main:app --reload
 ```
 
-Useful local endpoints:
+常用本地端点：
 
-| URL | Purpose |
+| 地址 | 用途 |
 | --- | --- |
-| `http://127.0.0.1:8000/docs` | OpenAPI interface |
-| `http://127.0.0.1:8000/debug/` | Task debugging interface |
-| `http://127.0.0.1:8000/live` | Liveness check |
-| `http://127.0.0.1:8000/ready` | Readiness and active configuration |
-| `http://127.0.0.1:8000/metrics` | Prometheus metrics |
+| `http://127.0.0.1:8000/docs` | OpenAPI 界面 |
+| `http://127.0.0.1:8000/debug/` | 任务调试界面 |
+| `http://127.0.0.1:8000/live` | 存活检查 |
+| `http://127.0.0.1:8000/ready` | 就绪状态与当前配置 |
+| `http://127.0.0.1:8000/metrics` | Prometheus 指标 |
 
-The private Runner can be started separately in deterministic mode when working on its HTTP
-contract:
+在开发 Runner 的 HTTP 契约时，可以用确定性模式单独启动私有 Runner：
 
 ```powershell
 $env:SESSION_RUNNER_MODE="deterministic"
 .venv\Scripts\python.exe -m uvicorn session_runner.main:app --port 8080
 ```
 
-## Development console
+## 开发控制台
 
-On Windows, launch the local deployment console with:
+在 Windows 上启动本地部署控制台：
 
 ```powershell
 .\start-console.ps1
 ```
 
-Use `-NoBrowser` to start it without opening a browser. The equivalent direct command is:
+使用 `-NoBrowser` 可不打开浏览器启动。等效的直接命令是：
 
 ```powershell
 .venv\Scripts\python.exe -m devtools.console
 ```
 
-Open `http://127.0.0.1:8010`. The console manages the Compose stack, service scaling, status,
-logs, task debugging and the repository's predefined validation suites. It runs outside the
-Compose stack, so it remains available while containers are replaced.
+打开 `http://127.0.0.1:8010`。控制台负责 Compose 栈管理、服务扩缩容、状态、日志、任务调试，
+以及仓库预定义的验证套件。它运行在 Compose 栈之外，因此容器替换期间仍然可用。
 
-The task UI and regression acceptance cover the main API workflow, but they are not a complete
-API conformance suite. See the [API full-test plan](docs/testing/api-full-test-plan.md) for the
-endpoint matrix, missing cases and release criteria.
+任务界面和回归验收覆盖了主要 API 工作流，但不是完整的 API 一致性套件。端点矩阵、缺失用例和
+发布标准请参见 [API 全量测试设计](docs/testing/api-full-test-plan.md)。
 
-The console supports WSL2 Docker Engine, a local `docker` CLI and named Docker contexts. Configure
-the default transport when automatic detection is not suitable:
+控制台支持 WSL2 Docker Engine、本地 `docker` CLI 和命名 Docker context。当自动检测不适用时，
+可配置默认传输方式：
 
 ```powershell
-$env:AGENTSUPPORT_DEV_DOCKER_TRANSPORT="wsl2" # wsl2, local, or context
+$env:AGENTSUPPORT_DEV_DOCKER_TRANSPORT="wsl2" # wsl2、local 或 context
 $env:AGENTSUPPORT_DEV_WSL_DISTRIBUTION="Ubuntu-24.04"
 $env:AGENTSUPPORT_DEV_DOCKER_CONTEXT=""
 .\start-console.ps1
 ```
 
-For repositories on a Windows drive, prefer the console for WSL2 builds; it stages Docker build
-inputs in the WSL filesystem to avoid DrvFS metadata limitations.
+对于位于 Windows 驱动器上的仓库，建议使用控制台进行 WSL2 构建；它会将 Docker 构建输入暂存到
+WSL 文件系统，避免 DrvFS 元数据限制。
 
 ## Docker Compose
 
-The Compose stack contains the API gateway, PostgreSQL, Redis, database migration job, API,
-Worker, Reconciler, Event Publisher and Session Runner.
+Compose 栈包含 API 网关、PostgreSQL、Redis、数据库迁移任务、API、Worker、Reconciler、
+Event Publisher 和 Session Runner。
 
-For deterministic execution without model access:
+无需模型访问的确定性执行：
 
 ```powershell
 $env:SESSION_RUNNER_MODE="deterministic"
 docker compose up -d --build
 ```
 
-For Trae execution, configure the model provider before starting the stack:
+Trae 执行需要先配置模型提供方，再启动栈：
 
 ```powershell
 $env:SESSION_RUNNER_MODE="trae"
@@ -138,8 +143,7 @@ $env:TRAE_API_KEY="<api-key>"
 docker compose up -d --build
 ```
 
-The API is exposed at `http://localhost:8000` and PostgreSQL at `localhost:5432`. Inspect or stop
-the stack with:
+API 暴露在 `http://localhost:8000`，PostgreSQL 位于 `localhost:5432`。检查或停止栈：
 
 ```powershell
 docker compose ps
@@ -147,11 +151,11 @@ docker compose logs --tail 200 api worker runner
 docker compose down
 ```
 
-`docker compose down` preserves the named data volumes unless `--volumes` is explicitly supplied.
+除非显式传入 `--volumes`，`docker compose down` 会保留命名数据卷。
 
-### Alternative model providers
+### 其他模型提供方
 
-DeepSeek's Anthropic-compatible endpoint uses the dedicated provider implementation:
+DeepSeek 的 Anthropic 兼容端点使用专门的提供方实现：
 
 ```powershell
 $env:TRAE_PROVIDER="deepseek_anthropic"
@@ -160,7 +164,7 @@ $env:TRAE_MODEL="<model-name>"
 $env:TRAE_API_KEY="<api-key>"
 ```
 
-For an OpenAI-compatible endpoint:
+OpenAI 兼容端点：
 
 ```powershell
 $env:TRAE_PROVIDER="openai"
@@ -169,44 +173,42 @@ $env:TRAE_MODEL="<model-name>"
 $env:TRAE_API_KEY="<api-key>"
 ```
 
-Model credentials are passed only to the Runner service. Do not commit credentials to `.env` or
-other repository files.
+模型凭据只传递给 Runner 服务。请勿将凭据提交到 `.env` 或其他仓库文件。
 
-## Configuration
+## 配置
 
-`.env.example` lists the supported local and distributed settings. Important variables include:
+`.env.example` 列出了支持的本地和分布式设置。重要变量包括：
 
-| Variable | Purpose |
+| 变量 | 用途 |
 | --- | --- |
-| `AGENTSUPPORT_PERSISTENCE_MODE` | `memory` or `postgres` persistence |
-| `AGENTSUPPORT_EXECUTION_MODE` | `inline` or `distributed` execution |
+| `AGENTSUPPORT_PERSISTENCE_MODE` | `memory` 或 `postgres` 持久化 |
+| `AGENTSUPPORT_EXECUTION_MODE` | `inline` 或 `distributed` 执行 |
 | `AGENTSUPPORT_DATABASE_URL` | SQLAlchemy PostgreSQL URL |
-| `AGENTSUPPORT_REDIS_URL` | Optional Redis event notification URL |
-| `AGENTSUPPORT_RUNTIME_DRIVER` | `memory`, `docker_cli`, or `kubernetes` runtime |
-| `AGENTSUPPORT_WORKSPACE_ROOT` | Workspace data directory |
-| `AGENTSUPPORT_MAX_ACTIVE_SESSIONS` | Concurrent active Session limit |
-| `AGENTSUPPORT_MAX_QUEUED_CONVERSATIONS` | Conversation queue limit |
-| `SESSION_RUNNER_MODE` | `deterministic` or `trae` Runner mode |
-| `TRAE_PROVIDER` | Model provider implementation |
-| `TRAE_MODEL`, `TRAE_MODEL_BASE_URL`, `TRAE_API_KEY` | Runner model configuration |
+| `AGENTSUPPORT_REDIS_URL` | 可选的 Redis 事件通知 URL |
+| `AGENTSUPPORT_RUNTIME_DRIVER` | `memory`、`docker_cli` 或 `kubernetes` 运行时 |
+| `AGENTSUPPORT_WORKSPACE_ROOT` | 工作区数据目录 |
+| `AGENTSUPPORT_MAX_ACTIVE_SESSIONS` | 并发活跃 Session 上限 |
+| `AGENTSUPPORT_MAX_QUEUED_CONVERSATIONS` | Conversation 队列上限 |
+| `SESSION_RUNNER_MODE` | `deterministic` 或 `trae` Runner 模式 |
+| `TRAE_PROVIDER` | 模型提供方实现 |
+| `TRAE_MODEL`、`TRAE_MODEL_BASE_URL`、`TRAE_API_KEY` | Runner 模型配置 |
 
-## Database migrations
+## 数据库迁移
 
-Compose applies Alembic migrations before starting the API and workers. For an external
-PostgreSQL instance, set `AGENTSUPPORT_DATABASE_URL` and run:
+Compose 会在启动 API 和 Worker 前应用 Alembic 迁移。对于外部 PostgreSQL 实例，设置
+`AGENTSUPPORT_DATABASE_URL` 后运行：
 
 ```powershell
 $env:AGENTSUPPORT_AUTO_CREATE_SCHEMA="false"
 .venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-Production and distributed deployments should keep automatic schema creation disabled.
+生产与分布式部署应保持自动建表关闭。
 
-## Distributed operation
+## 分布式运行
 
-API and Worker processes are stateless and can be scaled independently. PostgreSQL is the source
-of truth for jobs, events, commands, checkpoints and leases; Redis only accelerates subscriber
-wake-ups.
+API 和 Worker 进程无状态，可以独立扩缩容。PostgreSQL 是任务、事件、命令、检查点和租约的事实来源；
+Redis 仅加速订阅者唤醒。
 
 ```powershell
 $env:SESSION_RUNNER_MODE="deterministic"
@@ -215,13 +217,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8000/ready
 Invoke-WebRequest -UseBasicParsing http://localhost:8000/metrics
 ```
 
-Workers use expiring claims and fence epochs. A paused Run releases execution capacity, and a
-replacement Runner resumes from a validated checkpoint.
+Worker 使用带过期时间的认领（expiring claims）和栅栏纪元（fence epochs）。暂停的 Run 会释放
+执行容量，替换的 Runner 会从已验证的检查点继续。
 
 ## Kubernetes
 
-Kubernetes deployment requires an external PostgreSQL database and published AgentSupport API and
-Runner images. Create the namespace and secrets, run the migration Job, then apply the services:
+Kubernetes 部署需要外部 PostgreSQL 数据库以及已发布的 AgentSupport API 和 Runner 镜像。先创建
+命名空间和密钥，运行迁移 Job，再应用服务：
 
 ```powershell
 kubectl apply -f deploy/kubernetes/namespace.yaml
@@ -232,12 +234,10 @@ kubectl -n agentsupport wait --for=condition=complete job/agentsupport-db-migrat
 kubectl apply -f deploy/kubernetes/agentsupport.yaml
 ```
 
-Install KEDA before applying `deploy/kubernetes/keda-worker.yaml`. Without KEDA, configure a fixed
-Worker replica count. Workspace PVCs require a StorageClass compatible with `ReadWriteOnce`.
+在应用 `deploy/kubernetes/keda-worker.yaml` 之前先安装 KEDA。没有 KEDA 时，配置固定的 Worker
+副本数。Workspace PVC 需要兼容 `ReadWriteOnce` 的 StorageClass。
 
-## Production considerations
+## 生产注意事项
 
-The current repository does not provide formal authentication, tenant isolation, managed
-MCP/Skill marketplace integration, object-storage backups or multi-region coordination. Deploy it
-behind an authenticated gateway and define database, workspace-volume and secret backup policies
-before production use.
+当前仓库不提供正式认证、租户隔离、托管 MCP/Skill 市场集成、对象存储备份或多区域协调。生产使用前，
+请将其部署在经过认证的网关之后，并制定数据库、工作区卷和密钥的备份策略。

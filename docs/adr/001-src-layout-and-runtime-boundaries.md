@@ -1,17 +1,17 @@
-# ADR-001: Src Layout And Runtime Boundaries
+> 简体中文 | [English](001-src-layout-and-runtime-boundaries.en.md)
 
-## Status
+# ADR-001：Src 布局与运行时边界
 
-Accepted
+## 状态
 
-## Decision
+已接受（Accepted）
 
-Use a `src/` package layout and treat the AgentSupport control plane, shared Runner contracts and
-Session Runner as separate code boundaries. Keep dependency construction in
-`agentsupport.bootstrap.container`.
+## 决策
 
-## Consequences
+采用 `src/` 包布局，并将 AgentSupport 控制面、共享 Runner 契约与 Session Runner 视为独立的代码
+边界。依赖构建集中在 `agentsupport.bootstrap.container`。
 
-Editable and wheel installs resolve the same package tree. Runner deployments do not depend on
-AgentSupport internals. Root-level modules provide concise public imports while implementations
-remain within the layered package structure.
+## 后果
+
+可编辑安装与 wheel 安装解析到相同的包树。Runner 部署不依赖 AgentSupport 内部实现。根级模块提供
+简洁的公共导入，实现保留在分层包结构中。
