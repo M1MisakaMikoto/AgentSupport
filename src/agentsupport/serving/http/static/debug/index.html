@@ -53,6 +53,19 @@
           <button id="start-button" class="button primary full-width" type="submit">创建并运行</button>
         </form>
 
+        <div class="continue-block">
+          <div class="section-heading compact">
+            <p class="section-index">当前会话</p>
+            <h2>继续发送内容</h2>
+          </div>
+          <p class="hint-text">在同一 Session 内派生新的 Conversation（以 parent_conversation_id 关联当前对话），沿用同一工作区继续执行。</p>
+          <form id="continue-form">
+            <label for="continue-text">后续内容</label>
+            <textarea id="continue-text" name="continueText" rows="5" placeholder="例如：继续完成剩余步骤……" required></textarea>
+            <button id="continue-button" class="button primary full-width" type="submit">在当前会话继续</button>
+          </form>
+        </div>
+
         <div class="resource-block">
           <div class="resource-heading">
             <h3>当前资源</h3>
@@ -62,6 +75,7 @@
             <div><dt>Workspace</dt><dd id="workspace-id">-</dd></div>
             <div><dt>Session</dt><dd id="session-id">-</dd></div>
             <div><dt>Conversation</dt><dd id="conversation-id">-</dd></div>
+            <div><dt>父级 Conversation</dt><dd id="parent-id">-</dd></div>
           </dl>
         </div>
       </aside>

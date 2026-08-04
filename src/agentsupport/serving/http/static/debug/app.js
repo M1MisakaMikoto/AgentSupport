@@ -19,7 +19,7 @@ const elements = Object.fromEntries(
     "interaction-empty", "interaction-content", "interaction-kind", "interaction-id",
     "approval-view", "batch-hash", "tool-calls", "reject-button", "approve-button",
     "input-form", "interaction-value", "raw-output", "copy-button", "toast",
-    "control-console-link",
+    "control-console-link", "continue-form", "continue-text", "continue-button", "parent-id",
   ].map((id) => [id, document.getElementById(id)])
 );
 
@@ -80,6 +80,7 @@ function persist() {
 function setBusy(busy) {
   state.busy = busy;
   elements["start-button"].disabled = busy;
+  elements["continue-button"].disabled = busy || !state.conversation;
   elements["approve-button"].disabled = busy;
   elements["reject-button"].disabled = busy;
 }
@@ -88,6 +89,8 @@ function updateResources() {
   elements["workspace-id"].textContent = state.workspace?.id || "-";
   elements["session-id"].textContent = state.session?.id || "-";
   elements["conversation-id"].textContent = state.conversation?.id || "-";
+  elements["parent-id"].textContent = state.conversation?.parent_conversation_id || "-";
+  elements["continue-button"].disabled = !state.conversation || state.busy;
   const run = state.conversation?.run;
   const runState = run?.state || "IDLE";
   elements["run-state"].textContent = runState;
@@ -299,6 +302,41 @@ async function startRun(event) {
   }
 }
 
+async function continueRun(event) {
+  event.preventDefault();
+  if (!state.session || !state.conversation) {
+    showToast("请先创建验收任务", true);
+    return;
+  }
+  const content = elements["continue-text"].value.trim();
+  if (!content) return;
+  setBusy(true);
+  closeStream();
+  state.events = [];
+  renderEvents();
+  try {
+    state.conversation = await request(`/sessions/${state.session.id}/conversations`, {
+      method: "POST",
+      headers: { "Idempotency-Key": makeKey("continue") },
+      body: JSON.stringify({
+        task: content,
+        parent_conversation_id: state.conversation.id,
+      }),
+    });
+    elements["continue-text"].value = "";
+    persist();
+    updateResources();
+    await refreshEvents(true);
+    showToast("已在当前会话创建新的继续任务");
+  } catch (error) {
+    showToast(error.message, true);
+    await refreshEvents(true).catch(() => {});
+  } finally {
+    setBusy(false);
+    updateResources();
+  }
+}
+
 async function decide(decision) {
   const interaction = unresolvedInteraction()?.payload;
   if (!interaction) return;
@@ -381,6 +419,7 @@ function clearRun() {
   state.session = null;
   state.conversation = null;
   state.events = [];
+  elements["continue-text"].value = "";
   localStorage.removeItem("agentSupportDebug");
   setRaw({});
   updateResources();
@@ -414,6 +453,7 @@ function restore() {
 
 elements["connect-button"].addEventListener("click", checkConnection);
 elements["run-form"].addEventListener("submit", startRun);
+elements["continue-form"].addEventListener("submit", continueRun);
 elements["refresh-button"].addEventListener("click", () => refreshEvents(true).catch((error) => showToast(error.message, true)));
 elements["approve-button"].addEventListener("click", () => decide("APPROVE_ONCE"));
 elements["reject-button"].addEventListener("click", () => decide("REJECT"));

@@ -79,9 +79,13 @@ async def test_debug_acceptance_ui_is_served(service):
     assert 'aria-label="控制台导航"' in response.text
     assert 'id="control-console-link" class="nav-link"' in response.text
     assert 'class="nav-link active" href="./" aria-current="page"' in response.text
+    assert 'id="continue-form"' in response.text
+    assert 'id="continue-text"' in response.text
+    assert 'id="parent-id"' in response.text
     assert script.status_code == 200
     assert "EventSource" in script.text
     assert "projectRunState" in script.text
+    assert "continueRun" in script.text
 
 
 @pytest.mark.asyncio
