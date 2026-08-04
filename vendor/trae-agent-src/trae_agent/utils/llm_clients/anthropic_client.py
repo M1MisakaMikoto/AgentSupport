@@ -101,16 +101,21 @@ class AnthropicClient(BaseLLMClient):
         )
         response = retry_decorator(model_config, tool_schemas)
 
-        # Handle tool calls in response
+        # Handle tool calls in response. The whole assistant turn is recorded as a single
+        # message containing every content block in order. In extended-thinking mode the
+        # `thinking` blocks (with their signatures) must be echoed back alongside the
+        # `tool_use` blocks, otherwise Anthropic-compatible providers reject the follow-up
+        # message that carries the tool results.
         content = ""
         tool_calls: list[ToolCall] = []
+        assistant_blocks = []
 
         for content_block in response.content:
             if content_block.type == "text":
                 content += content_block.text
-                self.message_history.append(
-                    anthropic.types.MessageParam(role="assistant", content=content_block.text)
-                )
+                assistant_blocks.append(content_block)
+            elif content_block.type == "thinking":
+                assistant_blocks.append(content_block)
             elif content_block.type == "tool_use":
                 tool_calls.append(
                     ToolCall(
@@ -119,9 +124,12 @@ class AnthropicClient(BaseLLMClient):
                         arguments=content_block.input,  # pyright: ignore[reportArgumentType]
                     )
                 )
-                self.message_history.append(
-                    anthropic.types.MessageParam(role="assistant", content=[content_block])
-                )
+                assistant_blocks.append(content_block)
+
+        if assistant_blocks:
+            self.message_history.append(
+                anthropic.types.MessageParam(role="assistant", content=assistant_blocks)
+            )
 
         usage = None
         if response.usage:

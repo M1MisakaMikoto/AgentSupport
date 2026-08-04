@@ -114,3 +114,81 @@ def test_deepseek_anthropic_provider_selects_compatible_client() -> None:
     client = types.LLMClient(model_config(types, "deepseek_anthropic"))
 
     assert isinstance(client.client, types.DeepSeekAnthropicClient)
+
+
+def test_anthropic_client_echoes_thinking_blocks_with_tool_results() -> None:
+    types = trae_types()
+    config = model_config(types, "anthropic")
+    client = types.AnthropicClient(config)
+    captured = CapturingMessages()
+    client.client = SimpleNamespace(messages=captured)
+
+    thinking = SimpleNamespace(
+        type="thinking",
+        thinking="I should inspect the workspace first.",
+        signature="sig-0001",
+    )
+    tool_use = SimpleNamespace(
+        type="tool_use",
+        id="call-1",
+        name="bash",
+        input={"command": "ls"},
+    )
+
+    calls = {"count": 0}
+
+    def fake_create(**kwargs):
+        captured.request = kwargs
+        captured.request_messages = list(kwargs["messages"])
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return SimpleNamespace(
+                content=[thinking, tool_use],
+                usage=None,
+                model=config.model,
+                stop_reason="tool_use",
+            )
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="completed")],
+            usage=None,
+            model=config.model,
+            stop_reason="end_turn",
+        )
+
+    captured.create = fake_create
+
+    first = client.chat(
+        [types.LLMMessage(role="user", content="Inspect the workspace")],
+        config,
+        tools=[types.BashTool("anthropic")],
+    )
+    assert first.tool_calls is not None
+    assert first.tool_calls[0].call_id == "call-1"
+
+    client.chat(
+        [
+            types.LLMMessage(
+                role="user",
+                tool_result=SimpleNamespace(
+                    call_id="call-1",
+                    name="bash",
+                    success=True,
+                    result="ok",
+                    error=None,
+                ),
+            )
+        ],
+        config,
+        tools=[types.BashTool("anthropic")],
+    )
+
+    assert captured.request_messages is not None
+    assistant = captured.request_messages[-2]
+    assert assistant["role"] == "assistant"
+    blocks = assistant["content"]
+    assert [block.type for block in blocks] == ["thinking", "tool_use"]
+    assert blocks[0].thinking == "I should inspect the workspace first."
+    assert blocks[0].signature == "sig-0001"
+    assert blocks[1].id == "call-1"
+    assert captured.request_messages[-1]["role"] == "user"
+    assert captured.request_messages[-1]["content"][0]["type"] == "tool_result"
