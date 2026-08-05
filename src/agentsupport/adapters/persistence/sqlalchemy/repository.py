@@ -20,8 +20,14 @@ from ....domain import (
     ContextBundle,
     Conversation,
     ExecutionState,
+    Organization,
+    Preset,
+    PresetDefinition,
+    Project,
+    ProjectConfig,
     RunProjection,
     Session,
+    User,
     Workspace,
 )
 from ....domain.coordination import (
@@ -43,11 +49,14 @@ from .models import (
     IdempotencyKeyRow,
     OrganizationRow,
     OutboxEventRow,
+    PresetRow,
+    ProjectRow,
     RunCommandRow,
     RunnerEndpointRow,
     RuntimeOperationRow,
     RuntimeSlotRow,
     SessionRow,
+    UserRow,
     WorkspaceRow,
     WorkspaceWriteLeaseRow,
 )
@@ -123,6 +132,498 @@ class PostgresRepository:
                 self.organization_id = UUID(existing.id)
                 return
             db.add(OrganizationRow(id=str(self.organization_id), name="default", created_at=_now()))
+
+    # ------------------------------------------------------------------
+    # Organizations
+    # ------------------------------------------------------------------
+
+    def create_organization(
+        self,
+        name: str,
+        request_hash: str,
+        idempotency_key: str | None,
+    ) -> Organization:
+        with self.transaction() as db:
+            self._lock_idempotency(db, "organization", idempotency_key)
+            existing = self._idempotent_resource(
+                db, "organization", idempotency_key, request_hash
+            )
+            if existing:
+                org = self.get_organization(existing, db=db)
+                if org:
+                    return org
+            organization = Organization(name=name)
+            db.add(
+                OrganizationRow(
+                    id=str(organization.id),
+                    name=name,
+                    created_at=organization.created_at,
+                )
+            )
+            self._save_idempotency(
+                db,
+                "organization",
+                idempotency_key,
+                request_hash,
+                organization.id,
+                organization.model_dump(mode="json"),
+            )
+            return organization
+
+    def get_organization(
+        self, organization_id: UUID, *, db: DbSession | None = None
+    ) -> Organization | None:
+        if db is None:
+            with self.transaction() as tx:
+                return self.get_organization(organization_id, db=tx)
+        row = db.get(OrganizationRow, str(organization_id))
+        if not row:
+            return None
+        return Organization(id=UUID(row.id), name=row.name, created_at=row.created_at)
+
+    def list_organizations(self) -> list[Organization]:
+        with self.transaction() as db:
+            rows = db.execute(select(OrganizationRow).order_by(OrganizationRow.created_at)).scalars()
+            return [
+                Organization(id=UUID(row.id), name=row.name, created_at=row.created_at)
+                for row in rows
+            ]
+
+    # ------------------------------------------------------------------
+    # Users
+    # ------------------------------------------------------------------
+
+    def create_user(
+        self,
+        username: str,
+        organization_id: UUID,
+        request_hash: str,
+        idempotency_key: str | None,
+    ) -> User:
+        with self.transaction() as db:
+            self._lock_idempotency(db, "user", idempotency_key)
+            existing = self._idempotent_resource(db, "user", idempotency_key, request_hash)
+            if existing:
+                user = self.get_user(existing, db=db)
+                if user:
+                    return user
+            user = User(organization_id=organization_id, username=username)
+            db.add(
+                UserRow(
+                    id=str(user.id),
+                    organization_id=str(organization_id),
+                    username=username,
+                    created_at=user.created_at,
+                )
+            )
+            self._save_idempotency(
+                db,
+                "user",
+                idempotency_key,
+                request_hash,
+                user.id,
+                user.model_dump(mode="json"),
+            )
+            return user
+
+    def get_user(self, user_id: UUID, *, db: DbSession | None = None) -> User | None:
+        if db is None:
+            with self.transaction() as tx:
+                return self.get_user(user_id, db=tx)
+        row = db.get(UserRow, str(user_id))
+        if not row:
+            return None
+        return User(
+            id=UUID(row.id),
+            organization_id=UUID(row.organization_id),
+            username=row.username,
+            created_at=row.created_at,
+        )
+
+    def list_users(self, organization_id: UUID | None = None) -> list[User]:
+        with self.transaction() as db:
+            statement = select(UserRow).order_by(UserRow.created_at)
+            if organization_id is not None:
+                statement = statement.where(
+                    UserRow.organization_id == str(organization_id)
+                )
+            rows = db.execute(statement).scalars()
+            return [
+                User(
+                    id=UUID(row.id),
+                    organization_id=UUID(row.organization_id),
+                    username=row.username,
+                    created_at=row.created_at,
+                )
+                for row in rows
+            ]
+
+    # ------------------------------------------------------------------
+    # Presets
+    # ------------------------------------------------------------------
+
+    def create_preset(
+        self,
+        user_id: UUID,
+        name: str,
+        description: str,
+        definition: PresetDefinition,
+        request_hash: str,
+        idempotency_key: str | None,
+    ) -> Preset:
+        with self.transaction() as db:
+            self._lock_idempotency(db, "preset", idempotency_key)
+            existing = self._idempotent_resource(db, "preset", idempotency_key, request_hash)
+            if existing:
+                preset = self.get_preset(existing, db=db)
+                if preset:
+                    return preset
+            user = db.get(UserRow, str(user_id))
+            if not user:
+                raise RepositoryConflict("user does not exist")
+            preset = Preset(
+                organization_id=UUID(user.organization_id),
+                user_id=user_id,
+                name=name,
+                description=description,
+                definition=definition,
+            )
+            db.add(
+                PresetRow(
+                    id=str(preset.id),
+                    organization_id=str(preset.organization_id),
+                    user_id=str(preset.user_id),
+                    name=preset.name,
+                    description=preset.description,
+                    definition=preset.definition.model_dump(mode="json"),
+                    created_at=preset.created_at,
+                    updated_at=preset.updated_at,
+                )
+            )
+            self._save_idempotency(
+                db,
+                "preset",
+                idempotency_key,
+                request_hash,
+                preset.id,
+                preset.model_dump(mode="json"),
+            )
+            return preset
+
+    def get_preset(self, preset_id: UUID, *, db: DbSession | None = None) -> Preset | None:
+        if db is None:
+            with self.transaction() as tx:
+                return self.get_preset(preset_id, db=tx)
+        row = db.get(PresetRow, str(preset_id))
+        if not row:
+            return None
+        return Preset(
+            id=UUID(row.id),
+            organization_id=UUID(row.organization_id),
+            user_id=UUID(row.user_id),
+            name=row.name,
+            description=row.description,
+            definition=PresetDefinition.model_validate(row.definition),
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    def list_presets(self, user_id: UUID | None = None) -> list[Preset]:
+        with self.transaction() as db:
+            statement = select(PresetRow).order_by(PresetRow.created_at)
+            if user_id is not None:
+                statement = statement.where(PresetRow.user_id == str(user_id))
+            rows = db.execute(statement).scalars()
+            return [
+                Preset(
+                    id=UUID(row.id),
+                    organization_id=UUID(row.organization_id),
+                    user_id=UUID(row.user_id),
+                    name=row.name,
+                    description=row.description,
+                    definition=PresetDefinition.model_validate(row.definition),
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                )
+                for row in rows
+            ]
+
+    def update_preset(
+        self,
+        preset_id: UUID,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        definition: PresetDefinition | None = None,
+    ) -> Preset:
+        with self.transaction() as db:
+            row = db.get(PresetRow, str(preset_id))
+            if not row:
+                raise RepositoryConflict("preset does not exist")
+            if name is not None:
+                row.name = name
+            if description is not None:
+                row.description = description
+            if definition is not None:
+                row.definition = definition.model_dump(mode="json")
+            row.updated_at = _now()
+            db.flush()
+            return Preset(
+                id=UUID(row.id),
+                organization_id=UUID(row.organization_id),
+                user_id=UUID(row.user_id),
+                name=row.name,
+                description=row.description,
+                definition=PresetDefinition.model_validate(row.definition),
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+
+    def delete_preset(self, preset_id: UUID) -> None:
+        with self.transaction() as db:
+            row = db.get(PresetRow, str(preset_id))
+            if row:
+                db.delete(row)
+
+    # ------------------------------------------------------------------
+    # Projects
+    # ------------------------------------------------------------------
+
+    def create_project(
+        self,
+        *,
+        name: str,
+        user_id: UUID,
+        workspace_id: UUID,
+        preset_id: UUID | None,
+        config: ProjectConfig,
+        request_hash: str,
+        idempotency_key: str | None,
+    ) -> Project:
+        with self.transaction() as db:
+            self._lock_idempotency(db, "project", idempotency_key)
+            existing = self._idempotent_resource(db, "project", idempotency_key, request_hash)
+            if existing:
+                project = self.get_project(existing, db=db)
+                if project:
+                    return project
+            user = db.get(UserRow, str(user_id))
+            workspace = db.get(WorkspaceRow, str(workspace_id))
+            if not user:
+                raise RepositoryConflict("user does not exist")
+            if not workspace:
+                raise RepositoryConflict("workspace does not exist")
+            project = Project(
+                organization_id=UUID(user.organization_id),
+                user_id=user_id,
+                workspace_id=workspace_id,
+                name=name,
+                preset_id=preset_id,
+                config=config,
+            )
+            db.add(
+                ProjectRow(
+                    id=str(project.id),
+                    organization_id=str(project.organization_id),
+                    user_id=str(project.user_id),
+                    workspace_id=str(project.workspace_id),
+                    name=project.name,
+                    preset_id=str(project.preset_id) if project.preset_id else None,
+                    config=project.config.model_dump(mode="json"),
+                    created_at=project.created_at,
+                    updated_at=project.updated_at,
+                )
+            )
+            self._save_idempotency(
+                db,
+                "project",
+                idempotency_key,
+                request_hash,
+                project.id,
+                project.model_dump(mode="json"),
+            )
+            return project
+
+    def create_project_with_workspace(
+        self,
+        *,
+        name: str,
+        user_id: UUID,
+        workspace_id: UUID,
+        workspace_root_path: str,
+        preset_id: UUID | None,
+        config: ProjectConfig,
+        request_hash: str,
+        idempotency_key: str | None,
+    ) -> tuple[Project, Workspace]:
+        with self.transaction() as db:
+            self._lock_idempotency(db, "project", idempotency_key)
+            existing = self._idempotent_resource(db, "project", idempotency_key, request_hash)
+            if existing:
+                project = self.get_project(existing, db=db)
+                workspace = self.get_workspace(project.workspace_id, db=db) if project else None
+                if project and workspace:
+                    return project, workspace
+            user = db.get(UserRow, str(user_id))
+            if not user:
+                raise RepositoryConflict("user does not exist")
+            if db.get(WorkspaceRow, str(workspace_id)):
+                raise RepositoryConflict("workspace already exists")
+            now = _now()
+            workspace = Workspace(
+                id=workspace_id, name=name, root_path=workspace_root_path, created_at=now
+            )
+            db.add(
+                WorkspaceRow(
+                    id=str(workspace.id),
+                    organization_id=str(user.organization_id),
+                    name=name,
+                    storage_ref=workspace_root_path,
+                    created_at=now,
+                )
+            )
+            project = Project(
+                organization_id=UUID(user.organization_id),
+                user_id=user_id,
+                workspace_id=workspace_id,
+                name=name,
+                preset_id=preset_id,
+                config=config,
+            )
+            db.add(
+                ProjectRow(
+                    id=str(project.id),
+                    organization_id=str(project.organization_id),
+                    user_id=str(project.user_id),
+                    workspace_id=str(project.workspace_id),
+                    name=project.name,
+                    preset_id=str(project.preset_id) if project.preset_id else None,
+                    config=project.config.model_dump(mode="json"),
+                    created_at=project.created_at,
+                    updated_at=project.updated_at,
+                )
+            )
+            self._save_idempotency(
+                db,
+                "project",
+                idempotency_key,
+                request_hash,
+                project.id,
+                {
+                    "project": project.model_dump(mode="json"),
+                    "workspace": workspace.model_dump(mode="json"),
+                },
+            )
+            return project, workspace
+
+    def get_project(self, project_id: UUID, *, db: DbSession | None = None) -> Project | None:
+        if db is None:
+            with self.transaction() as tx:
+                return self.get_project(project_id, db=tx)
+        row = db.get(ProjectRow, str(project_id))
+        if not row:
+            return None
+        return Project(
+            id=UUID(row.id),
+            organization_id=UUID(row.organization_id),
+            user_id=UUID(row.user_id),
+            workspace_id=UUID(row.workspace_id),
+            name=row.name,
+            preset_id=UUID(row.preset_id) if row.preset_id else None,
+            config=ProjectConfig.model_validate(row.config),
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    def list_projects(self, user_id: UUID | None = None) -> list[Project]:
+        with self.transaction() as db:
+            statement = select(ProjectRow).order_by(ProjectRow.created_at)
+            if user_id is not None:
+                statement = statement.where(ProjectRow.user_id == str(user_id))
+            rows = db.execute(statement).scalars()
+            return [
+                Project(
+                    id=UUID(row.id),
+                    organization_id=UUID(row.organization_id),
+                    user_id=UUID(row.user_id),
+                    workspace_id=UUID(row.workspace_id),
+                    name=row.name,
+                    preset_id=UUID(row.preset_id) if row.preset_id else None,
+                    config=ProjectConfig.model_validate(row.config),
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                )
+                for row in rows
+            ]
+
+    def update_project(
+        self,
+        project_id: UUID,
+        *,
+        name: str | None = None,
+        config: ProjectConfig | None = None,
+        preset_id: UUID | None = None,
+    ) -> Project:
+        with self.transaction() as db:
+            row = db.get(ProjectRow, str(project_id))
+            if not row:
+                raise RepositoryConflict("project does not exist")
+            if name is not None:
+                row.name = name
+            if config is not None:
+                row.config = config.model_dump(mode="json")
+            if preset_id is not None:
+                row.preset_id = str(preset_id)
+            row.updated_at = _now()
+            db.flush()
+            return Project(
+                id=UUID(row.id),
+                organization_id=UUID(row.organization_id),
+                user_id=UUID(row.user_id),
+                workspace_id=UUID(row.workspace_id),
+                name=row.name,
+                preset_id=UUID(row.preset_id) if row.preset_id else None,
+                config=ProjectConfig.model_validate(row.config),
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+
+    def delete_project(self, project_id: UUID) -> None:
+        with self.transaction() as db:
+            row = db.get(ProjectRow, str(project_id))
+            if not row:
+                return
+            session_count = db.execute(
+                select(func.count())
+                .select_from(SessionRow)
+                .where(SessionRow.workspace_id == row.workspace_id)
+            ).scalar_one()
+            if session_count:
+                raise RepositoryConflict("project still has sessions")
+            db.delete(row)
+            workspace = db.get(WorkspaceRow, row.workspace_id)
+            if workspace:
+                db.delete(workspace)
+
+    def get_session_project(self, session_id: UUID) -> Project | None:
+        with self.transaction() as db:
+            session = db.get(SessionRow, str(session_id))
+            if not session or not session.project_id:
+                return None
+            row = db.get(ProjectRow, session.project_id)
+            if not row:
+                return None
+            return Project(
+                id=UUID(row.id),
+                organization_id=UUID(row.organization_id),
+                user_id=UUID(row.user_id),
+                workspace_id=UUID(row.workspace_id),
+                name=row.name,
+                preset_id=UUID(row.preset_id) if row.preset_id else None,
+                config=ProjectConfig.model_validate(row.config),
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
 
     def _idempotent_resource(
         self, db: DbSession, scope: str, key: str | None, request_hash: str
@@ -239,18 +740,23 @@ class PostgresRepository:
             ]
 
     def create_session(
-        self, workspace: Workspace, request_hash: str, idempotency_key: str | None
+        self,
+        workspace: Workspace,
+        request_hash: str,
+        idempotency_key: str | None,
+        project_id: UUID | None = None,
     ) -> Session:
         with self.transaction() as db:
             self._lock_idempotency(db, "session", idempotency_key)
             existing = self._idempotent_resource(db, "session", idempotency_key, request_hash)
             if existing:
                 return self.get_session(existing, db=db)
-            session = Session(workspace_id=workspace.id)
+            session = Session(workspace_id=workspace.id, project_id=project_id)
             db.add(
                 SessionRow(
                     id=str(session.id),
                     workspace_id=str(session.workspace_id),
+                    project_id=str(session.project_id) if session.project_id else None,
                     lease_epoch=session.lease_epoch,
                     created_at=session.created_at,
                 )
@@ -281,14 +787,18 @@ class PostgresRepository:
         return Session(
             id=UUID(row.id),
             workspace_id=UUID(row.workspace_id),
+            project_id=UUID(row.project_id) if row.project_id else None,
             lease_epoch=row.lease_epoch,
             active_run_id=UUID(row.active_run_id) if row.active_run_id else None,
             active_container_id=active.container_id if active else None,
         )
 
-    def list_sessions(self) -> list[Session]:
+    def list_sessions(self, project_id: UUID | None = None) -> list[Session]:
         with self.transaction() as db:
-            rows = db.execute(select(SessionRow).order_by(SessionRow.created_at)).scalars()
+            statement = select(SessionRow).order_by(SessionRow.created_at)
+            if project_id is not None:
+                statement = statement.where(SessionRow.project_id == str(project_id))
+            rows = db.execute(statement).scalars()
             return [self.get_session(UUID(row.id), db=db) for row in rows]
 
     def save_session(self, session: Session) -> None:
@@ -298,6 +808,8 @@ class PostgresRepository:
                 raise RepositoryConflict("session does not exist")
             row.lease_epoch = session.lease_epoch
             row.active_run_id = str(session.active_run_id) if session.active_run_id else None
+            if session.project_id:
+                row.project_id = str(session.project_id)
 
     def create_runtime_operation(self, operation: str, resource_id: str) -> UUID:
         operation_id = uuid4()
@@ -410,11 +922,14 @@ class PostgresRepository:
             ),
         )
 
-    def list_conversations(self) -> list[Conversation]:
+    def list_conversations(self, session_id: UUID | None = None) -> list[Conversation]:
         with self.transaction() as db:
-            rows = db.execute(
-                select(ConversationRow).order_by(ConversationRow.created_at)
-            ).scalars()
+            statement = select(ConversationRow).order_by(ConversationRow.created_at)
+            if session_id is not None:
+                statement = statement.where(
+                    ConversationRow.session_id == str(session_id)
+                )
+            rows = db.execute(statement).scalars()
             return [self.get_conversation(UUID(row.id), db=db) for row in rows]
 
     def append_event(self, conversation: Conversation, event: EventEnvelope) -> None:

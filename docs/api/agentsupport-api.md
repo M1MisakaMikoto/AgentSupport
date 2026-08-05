@@ -27,15 +27,19 @@ http://localhost:8000
 ## 2. 推荐调用流程
 
 ```text
-创建 Workspace
-    -> 创建 Session
-        -> 创建 Conversation（提交任务）
-            -> 查询或订阅事件
-                -> 按事件要求提交 input / approval
-                    -> 等待完成，或主动 cancel
+创建用户（可选，未创建时使用默认组织）
+    -> 创建预设（可选，复用 Skill/工具/资源/权限设定）
+        -> 创建项目（可导入预设）
+            -> 在项目内创建 Session
+                -> 创建 Conversation（提交任务）
+                    -> 查询或订阅事件
+                        -> 按事件要求提交 input / approval
+                            -> 等待完成，或主动 cancel
 ```
 
-创建资源时应保存响应中的 `workspace.id`、`session.id` 和 `conversation.id`。当前版本没有资源列表和按 ID 查询 API，后续交互主要依赖创建响应与事件接口。
+创建资源时应保存响应中的 `user.id`、`preset.id`、`project.id`、`session.id` 和 `conversation.id`。
+业务层级为 `租户 -> 用户 -> 项目 -> 会话 -> 对话`；旧接口 `POST /workspaces`、`POST /sessions`
+仍然可用，创建的资源没有项目归属，运行使用部署级默认配置。
 
 ## 3. 通用约定
 
@@ -182,6 +186,159 @@ POST /sessions/{session_id}/conversations
 | `404` | `SESSION_NOT_FOUND` | Session 不存在 |
 | `404` | `PARENT_NOT_FOUND` | 父 Conversation 不存在或不属于当前 Session |
 | `429` | `RESOURCE_EXHAUSTED` | 等待队列或执行容量已满 |
+
+### 4.4 组织与用户 API
+
+组织（租户）接口：
+
+```http
+POST /organizations
+GET  /organizations
+GET  /organizations/{organization_id}
+GET  /organizations/{organization_id}/users
+```
+
+`POST /organizations` 请求：`{"name": "acme"}`，成功返回 `201`。
+`GET /organizations/{organization_id}/users` 返回该组织下的用户列表。
+
+用户接口：
+
+```http
+POST /users
+GET  /users
+GET  /users/{user_id}
+```
+
+请求：
+
+```json
+{
+  "username": "alice",
+  "organization_id": null
+}
+```
+
+- `username` 长度为 1 至 120 个字符，同一部署内唯一。
+- `organization_id` 可选，缺省时使用部署的默认组织。
+
+成功返回 `201`：`{"id": "…", "organization_id": "…", "username": "alice", "created_at": "…"}`。
+
+### 4.5 预设 API
+
+预设是用户级可复用配置包（Skill、工具、资源、权限、启用状态）。相关接口：
+
+```http
+POST   /presets
+GET    /presets?user_id=<可选>
+GET    /users/{user_id}/presets
+GET    /presets/{preset_id}
+PATCH  /presets/{preset_id}
+DELETE /presets/{preset_id}
+```
+
+`POST /presets` 请求：
+
+```json
+{
+  "user_id": "…",
+  "name": "代码审查预设",
+  "description": "标准代码审查配置",
+  "definition": {
+    "skills": [{"skill_id": "review", "enabled": true}],
+    "tools": {
+      "allowed_tools": ["bash", "str_replace_based_edit_tool", "json_edit_tool", "sequentialthinking", "task_done"],
+      "approval_required_tools": ["bash", "str_replace_based_edit_tool", "json_edit_tool"],
+      "tool_descriptors": []
+    },
+    "resources": {"mcp_refs": [], "workspace_template": null, "env": {}},
+    "permissions": {"max_active_sessions": null, "allow_network": true, "allow_workspace_write": true},
+    "enabled": true
+  }
+}
+```
+
+`PATCH /presets/{preset_id}` 支持部分更新 `name`、`description`、`definition`。
+删除预设不影响已导入它的项目（快照语义）。
+
+常见错误：
+
+| 状态码 | 错误码 | 含义 |
+| --- | --- | --- |
+| `404` | `USER_NOT_FOUND` | 用户不存在 |
+| `404` | `PRESET_NOT_FOUND` | 预设不存在 |
+| `409` | `IDEMPOTENCY_CONFLICT` | 幂等键冲突 |
+
+### 4.6 项目 API
+
+项目是用户拥有的业务容器，每个项目对应一个工作区，会话直接属于项目：
+
+```http
+POST /projects
+GET  /projects?user_id=<可选>
+GET  /users/{user_id}/projects
+GET  /projects/{project_id}
+PATCH /projects/{project_id}
+DELETE /projects/{project_id}
+POST /projects/{project_id}/preset
+POST /projects/{project_id}/sessions
+GET  /projects/{project_id}/sessions
+```
+
+`POST /projects` 请求：
+
+```json
+{
+  "user_id": "…",
+  "name": "线上商城重构",
+  "preset_id": "…"
+}
+```
+
+- `preset_id` 可选；提供时从预设导入配置快照（Skill、工具、资源、权限），
+  之后修改预设不影响已创建项目。
+- 不提供预设时，项目使用部署级默认配置。
+
+`POST /projects/{project_id}/preset` 重新导入预设，覆盖项目当前配置，
+响应包含 `project` 与 `previous_config`。
+
+`POST /projects/{project_id}/sessions` 在项目内创建会话，等价于带
+`project_id` 的旧 `POST /sessions`。
+
+`PATCH /projects/{project_id}` 支持改名与直接编辑配置：
+
+```json
+{
+  "name": "shop-v2",
+  "config": {
+    "skills": [{"skill_id": "debug", "enabled": true}],
+    "tool_policy": {"allowed_tools": [], "approval_required_tools": [], "tool_descriptors": []},
+    "resources": {"mcp_refs": [], "workspace_template": null, "env": {}},
+    "permissions": {"max_active_sessions": null, "allow_network": true, "allow_workspace_write": true}
+  }
+}
+```
+
+`DELETE /projects/{project_id}` 在项目仍有会话时返回 `409 PROJECT_HAS_SESSIONS`。
+
+### 4.7 会话与对话查询
+
+```http
+GET /sessions/{session_id}
+GET /sessions/{session_id}/conversations
+GET /conversations/{conversation_id}
+```
+
+`GET /sessions/{session_id}` 返回会话详情（含 `workspace_id`、`project_id`）。
+`GET /sessions/{session_id}/conversations` 返回该会话下的对话列表；
+`GET /conversations/{conversation_id}` 返回单个对话及其 Run 状态。
+
+常见错误：
+
+| 状态码 | 错误码 | 含义 |
+| --- | --- | --- |
+| `403` | `PRESET_NOT_OWNED` | 预设不属于该用户 |
+| `404` | `PROJECT_NOT_FOUND` | 项目不存在 |
+| `422` | `PRESET_DISABLED` | 预设已停用，不能导入 |
 
 ## 5. 事件 API
 
@@ -378,10 +535,10 @@ Runner 的 input、approval、cancel 和 resume 命令支持通过 `command_id` 
 
 ## 11. 当前版本边界
 
-当前版本尚未提供：
+已提供用户、预设与项目的基础 API，但仍未提供：
 
 - 正式身份认证和租户授权。
-- Workspace、Session、Conversation 的查询、列表、更新和删除 API。
+- Workspace、Session、Conversation 的更新和删除 API（查询、列表已支持；Project 支持编辑与删除）。
 - Session 级 SSE 接口。
 - 生产级 MCP/Skill 市场 API。
 - 对象存储、版本备份和恢复 API。

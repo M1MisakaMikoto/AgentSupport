@@ -1,9 +1,15 @@
 import pytest
 from httpx import ASGITransport
 
+from agent_runner_contracts.events import EventEnvelope
 from agentsupport.config import Settings
 from agentsupport.coordination import JobState
 from agentsupport.core_runtime import TraeCoreRunnerRuntime
+from agentsupport.domain import (
+    PresetDefinition,
+    PresetSkill,
+    PresetToolPolicy,
+)
 from agentsupport.reconciler import DistributedReconciler
 from agentsupport.runtime import DockerRuntimeDriver
 from agentsupport.services import AgentSupportService
@@ -35,6 +41,48 @@ def _worker(config, service):
         runtime_driver=DockerRuntimeDriver(),
         core_runtime=core,
     )
+
+
+class RecordingSkillProvider:
+    def __init__(self):
+        self.skill_ids: list[list[str]] = []
+
+    def manifest(self, skill_ids):
+        self.skill_ids.append(list(skill_ids))
+        return [
+            {
+                "skill_id": skill_id,
+                "content_hash": "x" * 64,
+                "mount_path": f"/opt/agent-skills/{skill_id}",
+            }
+            for skill_id in skill_ids
+        ]
+
+    def read_only_mounts(self, skill_ids):
+        self.skill_ids.append(list(skill_ids))
+        return [
+            (f"/tmp/{skill_id}", f"/opt/agent-skills/{skill_id}")
+            for skill_id in skill_ids
+        ]
+
+
+class RecordingCoreRuntime:
+    def __init__(self):
+        self.requests: list[dict] = []
+
+    def register_run_endpoint(self, run_id, endpoint) -> None:
+        return None
+
+    async def run(self, request, sink):
+        self.requests.append(request)
+        await sink(
+            EventEnvelope(
+                run_id=request["run_id"],
+                seq=1,
+                type="run.completed",
+                payload={"result": {"status": "completed"}},
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -80,6 +128,48 @@ async def test_worker_executes_and_releases_distributed_job(tmp_path):
         "message",
         "run.completed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_distributed_worker_uses_project_config(tmp_path):
+    config = _settings(tmp_path)
+    api = AgentSupportService(config)
+    user = api.create_user("alice")
+    preset = api.create_preset(
+        user.id,
+        "review",
+        definition=PresetDefinition(
+            skills=[PresetSkill(skill_id="review", enabled=True)],
+            tool_policy=PresetToolPolicy(
+                allowed_tools=["bash", "task_done"],
+                approval_required_tools=["bash"],
+            ),
+        ),
+    )
+    project = api.create_project("shop", user.id, preset_id=preset.id)
+    session = api.create_project_session(project.id)
+    conversation = await api.create_conversation(session.id, "finish")
+    assert conversation.run.state == "QUEUED"
+
+    skills = RecordingSkillProvider()
+    core = RecordingCoreRuntime()
+    worker = DistributedWorker(
+        config,
+        repository=api.repository,
+        runtime_driver=DockerRuntimeDriver(),
+        core_runtime=core,
+        skill_provider=skills,
+    )
+
+    assert await worker.run_once() is True
+
+    persisted = api.repository.get_conversation(conversation.id)
+    assert persisted.run.state == "COMPLETED"
+    assert any(ids == ["review"] for ids in skills.skill_ids)
+    request = core.requests[0]
+    assert request["context_bundle"]["skill_manifest"][0]["skill_id"] == "review"
+    assert request["tool_policy"]["allowed_tools"] == ["bash", "task_done"]
+    assert request["tool_policy"]["approval_required_tools"] == ["bash"]
 
 
 @pytest.mark.asyncio

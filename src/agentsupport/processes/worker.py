@@ -193,6 +193,17 @@ class DistributedWorker:
                 error={"code": "RESOURCE_NOT_FOUND"},
             )
             return
+        project = self.repository.get_session_project(session.id) if session.project_id else None
+        skills = (
+            project.config.enabled_skill_ids()
+            if project is not None and not project.config.is_empty()
+            else self.enabled_skills
+        )
+        project_tool_policy = (
+            project.config.tool_policy_dict()
+            if project is not None and not project.config.is_empty()
+            else {}
+        )
         resuming = conversation.run.state == ExecutionState.RESUMING
         try:
             self.repository.append_claimed_event(
@@ -208,7 +219,7 @@ class DistributedWorker:
                     workspace.root_path,
                     claim.fence_epoch,
                     workspace.id,
-                    self.skill_provider.read_only_mounts(self.enabled_skills),
+                    self.skill_provider.read_only_mounts(skills),
                 ),
                 timeout=self.config.runtime_start_timeout_seconds,
             )
@@ -240,7 +251,7 @@ class DistributedWorker:
             if register:
                 register(claim.job.run_id, endpoint_url)
             workspace_ref = self._workspace_ref(workspace.root_path, dynamic_endpoint)
-            tool_policy = {
+            tool_policy = project_tool_policy or {
                 "allowed_tools": [
                     "bash",
                     "str_replace_based_edit_tool",
@@ -332,7 +343,7 @@ class DistributedWorker:
                         event.model_dump(mode="json")
                         for event in self.repository.list_events(conversation.id)
                     ],
-                    "skill_manifest": self.skill_provider.manifest(self.enabled_skills),
+                    "skill_manifest": self.skill_provider.manifest(skills),
                     "tool_policy": tool_policy,
                     "mcp_refs": [],
                 },

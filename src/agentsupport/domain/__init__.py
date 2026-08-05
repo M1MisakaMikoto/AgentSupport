@@ -18,6 +18,20 @@ from .execution import (
     RunProjection,
     utc_now,
 )
+from .organization import Organization
+from .project import (
+    Preset,
+    PresetDefinition,
+    PresetPermissions,
+    PresetResources,
+    PresetSkill,
+    PresetToolPolicy,
+    Project,
+    ProjectConfig,
+    User,
+    default_project_config,
+    project_config_from_definition,
+)
 from .session import Session
 from .workspace import Workspace
 
@@ -31,11 +45,23 @@ __all__ = [
     "ExecutionState",
     "JobClaim",
     "JobState",
+    "Organization",
     "OutboxNotification",
+    "Preset",
+    "PresetDefinition",
+    "PresetPermissions",
+    "PresetResources",
+    "PresetSkill",
+    "PresetToolPolicy",
+    "Project",
+    "ProjectConfig",
     "RunCommand",
     "RunProjection",
     "RunnerEndpoint",
     "Session",
+    "User",
     "Workspace",
+    "default_project_config",
+    "project_config_from_definition",
     "utc_now",
 ]

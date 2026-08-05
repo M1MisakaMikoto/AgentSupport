@@ -345,6 +345,82 @@ async def test_agentsupport_forwards_cancel_to_runner(service):
 
 
 @pytest.mark.asyncio
+async def test_full_hierarchy_chain_tenant_user_preset_project_session_conversation(tmp_path):
+    skills_root = tmp_path / "skills"
+    skill = skills_root / "review"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# Review\n", encoding="utf-8")
+    service = AgentSupportService(
+        Settings(
+            workspace_root=tmp_path / "workspaces",
+            skills_root=skills_root,
+        )
+    )
+    service.core_runtime = TraeCoreRunnerRuntime(
+        "http://runner", transport=ASGITransport(app=create_runner_app())
+    )
+    app = create_app(service)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        org = await client.post("/organizations", json={"name": "acme"})
+        assert org.status_code == 201
+        user = await client.post(
+            "/users",
+            json={"username": "alice", "organization_id": org.json()["id"]},
+        )
+        assert user.status_code == 201
+        preset = await client.post(
+            "/presets",
+            json={
+                "user_id": user.json()["id"],
+                "name": "review",
+                "definition": {
+                    "skills": [{"skill_id": "review", "enabled": True}],
+                    "tools": {
+                        "allowed_tools": ["bash", "task_done"],
+                        "approval_required_tools": ["bash"],
+                    },
+                },
+            },
+        )
+        assert preset.status_code == 201
+        project = await client.post(
+            "/projects",
+            json={
+                "user_id": user.json()["id"],
+                "name": "shop",
+                "preset_id": preset.json()["id"],
+            },
+        )
+        assert project.status_code == 201
+        session = await client.post(f"/projects/{project.json()['id']}/sessions")
+        assert session.status_code == 201
+        assert session.json()["project_id"] == project.json()["id"]
+
+        conversation = await client.post(
+            f"/sessions/{session.json()['id']}/conversations",
+            json={"task": "ask:confirm step"},
+        )
+        assert conversation.status_code == 201
+        conversation_id = conversation.json()["id"]
+        assert conversation.json()["run"]["state"] == "WAITING_INPUT"
+        interaction_id = conversation.json()["run"]["pending_interaction"][
+            "interaction_id"
+        ]
+
+        events = await client.get(f"/conversations/{conversation_id}/events")
+        assert events.json()[-1]["type"] == "interaction.requested"
+
+        submitted = await client.post(
+            f"/conversations/{conversation_id}/input",
+            json={"interaction_id": interaction_id, "value": "go"},
+        )
+        assert submitted.json()["run"]["state"] == "COMPLETED"
+        final_events = await client.get(f"/conversations/{conversation_id}/events")
+        assert final_events.json()[-1]["type"] == "run.completed"
+
+
+@pytest.mark.asyncio
 async def test_local_cancel_clears_pending_interaction(service):
     workspace = service.create_workspace("local-cancel")
     session = service.create_session(workspace.id)

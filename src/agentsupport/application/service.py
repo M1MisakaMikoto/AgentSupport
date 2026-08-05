@@ -26,8 +26,16 @@ from ..domain import (
     ContextBundle,
     Conversation,
     ExecutionState,
+    Organization,
+    Preset,
+    PresetDefinition,
+    Project,
+    ProjectConfig,
     Session,
+    User,
     Workspace,
+    default_project_config,
+    project_config_from_definition,
 )
 from .ports import (
     CoreRuntime,
@@ -84,6 +92,10 @@ class AgentSupportService:
         self.sessions: dict[UUID, Session] = {}
         self.conversations: dict[UUID, Conversation] = {}
         self.checkpoints: dict[UUID, Checkpoint] = {}
+        self.users: dict[UUID, User] = {}
+        self.organizations: dict[UUID, Organization] = {}
+        self.presets: dict[UUID, Preset] = {}
+        self.projects: dict[UUID, Project] = {}
         self.events_store = events_store
         self.event_notifier = event_notifier
         self.workspace_provider = workspace_provider
@@ -98,6 +110,13 @@ class AgentSupportService:
         self._health_failures: dict[UUID, int] = {}
         self._scheduler_lock = asyncio.Lock()
         self.repository = repository
+        self.organization_id = (
+            getattr(self.repository, "organization_id", None) if self.repository else None
+        ) or uuid4()
+        if not self.repository:
+            self.organizations[self.organization_id] = Organization(
+                id=self.organization_id, name="default"
+            )
         if self.distributed and self.repository is None:
             raise ValueError("distributed execution requires PostgreSQL persistence")
         if self.repository and not self.distributed:
@@ -108,6 +127,12 @@ class AgentSupportService:
         self.workspaces = {item.id: item for item in self.repository.list_workspaces()}
         self.sessions = {item.id: item for item in self.repository.list_sessions()}
         self.conversations = {item.id: item for item in self.repository.list_conversations()}
+        self.users = {item.id: item for item in self.repository.list_users()}
+        self.organizations = {
+            item.id: item for item in self.repository.list_organizations()
+        }
+        self.presets = {item.id: item for item in self.repository.list_presets()}
+        self.projects = {item.id: item for item in self.repository.list_projects()}
         for session in self.sessions.values():
             if session.active_container_id:
                 self.workspace_leases[session.workspace_id] = session.id
@@ -164,6 +189,441 @@ class AgentSupportService:
             ],
         }
 
+    # ------------------------------------------------------------------
+    # Ownership and project-aware configuration resolution
+    # ------------------------------------------------------------------
+
+    def _require_user(self, user_id: UUID) -> User:
+        user = None if self.distributed else self.users.get(user_id)
+        if not user and self.repository:
+            user = self.repository.get_user(user_id)
+            if user:
+                self.users[user.id] = user
+        if not user:
+            raise ServiceError("USER_NOT_FOUND", "user does not exist", 404)
+        return user
+
+    def _project(self, project_id: UUID) -> Project:
+        project = None if self.distributed else self.projects.get(project_id)
+        if not project and self.repository:
+            project = self.repository.get_project(project_id)
+            if project:
+                self.projects[project.id] = project
+        if not project:
+            raise ServiceError("PROJECT_NOT_FOUND", "project does not exist", 404)
+        return project
+
+    def _preset(self, preset_id: UUID) -> Preset:
+        preset = None if self.distributed else self.presets.get(preset_id)
+        if not preset and self.repository:
+            preset = self.repository.get_preset(preset_id)
+            if preset:
+                self.presets[preset.id] = preset
+        if not preset:
+            raise ServiceError("PRESET_NOT_FOUND", "preset does not exist", 404)
+        return preset
+
+    def _project_for_session(self, session: Session) -> Project | None:
+        if not session.project_id:
+            return None
+        project = None if self.distributed else self.projects.get(session.project_id)
+        if not project and self.repository:
+            project = self.repository.get_session_project(session.id)
+            if project:
+                self.projects[project.id] = project
+        return project
+
+    def _skills_for_session(self, session: Session) -> list[str]:
+        project = self._project_for_session(session)
+        if project and not project.config.is_empty():
+            return project.config.enabled_skill_ids()
+        return self.enabled_skills
+
+    def _tool_policy_for_session(self, session: Session) -> dict[str, Any]:
+        project = self._project_for_session(session)
+        if project and not project.config.is_empty():
+            policy = project.config.tool_policy_dict()
+            if policy.get("allowed_tools") or policy.get("approval_required_tools"):
+                return policy
+        return self._tool_policy()
+
+    # ------------------------------------------------------------------
+    # Organizations
+    # ------------------------------------------------------------------
+
+    def create_organization(
+        self, name: str, idempotency_key: str | None = None
+    ) -> Organization:
+        payload = {"name": name}
+        existing = self._idempotent("organization", idempotency_key, payload)
+        if existing:
+            return self.organizations[existing]
+        if self.repository:
+            try:
+                organization = self.repository.create_organization(
+                    name, _hash_request(payload), idempotency_key
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            self.organizations[organization.id] = organization
+        else:
+            organization = Organization(name=name)
+            self.organizations[organization.id] = organization
+        self._remember("organization", idempotency_key, payload, organization.id)
+        return organization
+
+    def get_organization(self, organization_id: UUID) -> Organization:
+        organization = self.organizations.get(organization_id)
+        if not organization and self.repository:
+            organization = self.repository.get_organization(organization_id)
+            if organization:
+                self.organizations[organization.id] = organization
+        if not organization:
+            raise ServiceError(
+                "ORGANIZATION_NOT_FOUND", "organization does not exist", 404
+            )
+        return organization
+
+    def list_organizations(self) -> list[Organization]:
+        if self.repository:
+            return self.repository.list_organizations()
+        return sorted(
+            self.organizations.values(), key=lambda item: item.created_at
+        )
+
+    # ------------------------------------------------------------------
+    # Users
+    # ------------------------------------------------------------------
+
+    def create_user(
+        self,
+        username: str,
+        organization_id: UUID | None = None,
+        idempotency_key: str | None = None,
+    ) -> User:
+        org_id = organization_id or self.organization_id
+        payload = {"username": username, "organization_id": str(org_id)}
+        existing = self._idempotent("user", idempotency_key, payload)
+        if existing:
+            return self.users[existing]
+        if self.repository and idempotency_key:
+            try:
+                existing = self.repository.find_idempotent(
+                    "user", idempotency_key, _hash_request(payload)
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            if existing:
+                user = self.repository.get_user(existing)
+                if user:
+                    self.users[user.id] = user
+                    self._remember("user", idempotency_key, payload, user.id)
+                    return user
+        if self.repository:
+            try:
+                user = self.repository.create_user(
+                    username, org_id, _hash_request(payload), idempotency_key
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            self.users[user.id] = user
+        else:
+            if any(item.username == username for item in self.users.values()):
+                raise ServiceError("USERNAME_TAKEN", "username already exists", 409)
+            user = User(organization_id=org_id, username=username)
+            self.users[user.id] = user
+        self._remember("user", idempotency_key, payload, user.id)
+        return user
+
+    def get_user(self, user_id: UUID) -> User:
+        return self._require_user(user_id)
+
+    def list_users(self, organization_id: UUID | None = None) -> list[User]:
+        if self.repository:
+            return self.repository.list_users(organization_id=organization_id)
+        items = self.users.values()
+        if organization_id is not None:
+            items = [item for item in items if item.organization_id == organization_id]
+        return sorted(items, key=lambda item: item.created_at)
+
+    # ------------------------------------------------------------------
+    # Presets
+    # ------------------------------------------------------------------
+
+    def create_preset(
+        self,
+        user_id: UUID,
+        name: str,
+        description: str = "",
+        definition: PresetDefinition | None = None,
+        idempotency_key: str | None = None,
+    ) -> Preset:
+        user = self._require_user(user_id)
+        definition = definition or PresetDefinition()
+        payload = {
+            "user_id": str(user_id),
+            "name": name,
+            "description": description,
+            "definition": definition.model_dump(mode="json"),
+        }
+        existing = self._idempotent("preset", idempotency_key, payload)
+        if existing:
+            return self.presets[existing]
+        if self.repository:
+            try:
+                preset = self.repository.create_preset(
+                    user_id,
+                    name,
+                    description,
+                    definition,
+                    _hash_request(payload),
+                    idempotency_key,
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            self.presets[preset.id] = preset
+        else:
+            preset = Preset(
+                organization_id=user.organization_id,
+                user_id=user_id,
+                name=name,
+                description=description,
+                definition=definition,
+            )
+            self.presets[preset.id] = preset
+        self._remember("preset", idempotency_key, payload, preset.id)
+        return preset
+
+    def get_preset(self, preset_id: UUID) -> Preset:
+        return self._preset(preset_id)
+
+    def list_presets(self, user_id: UUID | None = None) -> list[Preset]:
+        if self.repository:
+            return self.repository.list_presets(user_id=user_id)
+        items = self.presets.values()
+        if user_id is not None:
+            items = [item for item in items if item.user_id == user_id]
+        return sorted(items, key=lambda item: item.created_at)
+
+    def update_preset(
+        self,
+        preset_id: UUID,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        definition: PresetDefinition | None = None,
+    ) -> Preset:
+        self._preset(preset_id)
+        if self.repository:
+            preset = self.repository.update_preset(
+                preset_id, name=name, description=description, definition=definition
+            )
+            self.presets[preset.id] = preset
+            return preset
+        preset = self.presets[preset_id]
+        preset = preset.model_copy(
+            update={
+                "name": name if name is not None else preset.name,
+                "description": description if description is not None else preset.description,
+                "definition": definition if definition is not None else preset.definition,
+            }
+        )
+        self.presets[preset.id] = preset
+        return preset
+
+    def delete_preset(self, preset_id: UUID) -> None:
+        self._preset(preset_id)
+        if self.repository:
+            self.repository.delete_preset(preset_id)
+        self.presets.pop(preset_id, None)
+
+    # ------------------------------------------------------------------
+    # Projects
+    # ------------------------------------------------------------------
+
+    def create_project(
+        self,
+        name: str,
+        user_id: UUID,
+        preset_id: UUID | None = None,
+        idempotency_key: str | None = None,
+    ) -> Project:
+        user = self._require_user(user_id)
+        if preset_id:
+            preset = self._preset(preset_id)
+            if preset.user_id != user_id or preset.organization_id != user.organization_id:
+                raise ServiceError(
+                    "PRESET_NOT_OWNED", "preset does not belong to the user", 403
+                )
+            if not preset.definition.enabled:
+                raise ServiceError("PRESET_DISABLED", "preset is disabled and cannot be imported", 422)
+            config = project_config_from_definition(preset.definition)
+        else:
+            config = default_project_config(enabled_skills=self.enabled_skills)
+        payload = {
+            "user_id": str(user_id),
+            "name": name,
+            "preset_id": str(preset_id) if preset_id else None,
+        }
+        existing = self._idempotent("project", idempotency_key, payload)
+        if existing:
+            return self._project(existing)
+        if self.repository and idempotency_key:
+            try:
+                existing = self.repository.find_idempotent(
+                    "project", idempotency_key, _hash_request(payload)
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            if existing:
+                project = self.repository.get_project(existing)
+                if project:
+                    self.projects[project.id] = project
+                    self._remember("project", idempotency_key, payload, project.id)
+                    return project
+        workspace_id, path = self.workspace_provider.create(name)
+        if self.repository:
+            try:
+                project, workspace = self.repository.create_project_with_workspace(
+                    name=name,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    workspace_root_path=path,
+                    preset_id=preset_id,
+                    config=config,
+                    request_hash=_hash_request(payload),
+                    idempotency_key=idempotency_key,
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            self.projects[project.id] = project
+            self.workspaces[workspace.id] = workspace
+            self._remember("project", idempotency_key, payload, project.id)
+            return project
+        workspace = Workspace(id=workspace_id, name=name, root_path=path)
+        project = Project(
+            organization_id=user.organization_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            name=name,
+            preset_id=preset_id,
+            config=config,
+        )
+        self.workspaces[workspace.id] = workspace
+        self.projects[project.id] = project
+        self._remember("project", idempotency_key, payload, project.id)
+        return project
+
+    def get_project(self, project_id: UUID) -> Project:
+        return self._project(project_id)
+
+    def list_projects(self, user_id: UUID | None = None) -> list[Project]:
+        if self.repository:
+            return self.repository.list_projects(user_id=user_id)
+        items = self.projects.values()
+        if user_id is not None:
+            items = [item for item in items if item.user_id == user_id]
+        return sorted(items, key=lambda item: item.created_at)
+
+    def import_preset_to_project(
+        self, project_id: UUID, preset_id: UUID
+    ) -> tuple[Project, ProjectConfig]:
+        """Re-apply a preset snapshot to a project, replacing its current config."""
+
+        project = self._project(project_id)
+        preset = self._preset(preset_id)
+        if preset.user_id != project.user_id or preset.organization_id != project.organization_id:
+            raise ServiceError("PRESET_NOT_OWNED", "preset does not belong to the project owner", 403)
+        if not preset.definition.enabled:
+            raise ServiceError("PRESET_DISABLED", "preset is disabled and cannot be imported", 422)
+        previous = project.config
+        config = project_config_from_definition(preset.definition)
+        if self.repository:
+            project = self.repository.update_project(
+                project_id, config, preset_id=preset_id
+            )
+        else:
+            project = project.model_copy(
+                update={"config": config, "preset_id": preset_id}
+            )
+        self.projects[project.id] = project
+        return project, previous
+
+    def update_project(
+        self,
+        project_id: UUID,
+        *,
+        name: str | None = None,
+        config: ProjectConfig | None = None,
+    ) -> Project:
+        project = self._project(project_id)
+        if self.repository:
+            project = self.repository.update_project(
+                project_id, name=name, config=config
+            )
+        else:
+            project = project.model_copy(
+                update={
+                    "name": name if name is not None else project.name,
+                    "config": config if config is not None else project.config,
+                }
+            )
+        self.projects[project.id] = project
+        return project
+
+    def delete_project(self, project_id: UUID) -> None:
+        project = self._project(project_id)
+        if any(
+            session.workspace_id == project.workspace_id
+            for session in self.sessions.values()
+        ):
+            raise ServiceError(
+                "PROJECT_HAS_SESSIONS",
+                "project still has sessions and cannot be deleted",
+                409,
+            )
+        if self.repository:
+            self.repository.delete_project(project_id)
+        self.projects.pop(project_id, None)
+        self.workspaces.pop(project.workspace_id, None)
+
+    def list_sessions(self, project_id: UUID | None = None) -> list[Session]:
+        if self.repository:
+            return self.repository.list_sessions(project_id=project_id)
+        items = self.sessions.values()
+        if project_id is not None:
+            items = [item for item in items if item.project_id == project_id]
+        return sorted(items, key=lambda item: item.created_at)
+
+    def get_session(self, session_id: UUID) -> Session:
+        session = None if self.distributed else self.sessions.get(session_id)
+        if not session and self.repository:
+            session = self.repository.get_session(session_id)
+            if session:
+                self.sessions[session.id] = session
+        if not session:
+            raise ServiceError("SESSION_NOT_FOUND", "session does not exist", 404)
+        return session
+
+    def get_conversation(self, conversation_id: UUID) -> Conversation:
+        return self._conversation(conversation_id)
+
+    def list_conversations(self, session_id: UUID | None = None) -> list[Conversation]:
+        if self.repository:
+            return self.repository.list_conversations(session_id=session_id)
+        items = self.conversations.values()
+        if session_id is not None:
+            items = [item for item in items if item.session_id == session_id]
+        return sorted(items, key=lambda item: item.created_at)
+
+    def create_project_session(
+        self, project_id: UUID, idempotency_key: str | None = None
+    ) -> Session:
+        project = self._project(project_id)
+        return self.create_session(
+            project.workspace_id, idempotency_key, project_id=project.id
+        )
+
     def _remember(
         self, scope: str, key: str | None, payload: dict[str, Any], resource_id: UUID
     ) -> None:
@@ -218,7 +678,12 @@ class AgentSupportService:
         self._remember("workspace", idempotency_key, payload, workspace.id)
         return workspace
 
-    def create_session(self, workspace_id: UUID, idempotency_key: str | None = None) -> Session:
+    def create_session(
+        self,
+        workspace_id: UUID,
+        idempotency_key: str | None = None,
+        project_id: UUID | None = None,
+    ) -> Session:
         workspace = None if self.distributed else self.workspaces.get(workspace_id)
         if not workspace and self.repository:
             workspace = self.repository.get_workspace(workspace_id)
@@ -226,15 +691,29 @@ class AgentSupportService:
                 self.workspaces[workspace.id] = workspace
         if not workspace:
             raise ServiceError("WORKSPACE_NOT_FOUND", "workspace does not exist", 404)
-        payload = {"workspace_id": workspace_id}
+        if project_id is not None:
+            project = self._project(project_id)
+            if project.workspace_id != workspace_id:
+                raise ServiceError(
+                    "PROJECT_WORKSPACE_MISMATCH",
+                    "session project does not match the workspace",
+                    422,
+                )
+        payload = {
+            "workspace_id": workspace_id,
+            "project_id": str(project_id) if project_id else None,
+        }
         existing = self._idempotent("session", idempotency_key, payload)
         if existing:
             return self.sessions[existing]
-        session = Session(workspace_id=workspace_id)
+        session = Session(workspace_id=workspace_id, project_id=project_id)
         if self.repository:
             try:
                 session = self.repository.create_session(
-                    workspace, _hash_request(payload), idempotency_key
+                    workspace,
+                    _hash_request(payload),
+                    idempotency_key,
+                    project_id=project_id,
                 )
             except RepositoryConflict as exc:
                 raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
@@ -305,7 +784,7 @@ class AgentSupportService:
                     workspace.root_path,
                     session.lease_epoch,
                     session.workspace_id,
-                    self.skill_provider.read_only_mounts(self.enabled_skills),
+                    self.skill_provider.read_only_mounts(self._skills_for_session(session)),
                     runtime_operation_id=operation_id,
                 ),
                 timeout=self.config.runtime_start_timeout_seconds,
@@ -484,7 +963,7 @@ class AgentSupportService:
         runner_endpoint = await self._runner_endpoint(session)
         if runner_endpoint and not self.config.core_runner_url:
             workspace_ref = "/workspace"
-        tool_policy = self._tool_policy()
+        tool_policy = self._tool_policy_for_session(session)
         request = {
             "run_id": str(conversation.run.run_id),
             "conversation_id": str(conversation.id),
@@ -501,7 +980,7 @@ class AgentSupportService:
                     event.model_dump(mode="json")
                     for event in self.events_store.list(conversation.id)
                 ],
-                "skill_manifest": self.skill_provider.manifest(self.enabled_skills),
+                "skill_manifest": self.skill_provider.manifest(self._skills_for_session(session)),
                 "tool_policy": tool_policy,
                 "mcp_refs": [],
             },
@@ -714,7 +1193,9 @@ class AgentSupportService:
                 validate_checkpoint(
                     checkpoint,
                     lease_epoch=self.sessions[conversation.session_id].lease_epoch,
-                    expected_tool_policy_hash=tool_policy_hash(self._tool_policy()),
+                    expected_tool_policy_hash=tool_policy_hash(
+                        self._tool_policy_for_session(self.sessions[conversation.session_id])
+                    ),
                 )
             except ValueError as exc:
                 raise ServiceError("CHECKPOINT_INVALID", str(exc), 409) from exc
@@ -815,7 +1296,9 @@ class AgentSupportService:
                 validate_checkpoint(
                     checkpoint,
                     lease_epoch=self.sessions[conversation.session_id].lease_epoch,
-                    expected_tool_policy_hash=tool_policy_hash(self._tool_policy()),
+                    expected_tool_policy_hash=tool_policy_hash(
+                        self._tool_policy_for_session(self.sessions[conversation.session_id])
+                    ),
                 )
             except ValueError as exc:
                 raise ServiceError("CHECKPOINT_INVALID", str(exc), 409) from exc
@@ -999,7 +1482,7 @@ class AgentSupportService:
                 pending_tool_calls = list(pending_interaction.get("pending_tool_calls", []))
                 tool_batch_hash = pending_interaction.get("tool_batch_hash")
         raw_tool_policy = pending_interaction.get("tool_policy", {}) if pending_interaction else {}
-        tool_policy: dict[str, Any] = self._tool_policy()
+        tool_policy: dict[str, Any] = self._tool_policy_for_session(session)
         tool_policy.update(raw_tool_policy)
         tool_policy["reason"] = reason
         if pending_tool_calls:
