@@ -105,8 +105,15 @@ $env:SESSION_RUNNER_MODE="deterministic"
 打开 `http://127.0.0.1:8010`。控制台负责 Compose 栈管理、服务扩缩容、状态、日志、任务调试，
 以及仓库预定义的验证套件。它运行在 Compose 栈之外，因此容器替换期间仍然可用。
 
-任务界面和回归验收覆盖了主要 API 工作流，但不是完整的 API 一致性套件。端点矩阵、缺失用例和
-发布标准请参见 [API 全量测试设计](docs/testing/api-full-test-plan.md)。
+控制台按 AI 软件形态组织为仅有的两个大板块：
+
+| 板块 | 子页面 | 能力 |
+| --- | --- | --- |
+| 示范 | 总览 / 组织管理 / 用户管理 / 项目管理 / 预设管理 / Agent 工作台 | 组织（租户）、用户、项目、预设的完整管理（增查改删、预设导入与快照语义）；Agent 工作台提供会话选择、对话式任务下发、SSE 事件轨道、input/approval/cancel 人工关口与派生子任务 |
+| 部署 | 服务状态 / 部署操作 / 验收中心 / API 参考 | Compose 服务拓扑与健康端点（`/live` `/ready` `/metrics` `/cores`）、部署/启动/停止与扩缩容、部署回归验收与 API 契约验收（结构化断言全部公共接口、错误路径、幂等、乐观并发、SSE 断线续传，并输出 OpenAPI 操作覆盖率报告）、由运行时 `/openapi.json` 自动生成的交互式 API 参考 |
+
+API 契约验收是控制台内可重复的自动检查入口；仓库测试与发布标准仍以
+[API 全量测试设计](docs/testing/api-full-test-plan.md) 为准。
 
 控制台支持 WSL2 Docker Engine、本地 `docker` CLI 和命名 Docker context。当自动检测不适用时，
 可配置默认传输方式：

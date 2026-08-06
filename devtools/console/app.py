@@ -10,6 +10,7 @@ import subprocess
 import sys
 from collections import deque
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,9 +23,11 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .api_acceptance import ApiContractVerifier
+from .monitor import EnvironmentMonitor
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONTROL_UI_ROOT = Path(__file__).parent / "static" / "control"
-DEBUG_UI_ROOT = PROJECT_ROOT / "src" / "agentsupport" / "serving" / "http" / "static" / "debug"
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -89,6 +92,14 @@ class AcceptanceRequest(DockerTargetRequest):
     expected_api_replicas: int = Field(default=2, ge=1, le=8)
     include_postgres: bool = True
     include_task_smoke: bool = True
+
+
+class ApiAcceptanceRequest(BaseModel):
+    include_task_flow: bool = True
+    include_negative: bool = True
+    include_sse: bool = True
+    timeout_seconds: int = Field(default=30, ge=5, le=120)
+
 
 @dataclass(slots=True)
 class CommandResult:
@@ -211,6 +222,7 @@ class DevConsoleController:
         self._active_id: str | None = None
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task[None]] = set()
+        self.on_operation_finished: Callable[[ConsoleOperation], None] | None = None
 
     def _target(self, request: DockerTargetRequest | StackRequest | AcceptanceRequest | None) -> dict[str, str]:
         requested_transport = request.docker_transport if request else "auto"
@@ -424,6 +436,9 @@ class DevConsoleController:
             elif operation.action == "accept":
                 assert isinstance(payload, AcceptanceRequest)
                 await self._accept(operation, payload)
+            elif operation.action == "api-accept":
+                assert isinstance(payload, ApiAcceptanceRequest)
+                await self._api_accept(operation, payload)
             else:
                 raise RuntimeError(f"unsupported operation: {operation.action}")
         except Exception as exc:  # noqa: BLE001 - operation failures are returned to the UI
@@ -439,6 +454,8 @@ class DevConsoleController:
             async with self._lock:
                 if self._active_id == operation.id:
                     self._active_id = None
+            if self.on_operation_finished:
+                self.on_operation_finished(operation)
 
     async def _start_stack(self, operation: ConsoleOperation, request: StackRequest) -> None:
         environment = {"SESSION_RUNNER_MODE": request.runner_mode}
@@ -670,6 +687,32 @@ class DevConsoleController:
             "event_types": event_types,
         }
 
+    async def _api_accept(
+        self, operation: ConsoleOperation, request: ApiAcceptanceRequest
+    ) -> None:
+        await self._step(operation, "等待 API 就绪", self._wait_ready(timeout=30))
+        verifier = ApiContractVerifier(
+            base_url=self.agentsupport_url,
+            transport=self.agentsupport_transport,
+            timeout=request.timeout_seconds,
+            suffix=operation.id[:10],
+        )
+
+        def emit(stream: str, message: str) -> None:
+            operation.add_log(stream, message)
+
+        report = await self._step(
+            operation,
+            "执行 API 契约验收",
+            verifier.run(
+                include_negative=request.include_negative,
+                include_sse=request.include_sse,
+                include_task_flow=request.include_task_flow,
+                emit=emit,
+            ),
+        )
+        operation.result = report
+
     def operation(self, operation_id: str) -> ConsoleOperation | None:
         return self.operations.get(operation_id)
 
@@ -790,12 +833,35 @@ def create_dev_console_app(
     controller: DevConsoleController | None = None,
     *,
     token: str | None = None,
+    monitor_log_dir: Path | None = None,
 ) -> FastAPI:
     selected = controller or DevConsoleController()
     console_token = token or secrets.token_urlsafe(32)
-    app = FastAPI(title="AgentSupport Dev Console", docs_url=None, redoc_url=None)
+    monitor = EnvironmentMonitor(selected, log_dir=monitor_log_dir)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        await monitor.start()
+        monitor.record_event(
+            "console_start",
+            "info",
+            f"Dev console started (pid={os.getpid()})",
+        )
+        try:
+            yield
+        finally:
+            await monitor.stop()
+
+    app = FastAPI(
+        title="AgentSupport Dev Console",
+        docs_url=None,
+        redoc_url=None,
+        lifespan=lifespan,
+    )
     app.state.controller = selected
     app.state.console_token = console_token
+    app.state.monitor = monitor
+    selected.on_operation_finished = monitor.handle_operation_finished
 
     def authorize(x_dev_console_token: str | None = Header(default=None)) -> None:
         if not x_dev_console_token or not secrets.compare_digest(
@@ -963,8 +1029,70 @@ def create_dev_console_app(
         authorize(x_dev_console_token)
         return await begin("accept", payload)
 
+    @app.post("/api/actions/api-accept", status_code=202)
+    async def api_accept(
+        payload: ApiAcceptanceRequest,
+        x_dev_console_token: str | None = Header(default=None),
+    ):
+        authorize(x_dev_console_token)
+        return await begin("api-accept", payload)
+
+    @app.get("/api/monitor/overview")
+    async def monitor_overview(
+        x_dev_console_token: str | None = Header(default=None),
+    ):
+        authorize(x_dev_console_token)
+        return monitor.overview()
+
+    @app.get("/api/monitor/events")
+    async def monitor_events(
+        limit: int = 300,
+        event_type: str | None = None,
+        include_snapshots: bool = False,
+        x_dev_console_token: str | None = Header(default=None),
+    ):
+        authorize(x_dev_console_token)
+        if not include_snapshots and event_type is None:
+            event_type = "-snapshot"
+        return {
+            "counts": dict(monitor._counts),
+            "events": monitor.event_list(limit=limit, event_type=event_type),
+        }
+
+    @app.get("/api/monitor/logs")
+    async def monitor_logs(
+        service: str,
+        tail: int = 200,
+        x_dev_console_token: str | None = Header(default=None),
+    ):
+        authorize(x_dev_console_token)
+        return await monitor.container_logs(service=service, tail=tail)
+
+    @app.get("/api/monitor/journal")
+    async def monitor_journal(
+        lines: int = 150,
+        kind: str = "wsl",
+        x_dev_console_token: str | None = Header(default=None),
+    ):
+        authorize(x_dev_console_token)
+        return await monitor.journal_tail(lines=lines, kind=kind)
+
+    @app.get("/api/monitor/console")
+    async def monitor_console(
+        lines: int = 120,
+        x_dev_console_token: str | None = Header(default=None),
+    ):
+        authorize(x_dev_console_token)
+        return monitor.console_logs(lines=lines)
+
     app.mount("/assets", StaticFiles(directory=CONTROL_UI_ROOT), name="control-ui-assets")
-    app.mount("/tasks", StaticFiles(directory=DEBUG_UI_ROOT, html=True), name="task-debug-ui")
+
+    @app.get("/tasks", response_class=HTMLResponse)
+    @app.get("/tasks/", response_class=HTMLResponse)
+    async def tasks_index() -> HTMLResponse:
+        html = (CONTROL_UI_ROOT / "index.html").read_text(encoding="utf-8")
+        return HTMLResponse(html.replace("__DEV_CONSOLE_TOKEN__", console_token))
+
     return app
 
 

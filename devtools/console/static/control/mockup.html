@@ -1,0 +1,1091 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>AgentSupport 示范平台 · 表面 Demo</title>
+    <style>
+      :root {
+        --bg: #f3f5f9;
+        --panel: #ffffff;
+        --sidebar: #f7f8fb;
+        --border: #e3e7ef;
+        --border-strong: #cfd6e3;
+        --text: #1b2333;
+        --muted: #667085;
+        --faint: #98a2b3;
+        --accent: #4f6ef7;
+        --accent-strong: #3b57e0;
+        --accent-soft: #eef1fe;
+        --ok: #17a673;
+        --ok-soft: #e6f7f0;
+        --warn: #d97706;
+        --warn-soft: #fdf1e2;
+        --error: #e05252;
+        --error-soft: #fdecec;
+        --violet: #7c5cf0;
+        --violet-soft: #f1edfe;
+        --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+        --radius: 12px;
+        --shadow: 0 1px 2px rgb(16 24 40 / 0.05), 0 2px 8px rgb(16 24 40 / 0.05);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; height: 100%; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.55 "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      code, pre, .mono { font-family: var(--mono); }
+      button { font: inherit; }
+      h1, h2, h3, p { margin: 0; }
+
+      /* ---------- top bar ---------- */
+      .topbar {
+        height: 58px;
+        display: flex;
+        align-items: center;
+        gap: 26px;
+        padding: 0 22px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+        position: relative;
+        z-index: 20;
+        box-shadow: 0 1px 3px rgb(16 24 40 / 0.04);
+      }
+      .brand { display: flex; align-items: center; gap: 11px; min-width: 250px; }
+      .brand-logo {
+        width: 34px; height: 34px;
+        border-radius: 9px;
+        display: grid; place-items: center;
+        background: linear-gradient(135deg, #4f6ef7, #8b5cf6);
+        color: #fff; font-weight: 800; font-size: 13px; letter-spacing: .5px;
+        box-shadow: 0 3px 8px rgb(79 110 247 / 0.35);
+      }
+      .brand-name { font-weight: 700; font-size: 15px; }
+      .brand-sub { color: var(--faint); font-size: 11px; letter-spacing: .4px; }
+
+      .primary-nav { display: flex; gap: 6px; flex: 1; }
+      .primary-btn {
+        display: inline-flex; align-items: center; gap: 8px;
+        border: 0; background: transparent; color: var(--muted);
+        padding: 8px 18px; border-radius: 10px; cursor: pointer;
+        font-size: 14px; font-weight: 600;
+      }
+      .primary-btn:hover { background: var(--bg); color: var(--text); }
+      .primary-btn.active { background: var(--accent-soft); color: var(--accent-strong); }
+      .primary-btn svg { width: 17px; height: 17px; }
+
+      .topbar-right { display: flex; align-items: center; gap: 14px; }
+      .env-pill {
+        display: inline-flex; align-items: center; gap: 7px;
+        border: 1px solid var(--border); border-radius: 999px;
+        padding: 5px 12px; font-size: 12px; color: var(--muted); background: var(--panel);
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; }
+      .dot.ok { background: var(--ok); }
+      .dot.warn { background: var(--warn); }
+      .avatar {
+        width: 32px; height: 32px; border-radius: 50%;
+        background: linear-gradient(135deg, #f0abfc, #818cf8);
+        color: #fff; display: grid; place-items: center; font-size: 13px; font-weight: 700;
+      }
+
+      /* ---------- layout ---------- */
+      .layout { flex: 1; display: flex; min-height: 0; }
+      .sidebar {
+        width: 232px; flex-shrink: 0;
+        background: var(--sidebar);
+        border-right: 1px solid var(--border);
+        padding: 18px 12px;
+        overflow: auto;
+      }
+      .side-group { margin-bottom: 18px; }
+      .side-label {
+        padding: 0 10px 6px;
+        color: var(--faint); font-size: 10.5px; letter-spacing: 1px;
+        text-transform: uppercase; font-weight: 700;
+      }
+      .side-item {
+        display: flex; align-items: center; gap: 10px;
+        width: 100%; padding: 9px 10px; margin-bottom: 2px;
+        border: 0; border-radius: 9px; background: transparent;
+        color: var(--muted); cursor: pointer; font-size: 13px; font-weight: 550;
+        text-align: left;
+      }
+      .side-item svg { width: 16px; height: 16px; color: var(--faint); flex-shrink: 0; }
+      .side-item:hover { background: #eceef4; color: var(--text); }
+      .side-item.active { background: var(--panel); color: var(--accent-strong); box-shadow: var(--shadow); }
+      .side-item.active svg { color: var(--accent); }
+      .side-badge {
+        margin-left: auto; font-size: 10.5px; color: var(--faint);
+        background: #e8ebf2; border-radius: 999px; padding: 1px 7px; font-weight: 700;
+      }
+
+      .content { flex: 1; overflow: auto; padding: 24px; min-width: 0; }
+      .view { display: none; animation: fadein .18s ease; }
+      .view.active { display: block; }
+      @keyframes fadein { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; } }
+
+      .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+      .page-head h1 { font-size: 20px; }
+      .page-head p { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+      .card {
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: var(--radius); box-shadow: var(--shadow);
+        padding: 18px;
+      }
+      .card + .card { margin-top: 16px; }
+      .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+      .card-head h2 { font-size: 15px; }
+      .card-head .sub { color: var(--faint); font-size: 11.5px; letter-spacing: .5px; }
+
+      .btn {
+        display: inline-flex; align-items: center; gap: 7px;
+        border: 1px solid var(--border-strong); border-radius: 9px;
+        padding: 8px 14px; background: var(--panel); color: var(--text);
+        cursor: pointer; font-weight: 600; font-size: 13px;
+      }
+      .btn:hover { border-color: var(--accent); color: var(--accent); }
+      .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .btn.primary:hover { filter: brightness(1.06); color: #fff; }
+      .btn.danger { color: var(--error); border-color: #f0c6c6; }
+      .btn.danger:hover { background: var(--error-soft); color: var(--error); }
+      .btn.ghost { background: transparent; }
+      .btn.sm { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+      .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+      .grid { display: grid; gap: 16px; }
+      .stats-grid { grid-template-columns: repeat(5, 1fr); margin-bottom: 16px; }
+      .stat {
+        background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 15px 16px; box-shadow: var(--shadow);
+      }
+      .stat .label { color: var(--faint); font-size: 12px; }
+      .stat .value { font-size: 25px; font-weight: 750; margin-top: 3px; }
+      .stat .hint { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+      .stat .value.ok { color: var(--ok); }
+      .stat .value.accent { color: var(--accent); }
+      .stat .value.warn { color: var(--warn); }
+
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+      th { color: var(--faint); font-size: 11.5px; letter-spacing: .4px; font-weight: 700; }
+      tr:last-child td { border-bottom: 0; }
+      td .mono { font-size: 12px; color: var(--muted); }
+      .chip {
+        display: inline-flex; align-items: center; gap: 5px;
+        border-radius: 999px; padding: 3px 10px; font-size: 11.5px; font-weight: 650;
+      }
+      .chip.ok { background: var(--ok-soft); color: var(--ok); }
+      .chip.warn { background: var(--warn-soft); color: var(--warn); }
+      .chip.violet { background: var(--violet-soft); color: var(--violet); }
+      .chip.gray { background: #eef0f5; color: var(--muted); }
+      .chip.blue { background: var(--accent-soft); color: var(--accent-strong); }
+      .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+      .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+      .entity-card {
+        background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 16px; box-shadow: var(--shadow); cursor: pointer; transition: border-color .12s, box-shadow .12s;
+      }
+      .entity-card:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgb(79 110 247 / 0.12); }
+      .entity-top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+      .entity-avatar {
+        width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0;
+        display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 13px;
+      }
+      .entity-name { font-weight: 700; font-size: 14px; }
+      .entity-meta { color: var(--faint); font-size: 11.5px; margin-top: 1px; }
+      .entity-desc { color: var(--muted); font-size: 12.5px; min-height: 34px; margin-bottom: 10px; }
+      .tag-row { display: flex; flex-wrap: wrap; gap: 6px; }
+      .tag {
+        background: #f0f2f7; border-radius: 6px; padding: 2px 8px;
+        font-size: 11px; color: var(--muted); font-family: var(--mono);
+      }
+
+      /* ---------- agent workspace ---------- */
+      .agent-layout { display: grid; grid-template-columns: 250px 1fr 320px; gap: 16px; height: calc(100vh - 170px); min-height: 520px; }
+      .agent-panel { display: flex; flex-direction: column; min-height: 0; }
+      .conv-list { overflow: auto; flex: 1; }
+      .conv-item {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px; border-radius: 10px; cursor: pointer; margin-bottom: 4px;
+      }
+      .conv-item:hover { background: #eceef4; }
+      .conv-item.active { background: var(--accent-soft); }
+      .conv-item .name { font-size: 13px; font-weight: 600; }
+      .conv-item .meta { color: var(--faint); font-size: 11px; margin-top: 2px; }
+      .conv-avatar {
+        width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+        display: grid; place-items: center; font-size: 12px; font-weight: 700;
+      }
+      .chat { display: flex; flex-direction: column; min-height: 0; }
+      .chat-scroll { flex: 1; overflow: auto; padding: 6px 4px 16px; }
+      .msg { display: flex; gap: 10px; margin-bottom: 18px; }
+      .msg .bubble {
+        max-width: 82%; border-radius: 4px 14px 14px 14px;
+        background: var(--panel); border: 1px solid var(--border);
+        padding: 11px 14px; font-size: 13.5px; box-shadow: var(--shadow);
+      }
+      .msg.user { flex-direction: row-reverse; }
+      .msg.user .bubble {
+        border-radius: 14px 4px 14px 14px; background: var(--accent); border-color: var(--accent);
+        color: #fff;
+      }
+      .msg .role { width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; display: grid; place-items: center; font-size: 12px; }
+      .msg .bubble .tool-line {
+        margin-top: 8px; border-top: 1px dashed var(--border-strong); padding-top: 8px;
+        font-family: var(--mono); font-size: 12px; color: var(--muted);
+      }
+      .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
+      .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); animation: blink 1.2s infinite; }
+      .typing i:nth-child(2) { animation-delay: .2s; }
+      .typing i:nth-child(3) { animation-delay: .4s; }
+      @keyframes blink { 50% { opacity: .25; } }
+      .composer {
+        border: 1px solid var(--border-strong); border-radius: 14px;
+        background: var(--panel); padding: 10px 12px; box-shadow: var(--shadow);
+      }
+      .composer textarea {
+        width: 100%; border: 0; outline: 0; resize: none; font: inherit; min-height: 40px;
+        color: var(--text); background: transparent;
+      }
+      .composer-row { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+      .composer-hints { display: flex; gap: 6px; }
+      .hint-chip { border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; font-size: 11px; color: var(--muted); cursor: pointer; }
+      .hint-chip:hover { border-color: var(--accent); color: var(--accent); }
+      .send-btn {
+        width: 34px; height: 34px; border-radius: 10px; border: 0;
+        background: var(--accent); color: #fff; cursor: pointer; display: grid; place-items: center;
+      }
+      .send-btn:hover { filter: brightness(1.08); }
+      .send-btn svg { width: 16px; height: 16px; }
+
+      .run-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+      .run-cell { background: var(--bg); border-radius: 10px; padding: 9px 11px; }
+      .run-cell .label { color: var(--faint); font-size: 11px; }
+      .run-cell .value { font-size: 13px; font-weight: 700; margin-top: 2px; }
+      .timeline { flex: 1; overflow: auto; padding-right: 4px; }
+      .event { display: grid; grid-template-columns: 30px 10px 1fr; gap: 8px; padding: 9px 2px; }
+      .event .seq { font-family: var(--mono); color: var(--faint); font-size: 11px; padding-top: 2px; }
+      .event .rail { width: 2px; border-radius: 2px; background: var(--border-strong); align-self: stretch; }
+      .event.running .rail { background: var(--warn); }
+      .event.done .rail { background: var(--ok); }
+      .event.tool .rail { background: var(--violet); }
+      .event.gate .rail { background: var(--accent); }
+      .event .type { font-size: 12px; font-weight: 650; }
+      .event .payload { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 2px; }
+      .approval {
+        border: 1px solid #d6c9f3; background: var(--violet-soft); border-radius: 12px;
+        padding: 13px; margin-top: 10px;
+      }
+      .approval .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
+      .approval .hash { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+      .tool-call {
+        background: var(--panel); border: 1px solid var(--border); border-radius: 9px;
+        padding: 9px 11px; margin-bottom: 8px;
+      }
+      .tool-call .name { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+      .tool-call pre {
+        margin: 0; font-size: 11px; color: var(--muted); background: #f7f8fc;
+        border-radius: 7px; padding: 7px 9px; overflow: auto; max-height: 120px;
+      }
+      .approval-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+
+      /* ---------- deployment ---------- */
+      .deploy-grid { display: grid; grid-template-columns: 360px 1fr; gap: 16px; align-items: start; }
+      .field { display: grid; gap: 5px; margin-bottom: 12px; }
+      .field label { color: var(--muted); font-size: 12px; }
+      .field input, .field select {
+        border: 1px solid var(--border-strong); border-radius: 9px;
+        padding: 8px 10px; font: inherit; background: var(--panel); color: var(--text);
+      }
+      .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .seg { display: flex; gap: 8px; }
+      .seg label {
+        flex: 1; text-align: center; border: 1px solid var(--border-strong); border-radius: 9px;
+        padding: 8px; cursor: pointer; color: var(--muted); font-size: 13px;
+      }
+      .seg input { display: none; }
+      .seg label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); font-weight: 650; }
+      .action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
+      .service-row {
+        display: flex; align-items: center; gap: 12px; padding: 10px 4px;
+        border-bottom: 1px solid var(--border); font-size: 13px;
+      }
+      .service-row:last-child { border-bottom: 0; }
+      .service-row .icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-size: 13px; }
+      .service-row .info { flex: 1; }
+      .service-row .name { font-weight: 650; }
+      .service-row .id { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+      .health-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 6px; }
+      .health-card { border: 1px solid var(--border); border-radius: 10px; padding: 11px 12px; background: var(--panel); }
+      .health-card .path { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+      .health-card .state { font-size: 13px; font-weight: 700; margin-top: 3px; color: var(--ok); }
+      .accept-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+      .check-row { display: flex; align-items: center; gap: 9px; padding: 6px 0; color: var(--muted); font-size: 13px; }
+      .check-row input { width: 16px; height: 16px; accent-color: var(--accent); }
+      .coverage { margin: 12px 0; }
+      .coverage .bar { height: 8px; border-radius: 5px; background: #e8ebf2; overflow: hidden; }
+      .coverage .bar span { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, var(--ok), #35c28a); }
+      .coverage .meta { display: flex; justify-content: space-between; color: var(--faint); font-size: 11.5px; margin-top: 5px; }
+
+      /* ---------- modal / toast ---------- */
+      .modal-mask {
+        position: fixed; inset: 0; background: rgb(15 23 42 / 0.42);
+        display: none; align-items: flex-start; justify-content: center; z-index: 40; padding-top: 12vh;
+      }
+      .modal-mask.open { display: flex; }
+      .modal {
+        width: 460px; max-width: 92vw; background: var(--panel); border-radius: 16px;
+        box-shadow: 0 18px 50px rgb(16 24 40 / 0.25); padding: 20px;
+      }
+      .modal h3 { font-size: 16px; margin-bottom: 4px; }
+      .modal .sub { color: var(--faint); font-size: 12px; margin-bottom: 16px; }
+      .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+      .toast {
+        position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(12px);
+        background: #1b2333; color: #fff; border-radius: 11px; padding: 10px 18px;
+        opacity: 0; pointer-events: none; transition: .18s; z-index: 50; font-size: 13px;
+        box-shadow: 0 10px 28px rgb(0 0 0 / 0.22);
+      }
+      .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+      .empty { color: var(--faint); text-align: center; padding: 30px; }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-logo">AS</span>
+        <div>
+          <div class="brand-name">AgentSupport</div>
+          <div class="brand-sub">AI 应用示范平台</div>
+        </div>
+      </div>
+      <nav class="primary-nav">
+        <button class="primary-btn active" data-primary="demo" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+          示范
+        </button>
+        <button class="primary-btn" data-primary="deploy" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg>
+          部署
+        </button>
+      </nav>
+      <div class="topbar-right">
+        <span class="env-pill"><span class="dot ok"></span>API 正常</span>
+        <span class="env-pill"><span class="dot ok"></span>Docker 已连接</span>
+        <span class="avatar">管</span>
+      </div>
+    </header>
+
+    <div class="layout">
+      <!-- sidebar: demo -->
+      <aside class="sidebar" id="sidebar-demo">
+        <div class="side-group">
+          <div class="side-label">示范</div>
+          <button class="side-item active" data-view="demo-overview" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+            总览
+          </button>
+          <button class="side-item" data-view="demo-orgs" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4"/></svg>
+            组织管理
+            <span class="side-badge">3</span>
+          </button>
+          <button class="side-item" data-view="demo-users" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 21v-2a6 6 0 0 1 12 0v2M16 8a3.5 3.5 0 0 1 0 7M21 21v-2a6 6 0 0 0-4-5.6"/></svg>
+            用户管理
+            <span class="side-badge">8</span>
+          </button>
+          <button class="side-item" data-view="demo-projects" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+            项目管理
+            <span class="side-badge">5</span>
+          </button>
+          <button class="side-item" data-view="demo-presets" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+            预设管理
+            <span class="side-badge">4</span>
+          </button>
+        </div>
+        <div class="side-group">
+          <div class="side-label">Agent</div>
+          <button class="side-item" data-view="demo-agent" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="4"/></svg>
+            Agent 工作台
+            <span class="side-badge blue">运行中</span>
+          </button>
+        </div>
+      </aside>
+
+      <!-- sidebar: deploy -->
+      <aside class="sidebar" id="sidebar-deploy" hidden>
+        <div class="side-group">
+          <div class="side-label">部署</div>
+          <button class="side-item active" data-view="deploy-status" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            服务状态
+          </button>
+          <button class="side-item" data-view="deploy-actions" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+            部署操作
+          </button>
+          <button class="side-item" data-view="deploy-acceptance" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+            验收中心
+          </button>
+        </div>
+      </aside>
+
+      <main class="content">
+        <!-- ============ DEMO: overview ============ -->
+        <section class="view active" id="view-demo-overview">
+          <div class="page-head">
+            <div>
+              <h1>总览</h1>
+              <p>组织、用户、项目与预设的运行概览，以及最近一次 Agent 任务。</p>
+            </div>
+            <button class="btn primary" type="button" onclick="gotoView('demo-agent')">进入 Agent 工作台</button>
+          </div>
+          <div class="grid stats-grid">
+            <div class="stat"><div class="label">组织</div><div class="value">3</div><div class="hint">2 个租户组织 + 默认组织</div></div>
+            <div class="stat"><div class="label">用户</div><div class="value">8</div><div class="hint">分布于 3 个组织</div></div>
+            <div class="stat"><div class="label">项目</div><div class="value">5</div><div class="hint">2 个正在运行</div></div>
+            <div class="stat"><div class="label">预设</div><div class="value">4</div><div class="hint">2 个已启用</div></div>
+            <div class="stat"><div class="label">活跃 Agent</div><div class="value accent">2</div><div class="hint">1 个等待审批</div></div>
+          </div>
+          <div class="grid" style="grid-template-columns: 1fr 1fr;">
+            <div class="card">
+              <div class="card-head">
+                <h2>最近运行</h2>
+                <span class="sub">LAST RUNS</span>
+              </div>
+              <table>
+                <thead><tr><th>任务</th><th>项目</th><th>状态</th><th>耗时</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>商城登录页回归修复</strong></td><td>线上商城重构</td><td><span class="chip ok">已完成</span></td><td class="mono">1m 24s</td></tr>
+                  <tr><td><strong>API 契约审查</strong></td><td>代码审查流水线</td><td><span class="chip ok">已完成</span></td><td class="mono">3m 02s</td></tr>
+                  <tr><td><strong>数据清洗脚本生成</strong></td><td>数据分析平台</td><td><span class="chip warn">等待审批</span></td><td class="mono">-</td></tr>
+                  <tr><td><strong>知识库入库</strong></td><td>知识库建设</td><td><span class="chip blue">运行中</span></td><td class="mono">38s</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <h2>预设概览</h2>
+                <span class="sub">PRESETS</span>
+              </div>
+              <div class="tag-row" style="gap:8px; flex-direction:column; align-items:flex-start;">
+                <div style="display:flex; gap:8px; align-items:center;"><span class="chip blue">代码审查</span><span class="tag">bash · str_replace · json_edit · sequentialthinking</span></div>
+                <div style="display:flex; gap:8px; align-items:center;"><span class="chip violet">安全审计</span><span class="tag">read · bash · approval_required: bash</span></div>
+                <div style="display:flex; gap:8px; align-items:center;"><span class="chip ok">数据分析</span><span class="tag">python · csv · mcp: sqlite</span></div>
+                <div style="display:flex; gap:8px; align-items:center;"><span class="chip gray">默认预设</span><span class="tag">允许网络 · 工作区可写</span></div>
+              </div>
+              <div style="margin-top:14px; padding-top:12px; border-top:1px dashed var(--border);">
+                <div class="label" style="color:var(--faint); font-size:11.5px; margin-bottom:6px;">资源模型</div>
+                <div style="display:flex; gap:8px;">
+                  <span class="chip gray">租户 → 组织</span><span class="chip gray">用户</span><span class="chip gray">项目</span><span class="chip gray">会话</span><span class="chip gray">对话</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ DEMO: organizations ============ -->
+        <section class="view" id="view-demo-orgs">
+          <div class="page-head">
+            <div>
+              <h1>组织管理</h1>
+              <p>组织（租户）是资源归属的顶层单元，用户、预设与项目均挂载在组织之下。</p>
+            </div>
+            <button class="btn primary" type="button" onclick="openModal('org')">新建组织</button>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>组织</th><th>标识</th><th>用户数</th><th>项目数</th><th>状态</th><th>创建时间</th><th></th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><strong>默认组织</strong></td>
+                  <td class="mono">default</td>
+                  <td>3</td><td>2</td>
+                  <td><span class="chip ok">正常</span></td>
+                  <td class="mono">2026-07-29 10:17</td>
+                  <td><div class="row-actions"><button class="btn sm" type="button">查看</button><button class="btn sm danger" type="button">停用</button></div></td>
+                </tr>
+                <tr>
+                  <td><strong>星辰科技</strong></td>
+                  <td class="mono">starlight</td>
+                  <td>3</td><td>2</td>
+                  <td><span class="chip ok">正常</span></td>
+                  <td class="mono">2026-08-01 14:30</td>
+                  <td><div class="row-actions"><button class="btn sm" type="button">查看</button><button class="btn sm danger" type="button">停用</button></div></td>
+                </tr>
+                <tr>
+                  <td><strong>中科智能</strong></td>
+                  <td class="mono">zhongke-ai</td>
+                  <td>2</td><td>1</td>
+                  <td><span class="chip warn">建设中</span></td>
+                  <td class="mono">2026-08-03 09:12</td>
+                  <td><div class="row-actions"><button class="btn sm" type="button">查看</button><button class="btn sm danger" type="button">停用</button></div></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ============ DEMO: users ============ -->
+        <section class="view" id="view-demo-users">
+          <div class="page-head">
+            <div>
+              <h1>用户管理</h1>
+              <p>用户隶属于组织，拥有自己的预设集合，并可创建与管理项目。</p>
+            </div>
+            <button class="btn primary" type="button" onclick="openModal('user')">新建用户</button>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>用户</th><th>组织</th><th>项目数</th><th>预设数</th><th>状态</th><th>最近活跃</th><th></th></tr></thead>
+              <tbody>
+                <tr><td><strong>alice</strong></td><td>星辰科技</td><td>2</td><td>3</td><td><span class="chip ok">在线</span></td><td class="mono">刚刚</td><td><div class="row-actions"><button class="btn sm" type="button">查看</button><button class="btn sm danger" type="button">禁用</button></div></td></tr>
+                <tr><td><strong>bob</strong></td><td>星辰科技</td><td>1</td><td>1</td><td><span class="chip ok">在线</span></td><td class="mono">12 分钟前</td><td><div class="row-actions"><button class="btn sm" type="button">查看</button><button class="btn sm danger" type="button">禁用</button></div></td></tr>
+                <tr><td><strong>chen</strong></td><td>默认组织</td><td>2</td><td>2</td><td><span class="chip gray">离线</span></td><td class="mono">1 小时前</td><td><div class="row-actions"><button class="btn sm" type="button">查看</button><button class="btn sm danger" type="button">禁用</button></div></td></tr>
+                <tr><td><strong>dora</strong></td><td>中科智能</td><td>1</td><td>0</td><td><span class="chip blue">运行中</span></td><td class="mono">3 分钟前</td><td><div class="row-actions"><button class="btn sm" type="button">查看</button><button class="btn sm danger" type="button">禁用</button></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ============ DEMO: projects ============ -->
+        <section class="view" id="view-demo-projects">
+          <div class="page-head">
+            <div>
+              <h1>项目管理</h1>
+              <p>项目是业务容器，一个项目对应一个工作区；会话直接属于项目，并可导入预设配置。</p>
+            </div>
+            <button class="btn primary" type="button" onclick="openModal('project')">新建项目</button>
+          </div>
+          <div class="card-grid">
+            <div class="entity-card">
+              <div class="entity-top">
+                <span class="entity-avatar" style="background:#4f6ef7;">商</span>
+                <div><div class="entity-name">线上商城重构</div><div class="entity-meta">alice · 星辰科技</div></div>
+                <span class="chip blue" style="margin-left:auto;">运行中</span>
+              </div>
+              <div class="entity-desc">重构登录与下单流程，含支付回调幂等处理。</div>
+              <div class="tag-row"><span class="tag">预设: 代码审查</span><span class="tag">2 会话</span><span class="tag">工作区可写</span></div>
+            </div>
+            <div class="entity-card">
+              <div class="entity-top">
+                <span class="entity-avatar" style="background:#8b5cf6;">审</span>
+                <div><div class="entity-name">代码审查流水线</div><div class="entity-meta">chen · 默认组织</div></div>
+                <span class="chip ok" style="margin-left:auto;">已完成</span>
+              </div>
+              <div class="entity-desc">对合并请求执行静态检查、依赖审计与风格审查。</div>
+              <div class="tag-row"><span class="tag">预设: 代码审查</span><span class="tag">5 会话</span></div>
+            </div>
+            <div class="entity-card">
+              <div class="entity-top">
+                <span class="entity-avatar" style="background:#17a673;">数</span>
+                <div><div class="entity-name">数据分析平台</div><div class="entity-meta">dora · 中科智能</div></div>
+                <span class="chip warn" style="margin-left:auto;">待审批</span>
+              </div>
+              <div class="entity-desc">生成清洗脚本并输出统计报表，工具调用需人工批准。</div>
+              <div class="tag-row"><span class="tag">预设: 数据分析</span><span class="tag">1 会话</span><span class="tag">mcp: sqlite</span></div>
+            </div>
+            <div class="entity-card">
+              <div class="entity-top">
+                <span class="entity-avatar" style="background:#d97706;">知</span>
+                <div><div class="entity-name">知识库建设</div><div class="entity-meta">alice · 星辰科技</div></div>
+                <span class="chip blue" style="margin-left:auto;">运行中</span>
+              </div>
+              <div class="entity-desc">批量清洗文档并写入向量知识库。</div>
+              <div class="tag-row"><span class="tag">默认预设</span><span class="tag">3 会话</span></div>
+            </div>
+            <div class="entity-card">
+              <div class="entity-top">
+                <span class="entity-avatar" style="background:#64708a;">安</span>
+                <div><div class="entity-name">安全审计沙箱</div><div class="entity-meta">bob · 星辰科技</div></div>
+                <span class="chip gray" style="margin-left:auto;">空闲</span>
+              </div>
+              <div class="entity-desc">隔离环境中的依赖与配置安全扫描。</div>
+              <div class="tag-row"><span class="tag">预设: 安全审计</span><span class="tag">0 会话</span></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ DEMO: presets ============ -->
+        <section class="view" id="view-demo-presets">
+          <div class="page-head">
+            <div>
+              <h1>预设管理</h1>
+              <p>预设是用户级可复用配置包：Skill、工具策略、资源与权限。项目导入后为快照语义。</p>
+            </div>
+            <button class="btn primary" type="button" onclick="openModal('preset')">新建预设</button>
+          </div>
+          <div class="card-grid">
+            <div class="entity-card">
+              <div class="entity-top">
+                <span class="entity-avatar" style="background:#4f6ef7;">审</span>
+                <div><div class="entity-name">代码审查预设</div><div class="entity-meta">alice · 已启用</div></div>
+                <span class="chip ok" style="margin-left:auto;">启用</span>
+              </div>
+              <div class="entity-desc">标准代码审查：静态检查、依赖审计与风格统一。</div>
+              <div class="tag-row"><span class="tag">bash</span><span class="tag">str_replace_based_edit_tool</span><span class="tag">json_edit_tool</span><span class="tag">sequentialthinking</span></div>
+              <div style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--border); display:flex; gap:8px; flex-wrap:wrap;">
+                <span class="chip blue">工具审批: 3 项</span><span class="chip gray">权限: 工作区可写</span>
+              </div>
+            </div>
+            <div class="entity-card">
+              <div class="entity-top">
+                <span class="entity-avatar" style="background:#8b5cf6;">安</span>
+                <div><div class="entity-name">安全审计预设</div><div class="entity-meta">bob · 已启用</div></div>
+                <span class="chip ok" style="margin-left:auto;">启用</span>
+              </div>
+              <div class="entity-desc">仅允许只读与受控 bash，所有写操作必须审批。</div>
+              <div class="tag-row"><span class="tag">read</span><span class="tag">bash(审批)</span><span class="tag">task_done</span></div>
+              <div style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--border); display:flex; gap:8px; flex-wrap:wrap;">
+                <span class="chip warn">审批: bash</span><span class="chip gray">权限: 仅工作区</span>
+              </div>
+            </div>
+            <div class="entity-card">
+              <div class="entity-top">
+                <span class="entity-avatar" style="background:#17a673;">数</span>
+                <div><div class="entity-name">数据分析预设</div><div class="entity-meta">dora · 已启用</div></div>
+                <span class="chip ok" style="margin-left:auto;">启用</span>
+              </div>
+              <div class="entity-desc">Python 数据管线，含 SQLite MCP 资源。</div>
+              <div class="tag-row"><span class="tag">python</span><span class="tag">csv</span><span class="tag">mcp: sqlite</span></div>
+              <div style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--border); display:flex; gap:8px; flex-wrap:wrap;">
+                <span class="chip violet">资源: mcp_refs × 1</span><span class="chip gray">权限: 网络允许</span>
+              </div>
+            </div>
+            <div class="entity-card">
+              <div class="entity-top">
+                <span class="entity-avatar" style="background:#64708a;">默</span>
+                <div><div class="entity-name">默认预设</div><div class="entity-meta">系统 · 已启用</div></div>
+                <span class="chip ok" style="margin-left:auto;">启用</span>
+              </div>
+              <div class="entity-desc">部署级默认配置，未指定预设的项目使用。</div>
+              <div class="tag-row"><span class="tag">bash</span><span class="tag">str_replace_based_edit_tool</span><span class="tag">json_edit_tool</span></div>
+              <div style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--border); display:flex; gap:8px; flex-wrap:wrap;">
+                <span class="chip gray">权限: 网络允许 · 工作区可写</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ DEMO: agent workspace ============ -->
+        <section class="view" id="view-demo-agent">
+          <div class="agent-layout">
+            <aside class="card agent-panel">
+              <div class="card-head"><h2>会话</h2><button class="btn sm" type="button">新建</button></div>
+              <div class="conv-list">
+                <div class="conv-item active">
+                  <span class="conv-avatar" style="background:var(--accent-soft); color:var(--accent);">商</span>
+                  <div><div class="name">商城登录页回归修复</div><div class="meta">线上商城重构 · 运行中</div></div>
+                </div>
+                <div class="conv-item">
+                  <span class="conv-avatar" style="background:var(--violet-soft); color:var(--violet);">审</span>
+                  <div><div class="name">API 契约审查</div><div class="meta">代码审查流水线 · 已完成</div></div>
+                </div>
+                <div class="conv-item">
+                  <span class="conv-avatar" style="background:var(--ok-soft); color:var(--ok);">数</span>
+                  <div><div class="name">清洗脚本生成</div><div class="meta">数据分析平台 · 等待审批</div></div>
+                </div>
+                <div class="conv-item">
+                  <span class="conv-avatar" style="background:#f1f3f7; color:var(--muted);">知</span>
+                  <div><div class="name">知识库入库</div><div class="meta">知识库建设 · 已完成</div></div>
+                </div>
+              </div>
+            </aside>
+
+            <section class="card chat">
+              <div class="chat-scroll" id="chat-scroll">
+                <div class="msg">
+                  <span class="role" style="background:var(--accent-soft); color:var(--accent);">A</span>
+                  <div class="bubble">
+                    请修复登录页在移动端的样式回归，并补充回归说明。
+                  </div>
+                </div>
+                <div class="msg">
+                  <span class="role" style="background:var(--panel); border:1px solid var(--border); color:var(--muted);">Ag</span>
+                  <div class="bubble">
+                    已定位问题：<code>.auth-form</code> 在 <code>max-width: 480px</code> 断点下溢出。正在修改样式并验证。
+                    <div class="tool-line">› 使用 str_replace_based_edit_tool 修改 auth.css</div>
+                    <div class="tool-line">› 使用 bash 运行样式回归检查</div>
+                  </div>
+                </div>
+                <div class="msg user">
+                  <span class="role" style="background:var(--accent); color:#fff;">我</span>
+                  <div class="bubble">可以，批准执行修改。</div>
+                </div>
+                <div class="msg">
+                  <span class="role" style="background:var(--panel); border:1px solid var(--border); color:var(--muted);">Ag</span>
+                  <div class="bubble">
+                    修改已完成并通过检查：<br>
+                    • 修复 .auth-form 溢出并增加断点适配<br>
+                    • 回归检查全部通过（24/24）<br>
+                    如需继续，告诉我下一步即可。
+                    <div class="typing" id="typing" style="display:none;"><i></i><i></i><i></i></div>
+                  </div>
+                </div>
+              </div>
+              <div class="composer">
+                <textarea id="task-input" placeholder="给 Agent 下达新任务，例如：继续审查购物车接口的幂等性……" rows="2"></textarea>
+                <div class="composer-row">
+                  <div class="composer-hints">
+                    <span class="hint-chip" data-hint="继续完成剩余步骤并总结">继续剩余步骤</span>
+                    <span class="hint-chip" data-hint="审查购物车接口的幂等性，并给出修改建议">审查接口</span>
+                    <span class="hint-chip" data-hint="ask: 请说明当前任务进展">询问进展 (ask:)</span>
+                  </div>
+                  <button class="send-btn" id="send-btn" type="button" title="发送">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-11 11M22 2 15 22l-4-9-9-4 20-7z"/></svg>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <aside class="card agent-panel">
+              <div class="card-head"><h2>运行状态</h2><span class="chip blue" id="run-chip">运行中</span></div>
+              <div class="run-strip">
+                <div class="run-cell"><div class="label">状态</div><div class="value" id="run-state">RUNNING</div></div>
+                <div class="run-cell"><div class="label">序号</div><div class="value mono" id="run-seq">7</div></div>
+                <div class="run-cell"><div class="label">运行 ID</div><div class="value mono" id="run-id" style="font-size:11px;">9f3c…e21a</div></div>
+              </div>
+              <div class="card-head"><h2>事件轨道</h2></div>
+              <div class="timeline" id="timeline">
+                <div class="event done"><span class="seq">001</span><span class="rail"></span><div><div class="type">run.started</div><div class="payload">{"session_id":"…"}</div></div></div>
+                <div class="event done"><span class="seq">002</span><span class="rail"></span><div><div class="type">message</div><div class="payload">{"content":"已定位样式溢出…"}</div></div></div>
+                <div class="event done"><span class="seq">003</span><span class="rail"></span><div><div class="type">tool.authorization</div><div class="payload">{"status":"APPROVED"}</div></div></div>
+                <div class="event done tool"><span class="seq">004</span><span class="rail"></span><div><div class="type">tool.result</div><div class="payload">{"tool":"str_replace_based_edit_tool","ok":true}</div></div></div>
+                <div class="event done tool"><span class="seq">005</span><span class="rail"></span><div><div class="type">tool.result</div><div class="payload">{"tool":"bash","exit_code":0}</div></div></div>
+                <div class="event done"><span class="seq">006</span><span class="rail"></span><div><div class="type">interaction.input</div><div class="payload">{"value":"可以，批准执行修改。"}</div></div></div>
+                <div class="event running gate"><span class="seq">007</span><span class="rail"></span><div><div class="type">tool.authorization</div><div class="payload">{"status":"REQUIRES_APPROVAL","batch_hash":"a9d0…"}</div></div></div>
+              </div>
+              <div class="approval" id="approval-card">
+                <div class="head">
+                  <span class="chip violet">工具审批</span>
+                  <span class="hash">batch: a9d0f2c1…</span>
+                </div>
+                <div class="tool-call">
+                  <div class="name">bash</div>
+                  <pre>git checkout feature/login-fix && npm test -- --runInBand</pre>
+                </div>
+                <div class="tool-call">
+                  <div class="name">str_replace_based_edit_tool</div>
+                  <pre>{"file":"src/pages/auth.css","old_string":"…","new_string":"…"}</pre>
+                </div>
+                <div class="approval-actions">
+                  <button class="btn danger" type="button" onclick="decide('REJECT')">拒绝</button>
+                  <button class="btn primary" type="button" onclick="decide('APPROVE_ONCE')">仅批准本次</button>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- ============ DEPLOY: service status ============ -->
+        <section class="view" id="view-deploy-status">
+          <div class="page-head">
+            <div>
+              <h1>服务状态</h1>
+              <p>Compose 栈的服务实例、健康端点与运行指标。</p>
+            </div>
+            <button class="btn" type="button">刷新</button>
+          </div>
+          <div class="grid stats-grid" style="grid-template-columns: repeat(4, 1fr);">
+            <div class="stat"><div class="label">API 副本</div><div class="value ok">2</div><div class="hint">健康 2 / 2</div></div>
+            <div class="stat"><div class="label">Worker</div><div class="value ok">3</div><div class="hint">健康 3 / 3</div></div>
+            <div class="stat"><div class="label">队列深度</div><div class="value">0</div><div class="hint">等待任务 0</div></div>
+            <div class="stat"><div class="label">活跃运行</div><div class="value accent">2</div><div class="hint">上限 2</div></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>服务实例</h2><span class="sub">DOCKER COMPOSE</span></div>
+            <div class="service-row"><span class="icon" style="background:var(--accent-soft); color:var(--accent);">API</span><div class="info"><div class="name">agent-api-1 · agent-api-2</div><div class="id">agentsupport-api</div></div><span class="chip ok">healthy × 2</span></div>
+            <div class="service-row"><span class="icon" style="background:var(--violet-soft); color:var(--violet);">WK</span><div class="info"><div class="name">agent-worker-1 · 2 · 3</div><div class="id">agentsupport-worker</div></div><span class="chip ok">running × 3</span></div>
+            <div class="service-row"><span class="icon" style="background:var(--ok-soft); color:var(--ok);">RN</span><div class="info"><div class="name">agent-runner-1</div><div class="id">session-runner · deterministic</div></div><span class="chip ok">healthy</span></div>
+            <div class="service-row"><span class="icon" style="background:#eef0f5; color:var(--muted);">PG</span><div class="info"><div class="name">postgres · redis · event-publisher · reconciler</div><div class="id">infra</div></div><span class="chip ok">healthy</span></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>健康端点</h2><span class="sub">AGENTSUPPORT API</span></div>
+            <div class="health-grid">
+              <div class="health-card"><div class="path">/live</div><div class="state">200 · ok</div></div>
+              <div class="health-card"><div class="path">/ready</div><div class="state">ready</div></div>
+              <div class="health-card"><div class="path">/metrics</div><div class="state">4 项指标</div></div>
+              <div class="health-card"><div class="path">/cores</div><div class="state">session_runner</div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ DEPLOY: actions ============ -->
+        <section class="view" id="view-deploy-actions">
+          <div class="page-head">
+            <div>
+              <h1>部署操作</h1>
+              <p>在 Compose 栈外管理分布式服务：构建、启动、扩缩容与停止。</p>
+            </div>
+          </div>
+          <div class="deploy-grid">
+            <div class="card">
+              <div class="card-head"><h2>启动参数</h2></div>
+              <div class="field"><label>Docker 执行位置</label>
+                <select><option>自动</option><option>WSL2 发行版</option><option>本机 Docker CLI</option><option>Docker context</option></select>
+              </div>
+              <div class="two-col">
+                <div class="field"><label>API 副本</label><input type="number" value="2" min="1" max="8"></div>
+                <div class="field"><label>Worker 副本</label><input type="number" value="3" min="1" max="16"></div>
+              </div>
+              <div class="field"><label>Runner 模式</label>
+                <div class="seg">
+                  <label><input type="radio" name="runner" checked><span>确定性</span></label>
+                  <label><input type="radio" name="runner"><span>Trae</span></label>
+                </div>
+              </div>
+              <div class="check-row"><input id="rebuild" type="checkbox" checked><label for="rebuild">重新构建镜像（使用当前工作区源码）</label></div>
+              <div class="action-row">
+                <button class="btn primary" type="button" onclick="toast('已提交部署操作（表面 Demo）')">部署并启动</button>
+                <button class="btn" type="button" onclick="toast('已提交直接启动（表面 Demo）')">直接启动</button>
+              </div>
+              <button class="btn danger" style="width:100%; margin-top:10px;" type="button" onclick="toast('已提交停止操作（表面 Demo）')">停止服务</button>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>部署说明</h2><span class="sub">BEST PRACTICE</span></div>
+              <div class="entity-desc" style="min-height:0;">控制台运行在 Compose 栈之外，容器替换期间仍可用；WSL2 构建会把构建输入暂存到 WSL 文件系统，避免 DrvFS 元数据限制。部署完成后自动等待 <code>/ready</code> 就绪再返回结果。</div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+                <span class="chip gray">docker compose up -d</span>
+                <span class="chip gray">--scale api=2</span>
+                <span class="chip gray">--scale worker=3</span>
+                <span class="chip gray">SESSION_RUNNER_MODE=deterministic</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ DEPLOY: acceptance ============ -->
+        <section class="view" id="view-deploy-acceptance">
+          <div class="page-head">
+            <div>
+              <h1>验收中心</h1>
+              <p>两层验收：部署回归（静态检查 / pytest / PostgreSQL 并发 / 在线冒烟）与 API 契约验收（38 个操作全覆盖）。</p>
+            </div>
+          </div>
+          <div class="accept-grid">
+            <div class="card">
+              <div class="card-head"><h2>部署回归验收</h2></div>
+              <div class="check-row"><input type="checkbox" checked><span>PostgreSQL 并发测试</span></div>
+              <div class="check-row"><input type="checkbox" checked><span>真实任务闭环冒烟</span></div>
+              <button class="btn primary" style="width:100%; margin-top:12px;" type="button" onclick="toast('回归验收已启动（表面 Demo）')">执行回归验收</button>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>API 契约验收</h2></div>
+              <div class="check-row"><input type="checkbox" checked><span>错误路径与边界</span></div>
+              <div class="check-row"><input type="checkbox" checked><span>SSE 断线续传</span></div>
+              <div class="check-row"><input type="checkbox" checked><span>任务流与交互闭环</span></div>
+              <button class="btn primary" style="width:100%; margin-top:12px;" type="button" onclick="toast('API 契约验收已启动（表面 Demo）')">执行 API 契约验收</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>最近一次验收报告</h2><span class="chip ok">全部通过</span></div>
+            <div class="grid stats-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom:8px;">
+              <div class="stat"><div class="label">用例总数</div><div class="value">14</div></div>
+              <div class="stat"><div class="label">通过</div><div class="value ok">14</div></div>
+              <div class="stat"><div class="label">失败</div><div class="value">0</div></div>
+              <div class="stat"><div class="label">操作覆盖</div><div class="value accent">38/38</div></div>
+            </div>
+            <div class="coverage">
+              <div class="bar"><span></span></div>
+              <div class="meta"><span>OpenAPI 操作覆盖率 100%</span><span>未覆盖 0 项</span></div>
+            </div>
+            <table>
+              <thead><tr><th>用例</th><th>接口</th><th>结果</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td><code>OP-01</code></td><td class="mono">GET /live</td><td><span class="chip ok">PASS</span></td><td>200 ok，关联 ID 与实例头</td></tr>
+                <tr><td><code>RS-01</code></td><td class="mono">POST /workspaces</td><td><span class="chip ok">PASS</span></td><td>201，幂等重放 200，Key 冲突 409</td></tr>
+                <tr><td><code>RS-03</code></td><td class="mono">组织/用户/预设/项目</td><td><span class="chip ok">PASS</span></td><td>20 个子操作，删除与 409 语义</td></tr>
+                <tr><td><code>CV-04</code></td><td class="mono">GET …/events/stream</td><td><span class="chip ok">PASS</span></td><td>SSE id==seq，断线续传无重复</td></tr>
+                <tr><td><code>IN-01</code></td><td class="mono">POST …/input</td><td><span class="chip ok">PASS</span></td><td>ask: 等待输入 → 提交 → 完成</td></tr>
+                <tr><td><code>IN-03</code></td><td class="mono">POST …/cancel</td><td><span class="chip ok">PASS</span></td><td>WAITING_INPUT 取消闭环</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- modal -->
+    <div class="modal-mask" id="modal-mask">
+      <div class="modal">
+        <h3 id="modal-title">新建</h3>
+        <div class="sub" id="modal-sub">表面 Demo：表单仅用于确认版式。</div>
+        <div id="modal-fields"></div>
+        <div class="modal-actions">
+          <button class="btn" type="button" onclick="closeModal()">取消</button>
+          <button class="btn primary" type="button" onclick="closeModal(true)">创建</button>
+        </div>
+      </div>
+    </div>
+    <div class="toast" id="toast"></div>
+
+    <script>
+      const modals = {
+        org: { title: "新建组织", sub: "组织（租户）是资源归属的顶层单元。", fields: [
+          ["组织名称", "text", "例如：星辰科技"],
+          ["标识", "text", "小写字母与连字符，如 starlight"],
+          ["描述", "textarea", "组织的业务说明"]
+        ]},
+        user: { title: "新建用户", sub: "用户隶属于组织，拥有预设集合与项目。", fields: [
+          ["用户名", "text", "例如：alice"],
+          ["所属组织", "select", ["默认组织", "星辰科技", "中科智能"]],
+          ["初始预设", "select", ["无", "代码审查预设", "安全审计预设", "数据分析预设"]]
+        ]},
+        project: { title: "新建项目", sub: "项目对应一个工作区；可导入预设配置（快照语义）。", fields: [
+          ["项目名称", "text", "例如：线上商城重构"],
+          ["所属用户", "select", ["alice", "bob", "chen", "dora"]],
+          ["导入预设", "select", ["无（部署级默认）", "代码审查预设", "安全审计预设", "数据分析预设"]]
+        ]},
+        preset: { title: "新建预设", sub: "预设 = Skill + 工具策略 + 资源 + 权限。", fields: [
+          ["预设名称", "text", "例如：前端重构预设"],
+          ["所属用户", "select", ["alice", "bob", "chen", "dora"]],
+          ["允许工具", "text", "bash, str_replace_based_edit_tool, json_edit_tool…"],
+          ["需审批工具", "text", "bash（可选）"],
+          ["描述", "textarea", "预设用途说明"]
+        ]}
+      };
+
+      function fieldHtml([label, type, extra]) {
+        if (type === "textarea") {
+          return `<div class="field"><label>${label}</label><textarea rows="3" style="border:1px solid var(--border-strong);border-radius:9px;padding:8px 10px;font:inherit;width:100%;resize:vertical;" placeholder="${extra}"></textarea></div>`;
+        }
+        if (type === "select") {
+          const options = extra.map((o) => `<option>${o}</option>`).join("");
+          return `<div class="field"><label>${label}</label><select>${options}</select></div>`;
+        }
+        return `<div class="field"><label>${label}</label><input type="${type}" placeholder="${extra}"></div>`;
+      }
+
+      function openModal(kind) {
+        const cfg = modals[kind];
+        document.getElementById("modal-title").textContent = cfg.title;
+        document.getElementById("modal-sub").textContent = cfg.sub;
+        document.getElementById("modal-fields").innerHTML = cfg.fields.map(fieldHtml).join("");
+        document.getElementById("modal-mask").classList.add("open");
+      }
+
+      function closeModal(created = false) {
+        document.getElementById("modal-mask").classList.remove("open");
+        if (created) toast("创建成功（表面 Demo，未调用 API）");
+      }
+
+      let toastTimer = null;
+      function toast(message) {
+        const el = document.getElementById("toast");
+        el.textContent = message;
+        el.classList.add("show");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+      }
+
+      const primaryButtons = document.querySelectorAll(".primary-btn");
+      const sidebars = { demo: "sidebar-demo", deploy: "sidebar-deploy" };
+      const firstView = { demo: "demo-overview", deploy: "deploy-status" };
+
+      function activatePrimary(name) {
+        primaryButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.primary === name));
+        Object.entries(sidebars).forEach(([key, id]) => {
+          document.getElementById(id).hidden = key !== name;
+        });
+        gotoView(firstView[name]);
+      }
+
+      function gotoView(name) {
+        document.querySelectorAll(".side-item").forEach((item) => {
+          item.classList.toggle("active", item.dataset.view === name);
+        });
+        document.querySelectorAll(".view").forEach((view) => {
+          view.classList.toggle("active", view.id === "view-" + name);
+        });
+      }
+
+      primaryButtons.forEach((btn) => btn.addEventListener("click", () => activatePrimary(btn.dataset.primary)));
+      document.querySelectorAll(".side-item").forEach((item) => {
+        item.addEventListener("click", () => gotoView(item.dataset.view));
+      });
+      document.getElementById("modal-mask").addEventListener("click", (e) => {
+        if (e.target.id === "modal-mask") closeModal();
+      });
+      document.querySelectorAll(".hint-chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          document.getElementById("task-input").value = chip.dataset.hint;
+        });
+      });
+
+      // fake agent simulation
+      const agent = {
+        step: 7,
+        running: true,
+        decide(decision) {
+          const card = document.getElementById("approval-card");
+          card.querySelector(".approval-actions").innerHTML =
+            `<span class="chip ${decision === "APPROVE_ONCE" ? "ok" : "error"}">${decision === "APPROVE_ONCE" ? "已批准本次" : "已拒绝"}</span>`;
+          toast(decision === "APPROVE_ONCE" ? "已批准工具调用（表面 Demo）" : "已拒绝工具调用（表面 Demo）");
+          this.pushEvent("tool", "tool.result", `{"tool":"bash","decision":"${decision}","exit_code":0}`);
+          this.finish();
+        },
+        pushEvent(kind, type, payload) {
+          this.step += 1;
+          const seq = String(this.step).padStart(3, "0");
+          const el = document.createElement("div");
+          el.className = `event ${kind}`;
+          el.innerHTML = `<span class="seq">${seq}</span><span class="rail"></span><div><div class="type">${type}</div><div class="payload">${payload}</div></div>`;
+          const old = document.querySelector("#timeline .event.running");
+          if (old) old.className = old.className.replace(" running", " done");
+          document.getElementById("timeline").append(el);
+          document.getElementById("run-seq").textContent = this.step;
+          const panel = document.querySelector(".timeline");
+          panel.scrollTop = panel.scrollHeight;
+        },
+        finish() {
+          this.running = false;
+          document.getElementById("run-chip").textContent = "已完成";
+          document.getElementById("run-chip").className = "chip ok";
+          document.getElementById("run-state").textContent = "COMPLETED";
+          document.getElementById("typing").style.display = "none";
+        }
+      };
+
+      document.getElementById("send-btn").addEventListener("click", () => {
+        const input = document.getElementById("task-input");
+        const text = input.value.trim();
+        if (!text) return;
+        if (agent.running) {
+          agent.decide("APPROVE_ONCE");
+        }
+        const scroll = document.getElementById("chat-scroll");
+        const user = document.createElement("div");
+        user.className = "msg user";
+        user.innerHTML = `<span class="role" style="background:var(--accent);color:#fff;">我</span><div class="bubble">${text.replace(/</g, "&lt;")}</div>`;
+        scroll.append(user);
+        input.value = "";
+        const typing = document.getElementById("typing");
+        typing.style.display = "inline-flex";
+        scroll.scrollTop = scroll.scrollHeight;
+        setTimeout(() => {
+          const reply = document.createElement("div");
+          reply.className = "msg";
+          reply.innerHTML = `<span class="role" style="background:var(--panel);border:1px solid var(--border);color:var(--muted);">Ag</span><div class="bubble">收到新任务，正在分析上下文并规划步骤……</div>`;
+          typing.style.display = "none";
+          scroll.append(reply);
+          scroll.scrollTop = scroll.scrollHeight;
+          agent.pushEvent("running gate", "interaction.requested", `{"kind":"input","interaction_id":"input-${agent.step}"}`);
+          toast("Agent 已接收任务（表面 Demo）");
+        }, 900);
+      });
+    </script>
+  </body>
+</html>

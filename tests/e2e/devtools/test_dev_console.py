@@ -39,19 +39,19 @@ class FakeCommandRunner:
 
 
 async def _wait_for_operation(client, operation_id, token):
-    for _ in range(50):
+    for _ in range(600):
         response = await client.get(
             f"/api/operations/{operation_id}",
             headers={"X-Dev-Console-Token": token},
         )
         if response.json()["status"] in {"succeeded", "failed"}:
             return response.json()
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.02)
     raise AssertionError("operation did not finish")
 
 
 @pytest.mark.asyncio
-async def test_dev_console_requires_token_and_runs_fixed_deploy_commands(monkeypatch):
+async def test_dev_console_requires_token_and_runs_fixed_deploy_commands(monkeypatch, tmp_path):
     runner = FakeCommandRunner()
     controller = DevConsoleController(command_runner=runner, docker_transport="local")
 
@@ -59,7 +59,7 @@ async def test_dev_console_requires_token_and_runs_fixed_deploy_commands(monkeyp
         return {"status": "ready"}
 
     monkeypatch.setattr(controller, "_wait_ready", ready)
-    app = create_dev_console_app(controller, token="test-token")
+    app = create_dev_console_app(controller, token="test-token", monitor_log_dir=tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         index = await client.get("/")
         denied = await client.post("/api/actions/deploy", json={})
@@ -109,10 +109,10 @@ async def test_dev_console_rejects_out_of_range_replica_counts():
 
 
 @pytest.mark.asyncio
-async def test_stop_without_body_uses_default_docker_target():
+async def test_stop_without_body_uses_default_docker_target(tmp_path):
     runner = FakeCommandRunner()
     controller = DevConsoleController(command_runner=runner, docker_transport="local")
-    app = create_dev_console_app(controller, token="stop-token")
+    app = create_dev_console_app(controller, token="stop-token", monitor_log_dir=tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
             "/api/actions/stop",
@@ -161,6 +161,56 @@ async def test_dev_console_status_normalizes_compose_json(monkeypatch):
         }
     ]
     assert status["ready"] is None
+
+
+@pytest.mark.asyncio
+async def test_monitor_endpoints_require_token_and_serve_logs(tmp_path):
+    runner = FakeCommandRunner()
+    controller = DevConsoleController(command_runner=runner, docker_transport="local")
+    app = create_dev_console_app(
+        controller,
+        token="monitor-token",
+        monitor_log_dir=tmp_path,
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        denied = await client.get("/api/monitor/overview")
+        overview = await client.get(
+            "/api/monitor/overview",
+            headers={"X-Dev-Console-Token": "monitor-token"},
+        )
+        events = await client.get(
+            "/api/monitor/events?limit=5",
+            headers={"X-Dev-Console-Token": "monitor-token"},
+        )
+        logs = await client.get(
+            "/api/monitor/logs?service=api&tail=50",
+            headers={"X-Dev-Console-Token": "monitor-token"},
+        )
+        journal = await client.get(
+            "/api/monitor/journal?lines=20&kind=wsl",
+            headers={"X-Dev-Console-Token": "monitor-token"},
+        )
+        console = await client.get(
+            "/api/monitor/console?lines=20",
+            headers={"X-Dev-Console-Token": "monitor-token"},
+        )
+
+    assert denied.status_code == 403
+    assert overview.status_code == 200
+    body = overview.json()
+    assert body["monitor"]["log_path"].endswith("agentsupport-monitor.jsonl")
+    assert body["api"]["url"] == "http://127.0.0.1:8000"
+    assert body["wsl"]["available"] is None
+    assert events.status_code == 200
+    assert events.json()["counts"]["console_start"] == 0
+    assert logs.status_code == 200
+    assert logs.json()["service"] == "api"
+    assert logs.json()["containers"] == ["agent-api-1"]
+    assert logs.json()["lines"] == ["[agent-api-1] ok"]
+    assert journal.status_code == 200
+    assert journal.json()["available"] is False
+    assert console.status_code == 200
+    assert isinstance(console.json().get("dev-console.out.log"), list)
 
 
 def test_dev_console_builds_direct_wsl2_docker_command(tmp_path):
@@ -351,7 +401,7 @@ async def test_one_stop_console_serves_task_ui_and_proxies_api_and_sse():
     app = create_dev_console_app(controller, token="proxy-token")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://console") as client:
         task_ui = await client.get("/tasks/")
-        task_script = await client.get("/tasks/app.js")
+        task_script = await client.get("/assets/app.js")
         live_response = await client.get("/agentsupport/live")
         echo_response = await client.post(
             "/agentsupport/echo",
@@ -364,11 +414,13 @@ async def test_one_stop_console_serves_task_ui_and_proxies_api_and_sse():
         event_response = await client.get("/agentsupport/events")
 
     assert task_ui.status_code == 200
-    assert "验收控制台" in task_ui.text
-    assert 'aria-label="控制台导航"' in task_ui.text
-    assert 'id="control-console-link" class="nav-link"' in task_ui.text
-    assert 'class="nav-link active" href="./" aria-current="page"' in task_ui.text
-    assert "window.location.origin}/agentsupport" in task_script.text
+    assert "示范" in task_ui.text
+    assert "部署" in task_ui.text
+    assert "Agent 工作台" in task_ui.text
+    assert "API 参考" in task_ui.text
+    assert 'data-view="demo-overview"' in task_ui.text
+    assert 'data-view="deploy-api"' in task_ui.text
+    assert 'apiBase: "/agentsupport"' in task_script.text
     assert live_response.json() == {"status": "ok"}
     assert echo_response.json() == {
         "body": {"value": "forwarded"},
@@ -388,3 +440,778 @@ def test_windows_launcher_starts_loopback_console_without_starting_stack():
     assert "http://127.0.0.1:8010/" in powershell
     assert "compose" not in powershell.lower()
     assert "start-console.ps1" in command
+
+
+@pytest.mark.asyncio
+async def test_console_serves_two_section_ui_and_all_assets():
+    controller = DevConsoleController(command_runner=FakeCommandRunner())
+    console = create_dev_console_app(controller, token="views-token")
+    async with AsyncClient(
+        transport=ASGITransport(app=console), base_url="http://console"
+    ) as client:
+        index = await client.get("/")
+        assets = ["app.js", "demo.js", "api.js", "ops.js", "styles.css"]
+        asset_responses = {
+            name: await client.get(f"/assets/{name}") for name in assets
+        }
+        tasks_page = await client.get("/tasks/")
+
+    assert index.status_code == 200
+    for name, response in asset_responses.items():
+        assert response.status_code == 200, name
+    for marker in (
+        'id="view-demo-overview"',
+        'id="view-demo-orgs"',
+        'id="view-demo-users"',
+        'id="view-demo-projects"',
+        'id="view-demo-presets"',
+        'id="view-demo-agent"',
+        'id="view-deploy-status"',
+        'id="view-deploy-actions"',
+        'id="view-deploy-acceptance"',
+        'id="view-deploy-api"',
+        'id="op-dock"',
+        'id="modal-mask"',
+        "data-primary=\"demo\"",
+        "data-primary=\"deploy\"",
+    ):
+        assert marker in index.text, marker
+    assert tasks_page.status_code == 200
+    assert "示范" in tasks_page.text
+
+
+def _fake_agentsupport_app() -> FastAPI:
+    """Minimal in-memory AgentSupport API implementing the public contract."""
+    import json as _json
+    from uuid import UUID as _UUID
+    from uuid import uuid4 as _uuid4
+
+    from fastapi import HTTPException, Query, Request, Response
+    from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+
+    instance = "fake-instance-1"
+    state = {
+        "workspaces": {},
+        "sessions": {},
+        "orgs": {},
+        "users": {},
+        "presets": {},
+        "projects": {},
+        "conversations": {},
+        "events": {},
+        "idempotency": {},
+    }
+    now = "2026-08-05T08:00:00Z"
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def add_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = (
+            request.headers.get("X-Correlation-ID") or str(_uuid4())
+        )
+        response.headers["X-AgentSupport-Instance"] = instance
+        return response
+
+    def error(code: str, message: str, status: int) -> JSONResponse:
+        return JSONResponse(
+            status_code=status,
+            content={
+                "code": code,
+                "message": message,
+                "retryable": False,
+                "operation": "",
+                "correlation_id": "",
+                "details": None,
+            },
+        )
+
+    def idempotent(scope: str, key: str | None, payload: dict, create):
+        if not key:
+            return create(), True
+        record = state["idempotency"].get((scope, key))
+        digest = _json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        if record:
+            if record["digest"] != digest:
+                return error(
+                    "IDEMPOTENCY_CONFLICT",
+                    "idempotency key was reused with a different request",
+                    409,
+                ), True
+            return record["value"], False
+        value = create()
+        state["idempotency"][(scope, key)] = {"digest": digest, "value": value}
+        return value, True
+
+    def idempotent_created(scope: str, key: str | None, payload: dict, create):
+        value, created = idempotent(scope, key, payload, create)
+        if isinstance(value, JSONResponse):
+            return value
+        if created:
+            return value
+        return JSONResponse(content=value, status_code=200)
+
+    def append_event(conversation_id: str, event_type: str, payload: dict) -> None:
+        conversation = state["conversations"][conversation_id]
+        seq = conversation["run"]["last_seq"] + 1
+        state["events"][conversation_id].append(
+            {
+                "schema_version": "1",
+                "event_id": str(_uuid4()),
+                "run_id": conversation["run"]["run_id"],
+                "seq": seq,
+                "type": event_type,
+                "payload": payload,
+                "source": "runner",
+                "occurred_at": now,
+            }
+        )
+        conversation["run"]["last_seq"] = seq
+
+    @app.get("/live")
+    async def live():
+        return {"status": "ok"}
+
+    @app.get("/ready")
+    async def ready():
+        return {
+            "status": "ready",
+            "execution_mode": "distributed",
+            "persistence_mode": "postgres",
+            "instance_id": instance,
+        }
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    async def metrics():
+        return (
+            "agentsupport_queue_ready 0\n"
+            "agentsupport_active_runtimes 0\n"
+            "agentsupport_claims_expired 0\n"
+            "agentsupport_outbox_pending 0\n"
+        )
+
+    @app.get("/cores")
+    async def cores():
+        return [
+            {
+                "type": "session_runner",
+                "version": "0.1.0",
+                "capabilities": ["run", "input", "checkpoint", "cancel", "events"],
+            }
+        ]
+
+    @app.post("/workspaces", status_code=201)
+    async def create_workspace(request: Request):
+        body = await request.json()
+        return idempotent_created(
+            "workspace",
+            request.headers.get("Idempotency-Key"),
+            body,
+            lambda: _create_workspace(body),
+        )
+
+    def _create_workspace(body: dict) -> dict:
+        item = {
+            "id": str(_uuid4()),
+            "name": body["name"],
+            "root_path": f"/workspace/{_uuid4()}",
+            "created_at": now,
+        }
+        state["workspaces"][item["id"]] = item
+        return item
+
+    @app.post("/sessions", status_code=201)
+    async def create_session(request: Request):
+        body = await request.json()
+        if body.get("workspace_id") not in state["workspaces"]:
+            return error("WORKSPACE_NOT_FOUND", "workspace not found", 404)
+        return idempotent_created(
+            "session",
+            request.headers.get("Idempotency-Key"),
+            body,
+            lambda: _create_session(body),
+        )
+
+    def _create_session(body: dict) -> dict:
+        item = {
+            "id": str(_uuid4()),
+            "workspace_id": body["workspace_id"],
+            "project_id": body.get("project_id"),
+            "lease_epoch": 0,
+            "active_container_id": None,
+            "active_run_id": None,
+            "created_at": now,
+        }
+        state["sessions"][item["id"]] = item
+        return item
+
+    @app.get("/sessions/{session_id}")
+    async def get_session(session_id: _UUID):
+        session_id = str(session_id)
+        if session_id not in state["sessions"]:
+            return error("SESSION_NOT_FOUND", "session not found", 404)
+        return state["sessions"][session_id]
+
+    @app.get("/sessions/{session_id}/conversations")
+    async def list_session_conversations(session_id):
+        session_id = str(session_id)
+        return [
+            item
+            for item in state["conversations"].values()
+            if item["session_id"] == session_id
+        ]
+
+    @app.get("/sessions/{session_id}/events")
+    async def session_events(session_id, after_seq: int = Query(default=0, ge=0)):
+        session_id = str(session_id)
+        events = [
+            event
+            for conversation_id, items in state["events"].items()
+            if state["conversations"][conversation_id]["session_id"] == session_id
+            for event in items
+            if event["seq"] > after_seq
+        ]
+        return sorted(events, key=lambda event: event["occurred_at"])
+
+    @app.post("/organizations", status_code=201)
+    async def create_organization(request: Request):
+        body = await request.json()
+        return idempotent_created(
+            "organization",
+            request.headers.get("Idempotency-Key"),
+            body,
+            lambda: _create_organization(body),
+        )
+
+    def _create_organization(body: dict) -> dict:
+        item = {"id": str(_uuid4()), "name": body["name"], "created_at": now}
+        state["orgs"][item["id"]] = item
+        return item
+
+    @app.get("/organizations")
+    async def list_organizations():
+        return list(state["orgs"].values())
+
+    @app.get("/organizations/{organization_id}")
+    async def get_organization(organization_id):
+        organization_id = str(organization_id)
+        if organization_id not in state["orgs"]:
+            return error("ORGANIZATION_NOT_FOUND", "organization not found", 404)
+        return state["orgs"][organization_id]
+
+    @app.get("/organizations/{organization_id}/users")
+    async def list_organization_users(organization_id):
+        organization_id = str(organization_id)
+        return [
+            item
+            for item in state["users"].values()
+            if item["organization_id"] == organization_id
+        ]
+
+    @app.post("/users", status_code=201)
+    async def create_user(request: Request):
+        body = await request.json()
+        return idempotent_created(
+            "user",
+            request.headers.get("Idempotency-Key"),
+            body,
+            lambda: _create_user(body),
+        )
+
+    def _create_user(body: dict) -> dict:
+        item = {
+            "id": str(_uuid4()),
+            "username": body["username"],
+            "organization_id": body.get("organization_id") or "default-org",
+            "created_at": now,
+        }
+        state["users"][item["id"]] = item
+        return item
+
+    @app.get("/users")
+    async def list_users():
+        return list(state["users"].values())
+
+    @app.get("/users/{user_id}")
+    async def get_user(user_id):
+        user_id = str(user_id)
+        if user_id not in state["users"]:
+            return error("USER_NOT_FOUND", "user not found", 404)
+        return state["users"][user_id]
+
+    @app.get("/users/{user_id}/presets")
+    async def list_user_presets(user_id):
+        user_id = str(user_id)
+        return [
+            item
+            for item in state["presets"].values()
+            if item["user_id"] == user_id
+        ]
+
+    @app.get("/users/{user_id}/projects")
+    async def list_user_projects(user_id):
+        user_id = str(user_id)
+        return [
+            item
+            for item in state["projects"].values()
+            if item["user_id"] == user_id
+        ]
+
+    @app.post("/presets", status_code=201)
+    async def create_preset(request: Request):
+        body = await request.json()
+        return idempotent_created(
+            "preset",
+            request.headers.get("Idempotency-Key"),
+            body,
+            lambda: _create_preset(body),
+        )
+
+    def _create_preset(body: dict) -> dict:
+        item = {
+            "id": str(_uuid4()),
+            "user_id": body["user_id"],
+            "name": body["name"],
+            "description": body.get("description", ""),
+            "definition": body.get("definition"),
+            "created_at": now,
+        }
+        state["presets"][item["id"]] = item
+        return item
+
+    @app.get("/presets")
+    async def list_presets(user_id=None):
+        items = list(state["presets"].values())
+        if user_id is not None:
+            items = [item for item in items if item["user_id"] == str(user_id)]
+        return items
+
+    @app.get("/presets/{preset_id}")
+    async def get_preset(preset_id):
+        preset_id = str(preset_id)
+        if preset_id not in state["presets"]:
+            return error("PRESET_NOT_FOUND", "preset not found", 404)
+        return state["presets"][preset_id]
+
+    @app.patch("/presets/{preset_id}")
+    async def update_preset(preset_id, request: Request):
+        preset_id = str(preset_id)
+        if preset_id not in state["presets"]:
+            return error("PRESET_NOT_FOUND", "preset not found", 404)
+        body = await request.json()
+        state["presets"][preset_id].update(body)
+        return state["presets"][preset_id]
+
+    @app.delete("/presets/{preset_id}", status_code=204)
+    async def delete_preset(preset_id):
+        preset_id = str(preset_id)
+        if preset_id not in state["presets"]:
+            return error("PRESET_NOT_FOUND", "preset not found", 404)
+        state["presets"].pop(preset_id, None)
+        return Response(status_code=204)
+
+    @app.post("/projects", status_code=201)
+    async def create_project(request: Request):
+        body = await request.json()
+        return idempotent_created(
+            "project",
+            request.headers.get("Idempotency-Key"),
+            body,
+            lambda: _create_project(body),
+        )
+
+    def _create_project(body: dict) -> dict:
+        item = {
+            "id": str(_uuid4()),
+            "user_id": body["user_id"],
+            "name": body["name"],
+            "preset_id": body.get("preset_id"),
+            "config": body.get("config", {}),
+            "workspace_id": str(_uuid4()),
+            "created_at": now,
+        }
+        state["projects"][item["id"]] = item
+        state["workspaces"][item["workspace_id"]] = {
+            "id": item["workspace_id"],
+            "name": body["name"],
+            "root_path": f"/workspace/{item['workspace_id']}",
+            "created_at": now,
+        }
+        return item
+
+    @app.get("/projects")
+    async def list_projects(user_id=None):
+        items = list(state["projects"].values())
+        if user_id is not None:
+            items = [item for item in items if item["user_id"] == str(user_id)]
+        return items
+
+    @app.get("/projects/{project_id}")
+    async def get_project(project_id):
+        project_id = str(project_id)
+        if project_id not in state["projects"]:
+            return error("PROJECT_NOT_FOUND", "project not found", 404)
+        return state["projects"][project_id]
+
+    @app.patch("/projects/{project_id}")
+    async def update_project(project_id, request: Request):
+        project_id = str(project_id)
+        if project_id not in state["projects"]:
+            return error("PROJECT_NOT_FOUND", "project not found", 404)
+        body = await request.json()
+        state["projects"][project_id].update(body)
+        return state["projects"][project_id]
+
+    @app.post("/projects/{project_id}/preset")
+    async def import_preset(project_id, request: Request):
+        project_id = str(project_id)
+        if project_id not in state["projects"]:
+            return error("PROJECT_NOT_FOUND", "project not found", 404)
+        body = await request.json()
+        project = state["projects"][project_id]
+        previous_config = dict(project.get("config") or {})
+        project["preset_id"] = body["preset_id"]
+        return {"project": project, "previous_config": previous_config}
+
+    @app.post("/projects/{project_id}/sessions", status_code=201)
+    async def create_project_session(project_id, request: Request):
+        project_id = str(project_id)
+        if project_id not in state["projects"]:
+            return error("PROJECT_NOT_FOUND", "project not found", 404)
+        project = state["projects"][project_id]
+        return idempotent_created(
+            "project-session",
+            request.headers.get("Idempotency-Key"),
+            {},
+            lambda: _create_session(
+                {"workspace_id": project["workspace_id"], "project_id": project_id}
+            ),
+        )
+
+    @app.get("/projects/{project_id}/sessions")
+    async def list_project_sessions(project_id):
+        project_id = str(project_id)
+        return [
+            item
+            for item in state["sessions"].values()
+            if item.get("project_id") == project_id
+        ]
+
+    @app.delete("/projects/{project_id}", status_code=204)
+    async def delete_project(project_id):
+        project_id = str(project_id)
+        if project_id not in state["projects"]:
+            return error("PROJECT_NOT_FOUND", "project not found", 404)
+        if any(
+            item.get("project_id") == project_id for item in state["sessions"].values()
+        ):
+            return error(
+                "PROJECT_HAS_SESSIONS",
+                "project still has sessions and cannot be deleted",
+                409,
+            )
+        state["projects"].pop(project_id, None)
+        return Response(status_code=204)
+
+    @app.post("/sessions/{session_id}/conversations", status_code=201)
+    async def create_conversation(session_id, request: Request):
+        session_id = str(session_id)
+        if session_id not in state["sessions"]:
+            return error("SESSION_NOT_FOUND", "session not found", 404)
+        body = await request.json()
+        if not body.get("task"):
+            return error("INVALID_TASK", "task cannot be empty", 422)
+        return idempotent_created(
+            "conversation",
+            request.headers.get("Idempotency-Key"),
+            body,
+            lambda: _create_conversation(session_id, body),
+        )
+
+    def _create_conversation(session_id: str, body: dict) -> dict:
+        conversation_id = str(_uuid4())
+        run_id = str(_uuid4())
+        item = {
+            "id": conversation_id,
+            "session_id": session_id,
+            "parent_conversation_id": body.get("parent_conversation_id"),
+            "task": body["task"],
+            "created_at": now,
+            "run": {
+                "run_id": run_id,
+                "state": "RUNNING",
+                "last_seq": 0,
+                "pending_interaction": None,
+                "result_summary": None,
+                "checkpoint_id": None,
+            },
+        }
+        state["conversations"][conversation_id] = item
+        state["events"][conversation_id] = []
+        if body["task"].startswith("ask:"):
+            item["run"]["state"] = "WAITING_INPUT"
+            interaction = {
+                "interaction_id": str(_uuid4()),
+                "kind": "input",
+                "question": body["task"][4:],
+            }
+            item["run"]["pending_interaction"] = interaction
+            append_event(conversation_id, "interaction.requested", interaction)
+        else:
+            append_event(
+                conversation_id,
+                "message",
+                {"content": f"completed: {body['task']}"},
+            )
+            append_event(
+                conversation_id,
+                "run.completed",
+                {"result": {"status": "completed"}},
+            )
+            item["run"]["state"] = "COMPLETED"
+        return item
+
+    @app.get("/conversations/{conversation_id}")
+    async def get_conversation(conversation_id):
+        conversation_id = str(conversation_id)
+        if conversation_id not in state["conversations"]:
+            return error("CONVERSATION_NOT_FOUND", "conversation not found", 404)
+        return state["conversations"][conversation_id]
+
+    @app.get("/conversations/{conversation_id}/events")
+    async def list_events(conversation_id, after_seq: int = Query(default=0, ge=0)):
+        conversation_id = str(conversation_id)
+        if conversation_id not in state["conversations"]:
+            return error("CONVERSATION_NOT_FOUND", "conversation not found", 404)
+        return [
+            event
+            for event in state["events"][conversation_id]
+            if event["seq"] > after_seq
+        ]
+
+    @app.get("/conversations/{conversation_id}/events/stream")
+    async def stream_events(
+        conversation_id, after_seq: int = Query(default=0, ge=0)
+    ):
+        conversation_id = str(conversation_id)
+        if conversation_id not in state["conversations"]:
+            raise HTTPException(404, "conversation not found")
+        events = [
+            event
+            for event in state["events"][conversation_id]
+            if event["seq"] > after_seq
+        ]
+
+        def body():
+            for event in events:
+                yield f"id: {event['seq']}\ndata: {_json.dumps(event)}\n\n"
+
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    @app.post("/conversations/{conversation_id}/input")
+    async def submit_input(conversation_id, request: Request):
+        conversation_id = str(conversation_id)
+        if conversation_id not in state["conversations"]:
+            return error("CONVERSATION_NOT_FOUND", "conversation not found", 404)
+        conversation = state["conversations"][conversation_id]
+        body = await request.json()
+
+        def apply():
+            expected_seq = body.get("expected_seq")
+            if (
+                expected_seq is not None
+                and expected_seq != conversation["run"]["last_seq"]
+            ):
+                return error(
+                    "CONFLICT", "expected_seq does not match conversation", 409
+                )
+            pending = conversation["run"].get("pending_interaction")
+            if not pending or conversation["run"]["state"] != "WAITING_INPUT":
+                return error(
+                    "INVALID_STATE", "conversation is not waiting for input", 409
+                )
+            if body.get("interaction_id") != pending["interaction_id"]:
+                return error(
+                    "INTERACTION_NOT_FOUND",
+                    "interaction does not match pending interaction",
+                    409,
+                )
+            append_event(
+                conversation_id,
+                "interaction.input",
+                {
+                    "interaction_id": body["interaction_id"],
+                    "value": body.get("value"),
+                },
+            )
+            append_event(
+                conversation_id,
+                "run.completed",
+                {"result": {"status": "completed"}},
+            )
+            conversation["run"]["state"] = "COMPLETED"
+            conversation["run"]["pending_interaction"] = None
+            return conversation
+
+        value, _created = idempotent(
+            "input", request.headers.get("Idempotency-Key"), body, apply
+        )
+        if isinstance(value, JSONResponse):
+            return value
+        return value
+
+    @app.post("/conversations/{conversation_id}/approval")
+    async def submit_approval(conversation_id, request: Request):
+        conversation_id = str(conversation_id)
+        if conversation_id not in state["conversations"]:
+            return error("CONVERSATION_NOT_FOUND", "conversation not found", 404)
+        body = await request.json()
+        decision = body.get("decision")
+        conversation = state["conversations"][conversation_id]
+
+        def apply():
+            if decision not in {"APPROVE_ONCE", "REJECT"}:
+                return error(
+                    "INVALID_DECISION",
+                    "decision must be APPROVE_ONCE or REJECT",
+                    422,
+                )
+            expected_seq = body.get("expected_seq")
+            if (
+                expected_seq is not None
+                and expected_seq != conversation["run"]["last_seq"]
+            ):
+                return error(
+                    "CONFLICT", "expected_seq does not match conversation", 409
+                )
+            pending = conversation["run"].get("pending_interaction")
+            if not pending or conversation["run"]["state"] != "WAITING_INPUT":
+                return error(
+                    "INVALID_STATE",
+                    "conversation is not waiting for approval",
+                    409,
+                )
+            if body.get("approval_id") != pending["interaction_id"]:
+                return error(
+                    "INTERACTION_NOT_FOUND",
+                    "approval does not match pending interaction",
+                    409,
+                )
+            append_event(
+                conversation_id,
+                "approval.decided",
+                {"approval_id": body["approval_id"], "decision": decision},
+            )
+            append_event(
+                conversation_id,
+                "run.completed",
+                {"result": {"status": "completed", "approval": decision}},
+            )
+            conversation["run"]["state"] = "COMPLETED"
+            conversation["run"]["pending_interaction"] = None
+            return conversation
+
+        value, _created = idempotent(
+            "approval", request.headers.get("Idempotency-Key"), body, apply
+        )
+        if isinstance(value, JSONResponse):
+            return value
+        return value
+
+    @app.post("/conversations/{conversation_id}/cancel")
+    async def cancel(conversation_id, request: Request):
+        conversation_id = str(conversation_id)
+        if conversation_id not in state["conversations"]:
+            return error("CONVERSATION_NOT_FOUND", "conversation not found", 404)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - cancel allows an empty request body
+            body = {}
+        conversation = state["conversations"][conversation_id]
+
+        def apply():
+            expected_seq = body.get("expected_seq")
+            if (
+                expected_seq is not None
+                and expected_seq != conversation["run"]["last_seq"]
+            ):
+                return error(
+                    "CONFLICT", "expected_seq does not match conversation", 409
+                )
+            if conversation["run"]["state"] not in {
+                "COMPLETED",
+                "FAILED",
+                "CANCELLED",
+                "LOST",
+            }:
+                append_event(conversation_id, "run.cancelled", {})
+                conversation["run"]["state"] = "CANCELLED"
+                conversation["run"]["pending_interaction"] = None
+            return conversation
+
+        value, _created = idempotent(
+            "cancel", request.headers.get("Idempotency-Key"), body, apply
+        )
+        if isinstance(value, JSONResponse):
+            return value
+        return value
+
+    return app
+
+
+@pytest.mark.asyncio
+async def test_api_acceptance_operation_produces_structured_report(tmp_path):
+    upstream = _fake_agentsupport_app()
+    controller = DevConsoleController(
+        command_runner=FakeCommandRunner(),
+        agentsupport_url="http://agentsupport.test",
+        agentsupport_transport=ASGITransport(app=upstream),
+    )
+    console = create_dev_console_app(
+        controller,
+        token="accept-token",
+        monitor_log_dir=tmp_path,
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=console), base_url="http://console"
+    ) as client:
+        response = await client.post(
+            "/api/actions/api-accept",
+            headers={"X-Dev-Console-Token": "accept-token"},
+            json={
+                "include_negative": True,
+                "include_sse": True,
+                "include_task_flow": True,
+            },
+        )
+        operation = await _wait_for_operation(
+            client, response.json()["id"], "accept-token"
+        )
+
+    assert response.status_code == 202
+    assert operation["status"] == "succeeded", operation.get("error")
+    result = operation["result"]
+    assert result["summary"]["total"] == 14
+    assert result["summary"]["failed"] == 0
+    assert result["coverage"]["operations_covered"] == result["coverage"][
+        "operations_total"
+    ]
+    assert result["coverage"]["uncovered"] == []
+    check_ids = {check["id"] for check in result["checks"]}
+    assert {
+        "OP-01",
+        "OP-02",
+        "OP-03",
+        "OP-04",
+        "RS-01",
+        "RS-02",
+        "RS-03",
+        "CV-01",
+        "CV-02",
+        "CV-03",
+        "CV-04",
+        "IN-01",
+        "IN-02",
+        "IN-03",
+    } <= check_ids

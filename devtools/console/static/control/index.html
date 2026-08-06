@@ -5,170 +5,599 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <meta name="dev-console-token" content="__DEV_CONSOLE_TOKEN__">
-    <title>AgentSupport 部署控制台</title>
+    <title>AgentSupport 示范平台</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/assets/styles.css">
   </head>
   <body>
-    <header class="app-header">
-      <div class="brand-block">
-        <span class="brand-mark" aria-hidden="true">AS</span>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-logo">AS</span>
         <div>
-          <p class="product-name">AgentSupport / Distributed Lab</p>
-          <h1>部署与验收控制台</h1>
+          <div class="brand-name">AgentSupport</div>
+          <div class="brand-sub">AI 应用示范平台</div>
         </div>
       </div>
-      <nav class="header-nav" aria-label="控制台导航">
-        <a class="nav-link active" href="/">部署控制</a>
-        <a class="nav-link" href="/tasks/">任务调试</a>
+      <nav class="primary-nav">
+        <button class="primary-btn active" data-primary="demo" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+          示范
+        </button>
+        <button class="primary-btn" data-primary="deploy" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg>
+          部署
+        </button>
       </nav>
-      <div class="header-state" aria-live="polite">
-        <span id="stack-dot" class="status-dot neutral"></span>
-        <span id="stack-label">正在读取服务状态</span>
-        <button id="refresh-status" class="icon-button" type="button" title="刷新服务状态" aria-label="刷新服务状态">↻</button>
+      <div class="topbar-right">
+        <span class="env-pill"><span id="env-api-dot" class="dot warn"></span><span id="env-api-label">API 未知</span></span>
+        <span class="env-pill"><span id="env-docker-dot" class="dot warn"></span><span id="env-docker-label">Docker 未知</span></span>
+        <span class="avatar">管</span>
       </div>
     </header>
 
-    <main class="console-shell">
-      <aside class="control-panel" aria-labelledby="control-title">
-        <div class="section-heading">
-          <p class="section-index">拓扑配置</p>
-          <h2 id="control-title">启动参数</h2>
+    <div class="layout">
+      <aside class="sidebar" id="sidebar-demo">
+        <div class="side-group">
+          <div class="side-label">示范</div>
+          <button class="side-item active" data-view="demo-overview" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+            总览
+          </button>
+          <button class="side-item" data-view="demo-orgs" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4"/></svg>
+            组织管理
+          </button>
+          <button class="side-item" data-view="demo-users" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 21v-2a6 6 0 0 1 12 0v2M16 8a3.5 3.5 0 0 1 0 7M21 21v-2a6 6 0 0 0-4-5.6"/></svg>
+            用户管理
+          </button>
+          <button class="side-item" data-view="demo-projects" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+            项目管理
+          </button>
+          <button class="side-item" data-view="demo-presets" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+            预设管理
+          </button>
         </div>
-
-        <form id="stack-form">
-          <fieldset class="field-group connection-group">
-            <legend>Docker 连接</legend>
-            <label class="select-control" for="docker-transport">
-              <span>执行位置</span>
-              <select id="docker-transport">
-                <option value="auto">自动</option>
-                <option value="wsl2">WSL2 发行版</option>
-                <option value="local">本机 Docker CLI</option>
-                <option value="context">Docker context</option>
-              </select>
-            </label>
-            <label id="wsl-distribution-field" class="text-control" for="wsl-distribution">
-              <span>WSL 发行版</span>
-              <input id="wsl-distribution" type="text" maxlength="128" list="wsl-distributions" placeholder="默认发行版">
-              <datalist id="wsl-distributions"></datalist>
-            </label>
-            <label id="docker-context-field" class="text-control" for="docker-context" hidden>
-              <span>Context 名称</span>
-              <input id="docker-context" type="text" maxlength="128" placeholder="default">
-            </label>
-            <div class="connection-state">
-              <span id="connection-dot" class="status-dot neutral" aria-hidden="true"></span>
-              <span id="connection-label">尚未检测</span>
-              <button id="probe-connection" class="icon-button compact-icon" type="button" title="检测 Docker 连接" aria-label="检测 Docker 连接">↻</button>
-            </div>
-          </fieldset>
-
-          <div class="number-grid">
-            <label class="number-control" for="api-replicas">
-              <span>API 副本</span>
-              <input id="api-replicas" type="number" min="1" max="8" value="2" required>
-            </label>
-            <label class="number-control" for="worker-replicas">
-              <span>Worker 副本</span>
-              <input id="worker-replicas" type="number" min="1" max="16" value="3" required>
-            </label>
-          </div>
-
-          <fieldset class="field-group">
-            <legend>Runner 模式</legend>
-            <div class="segmented-control">
-              <label><input type="radio" name="runner-mode" value="deterministic" checked><span>确定性</span></label>
-              <label><input type="radio" name="runner-mode" value="trae"><span>Trae</span></label>
-            </div>
-          </fieldset>
-
-          <label class="toggle-row" for="rebuild-image">
-            <span>
-              <strong>重新构建镜像</strong>
-              <small>使用当前工作区源码</small>
-            </span>
-            <input id="rebuild-image" type="checkbox" checked>
-          </label>
-
-          <div class="primary-actions">
-            <button id="deploy-button" class="button primary" type="submit"><span aria-hidden="true">▶</span>部署并启动</button>
-            <button id="start-button" class="button secondary" type="button"><span aria-hidden="true">↗</span>直接启动</button>
-          </div>
-          <button id="stop-button" class="button danger ghost full-width" type="button"><span aria-hidden="true">■</span>停止服务</button>
-        </form>
-
-        <section class="acceptance-controls" aria-labelledby="acceptance-title">
-          <div class="section-heading compact">
-            <p class="section-index">验收范围</p>
-            <h2 id="acceptance-title">自动化检查</h2>
-          </div>
-          <label class="check-row"><input id="include-postgres" type="checkbox" checked><span>PostgreSQL 并发</span></label>
-          <label class="check-row"><input id="include-task" type="checkbox" checked><span>真实任务闭环</span></label>
-          <button id="accept-button" class="button approve full-width" type="button"><span aria-hidden="true">✓</span>执行回归验收</button>
-        </section>
+        <div class="side-group">
+          <div class="side-label">Agent</div>
+          <button class="side-item" data-view="demo-agent" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="4"/></svg>
+            Agent 工作台
+          </button>
+        </div>
       </aside>
 
-      <section class="operation-panel" aria-labelledby="operation-title">
-        <div class="panel-toolbar">
-          <div class="section-heading compact">
-            <p class="section-index">操作轨道</p>
-            <h2 id="operation-title">等待操作</h2>
-          </div>
-          <span id="operation-status" class="status-badge idle">IDLE</span>
+      <aside class="sidebar" id="sidebar-deploy" hidden>
+        <div class="side-group">
+          <div class="side-label">部署</div>
+          <button class="side-item active" data-view="deploy-status" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            服务状态
+          </button>
+          <button class="side-item" data-view="deploy-actions" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+            部署操作
+          </button>
+          <button class="side-item" data-view="deploy-acceptance" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+            验收中心
+          </button>
+          <button class="side-item" data-view="deploy-api" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M13 5l-2 14"/></svg>
+            API 参考
+          </button>
+          <button class="side-item" data-view="monitor" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M4 12h16M4 19h10"/><circle cx="19" cy="19" r="3"/></svg>
+            监控中心
+          </button>
         </div>
-
-        <ol id="step-track" class="step-track" aria-live="polite">
-          <li class="step-row idle">
-            <span class="step-marker">·</span>
-            <div><strong>尚未开始</strong><small>部署或验收步骤将在此显示</small></div>
-          </li>
-        </ol>
-
-        <div class="terminal-toolbar">
-          <span>实时输出</span>
-          <button id="copy-log" class="text-button" type="button">复制日志</button>
-        </div>
-        <pre id="terminal-output" class="terminal-output" aria-live="polite"><span class="terminal-muted">$ 等待命令</span></pre>
-      </section>
-
-      <aside class="status-panel" aria-labelledby="services-title">
-        <div class="section-heading">
-          <p class="section-index">运行拓扑</p>
-          <h2 id="services-title">服务状态</h2>
-        </div>
-
-        <div class="summary-strip">
-          <div><span>API</span><strong id="api-count">0</strong></div>
-          <div><span>Worker</span><strong id="worker-count">0</strong></div>
-          <div><span>队列</span><strong id="queue-depth">-</strong></div>
-          <div><span>运行时</span><strong id="runtime-count">-</strong></div>
-        </div>
-
-        <div class="service-table-wrap">
-          <table class="service-table">
-            <thead><tr><th>服务</th><th>实例</th><th>状态</th></tr></thead>
-            <tbody id="service-list">
-              <tr><td colspan="3" class="empty-cell">正在读取</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <section class="result-panel" aria-labelledby="result-title">
-          <div class="resource-heading">
-            <h3 id="result-title">最近验收</h3>
-            <span id="result-time" class="mono-value">-</span>
-          </div>
-          <dl id="result-list" class="result-list">
-            <div><dt>API 路由</dt><dd>未执行</dd></div>
-            <div><dt>运行指标</dt><dd>未执行</dd></div>
-            <div><dt>任务闭环</dt><dd>未执行</dd></div>
-          </dl>
-        </section>
       </aside>
-    </main>
 
-    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+      <main class="content">
+        <!-- ============ DEMO: overview ============ -->
+        <section class="view active" id="view-demo-overview">
+          <div class="page-head">
+            <div>
+              <h1>总览</h1>
+              <p>组织、用户、项目与预设的运行概览，以及最近的 Agent 任务。</p>
+            </div>
+            <button class="btn primary" type="button" onclick="App.gotoView('demo-agent')">进入 Agent 工作台</button>
+          </div>
+          <div class="grid stats-grid">
+            <div class="stat"><div class="label">组织</div><div class="value" id="stat-orgs">-</div><div class="hint">资源归属顶层单元</div></div>
+            <div class="stat"><div class="label">用户</div><div class="value" id="stat-users">-</div><div class="hint">隶属各组织</div></div>
+            <div class="stat"><div class="label">项目</div><div class="value" id="stat-projects">-</div><div class="hint">业务容器 / 工作区</div></div>
+            <div class="stat"><div class="label">预设</div><div class="value" id="stat-presets">-</div><div class="hint">可复用配置包</div></div>
+            <div class="stat"><div class="label">活跃 Agent</div><div class="value accent" id="stat-active">-</div><div class="hint">当前运行实例</div></div>
+          </div>
+          <div class="grid" style="grid-template-columns: 1fr 1fr;">
+            <div class="card">
+              <div class="card-head">
+                <h2>最近运行</h2>
+                <button class="btn sm" type="button" id="recent-refresh">刷新</button>
+              </div>
+              <div id="recent-empty" class="empty" hidden>暂无任务，去 Agent 工作台创建第一个任务。</div>
+              <table id="recent-table" hidden>
+                <thead><tr><th>任务</th><th>项目</th><th>状态</th><th>时间</th></tr></thead>
+                <tbody id="recent-runs"></tbody>
+              </table>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <h2>预设概览</h2>
+                <span class="sub">PRESETS</span>
+              </div>
+              <div id="preset-overview" class="preset-overview"></div>
+              <div style="margin-top:14px; padding-top:12px; border-top:1px dashed var(--border);">
+                <div class="label" style="color:var(--faint); font-size:11.5px; margin-bottom:6px;">资源模型</div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <span class="chip gray">组织</span><span class="chip gray">用户</span><span class="chip gray">项目</span><span class="chip gray">会话</span><span class="chip gray">对话</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ DEMO: organizations ============ -->
+        <section class="view" id="view-demo-orgs">
+          <div class="page-head">
+            <div>
+              <h1>组织管理</h1>
+              <p>组织（租户）是资源归属的顶层单元，用户、预设与项目均挂载在组织之下。</p>
+            </div>
+            <button class="btn primary" type="button" id="new-org-btn">新建组织</button>
+          </div>
+          <div class="card">
+            <div id="org-empty" class="empty" hidden>还没有组织，点击右上角“新建组织”创建第一个。</div>
+            <table id="org-table" hidden>
+              <thead><tr><th>组织</th><th>标识</th><th>用户数</th><th>项目数</th><th>创建时间</th><th></th></tr></thead>
+              <tbody id="org-rows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ============ DEMO: users ============ -->
+        <section class="view" id="view-demo-users">
+          <div class="page-head">
+            <div>
+              <h1>用户管理</h1>
+              <p>用户隶属于组织，拥有自己的预设集合，并可创建与管理项目。</p>
+            </div>
+            <button class="btn primary" type="button" id="new-user-btn">新建用户</button>
+          </div>
+          <div class="card">
+            <div id="user-empty" class="empty" hidden>还没有用户。</div>
+            <table id="user-table" hidden>
+              <thead><tr><th>用户</th><th>组织</th><th>项目数</th><th>预设数</th><th>创建时间</th><th></th></tr></thead>
+              <tbody id="user-rows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ============ DEMO: projects ============ -->
+        <section class="view" id="view-demo-projects">
+          <div class="page-head">
+            <div>
+              <h1>项目管理</h1>
+              <p>项目是业务容器，一个项目对应一个工作区；会话直接属于项目，并可导入预设配置。</p>
+            </div>
+            <button class="btn primary" type="button" id="new-project-btn">新建项目</button>
+          </div>
+          <div id="project-empty" class="empty card" hidden>还没有项目，点击右上角“新建项目”创建第一个。</div>
+          <div class="card-grid" id="project-grid"></div>
+        </section>
+
+        <!-- ============ DEMO: presets ============ -->
+        <section class="view" id="view-demo-presets">
+          <div class="page-head">
+            <div>
+              <h1>预设管理</h1>
+              <p>预设是用户级可复用配置包：Skill、工具策略、资源与权限。项目导入后为快照语义。</p>
+            </div>
+            <button class="btn primary" type="button" id="new-preset-btn">新建预设</button>
+          </div>
+          <div id="preset-empty" class="empty card" hidden>还没有预设。</div>
+          <div class="card-grid" id="preset-grid"></div>
+        </section>
+
+        <!-- ============ DEMO: agent workspace ============ -->
+        <section class="view" id="view-demo-agent">
+          <div id="agent-empty-state" class="empty card" hidden>
+            <p>还没有可用的项目。请先到 <a href="javascript:App.gotoView('demo-projects')">项目管理</a> 创建项目，再回到这里运行 Agent。</p>
+          </div>
+          <div id="agent-layout-wrap" hidden>
+            <div class="agent-toolbar card">
+              <div class="field" style="margin:0; min-width:220px;">
+                <label>项目</label>
+                <select id="agent-project-select"></select>
+              </div>
+              <div class="field" style="margin:0; min-width:200px;">
+                <label>会话</label>
+                <select id="agent-session-select"></select>
+              </div>
+              <button class="btn" type="button" id="agent-new-session-btn">新建会话</button>
+              <button class="btn sm" type="button" id="agent-refresh-btn">刷新</button>
+            </div>
+            <div class="agent-layout">
+              <aside class="card agent-panel">
+                <div class="card-head"><h2>会话</h2><span class="sub" id="agent-conv-count">0</span></div>
+                <div id="agent-conv-empty" class="empty" style="padding:16px;">该会话下还没有对话</div>
+                <div class="conv-list" id="agent-conv-list"></div>
+              </aside>
+
+              <section class="card chat">
+                <div class="chat-scroll" id="agent-chat-scroll">
+                  <div id="agent-chat-empty" class="empty">
+                    <p>选择左侧对话，或在下方向 Agent 下达新任务。</p>
+                  </div>
+                </div>
+                <div class="composer">
+                  <textarea id="agent-task-input" placeholder="给 Agent 下达任务，例如：分析项目结构并输出说明文档……" rows="2"></textarea>
+                  <div class="composer-row">
+                    <div class="composer-hints">
+                      <span class="hint-chip" data-hint="ask: 请说明当前任务进展">询问进展 (ask:)</span>
+                      <span class="hint-chip" data-hint="在工作区创建 MANUAL-ACCEPTANCE.txt，内容为 MANUAL-ACCEPTANCE-OK">确定性完成</span>
+                    </div>
+                    <button class="send-btn" id="agent-send-btn" type="button" title="发送">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-11 11M22 2 15 22l-4-9-9-4 20-7z"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <aside class="card agent-panel">
+                <div class="card-head"><h2>运行状态</h2><span class="chip gray" id="agent-run-chip">空闲</span></div>
+                <div class="run-strip">
+                  <div class="run-cell"><div class="label">状态</div><div class="value" id="agent-run-state">IDLE</div></div>
+                  <div class="run-cell"><div class="label">序号</div><div class="value mono" id="agent-run-seq">0</div></div>
+                  <div class="run-cell"><div class="label">运行 ID</div><div class="value mono" id="agent-run-id" style="font-size:11px;">-</div></div>
+                </div>
+                <div class="card-head"><h2>事件轨道</h2>
+                  <button class="btn sm danger" type="button" id="agent-cancel-btn" disabled>取消运行</button>
+                </div>
+                <div id="agent-event-empty" class="empty" style="padding:14px;">等待事件</div>
+                <div class="timeline" id="agent-timeline" hidden></div>
+                <div id="agent-interaction-empty" class="empty" style="padding:12px; border-top:1px dashed var(--border); margin-top:10px;">当前没有待处理交互</div>
+                <div id="agent-interaction" hidden>
+                  <div class="approval" id="agent-approval-view" hidden>
+                    <div class="head">
+                      <span class="chip violet">工具审批</span>
+                      <span class="hash" id="agent-batch-hash">-</span>
+                    </div>
+                    <div id="agent-tool-calls"></div>
+                    <div class="approval-actions">
+                      <button class="btn danger" type="button" id="agent-reject-btn">拒绝</button>
+                      <button class="btn primary" type="button" id="agent-approve-btn">仅批准本次</button>
+                    </div>
+                  </div>
+                  <form id="agent-input-form" hidden>
+                    <div class="head" style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                      <span class="chip blue">等待输入</span>
+                      <span class="hash" id="agent-interaction-id">-</span>
+                    </div>
+                    <textarea id="agent-input-value" rows="3" placeholder="输入回复内容…" style="width:100%; border:1px solid var(--border-strong); border-radius:9px; padding:8px 10px; font:inherit; resize:vertical;"></textarea>
+                    <button class="btn primary" style="width:100%; margin-top:8px;" type="submit">提交回复</button>
+                  </form>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ DEPLOY: service status ============ -->
+        <section class="view" id="view-deploy-status">
+          <div class="page-head">
+            <div>
+              <h1>服务状态</h1>
+              <p>Compose 栈的服务实例、健康端点与运行指标。</p>
+            </div>
+            <button class="btn" type="button" id="deploy-refresh-btn">刷新</button>
+          </div>
+          <div class="grid stats-grid" style="grid-template-columns: repeat(4, 1fr);">
+            <div class="stat"><div class="label">API 副本</div><div class="value ok" id="api-count">-</div><div class="hint">运行中实例</div></div>
+            <div class="stat"><div class="label">Worker</div><div class="value ok" id="worker-count">-</div><div class="hint">运行中实例</div></div>
+            <div class="stat"><div class="label">队列深度</div><div class="value" id="queue-depth">-</div><div class="hint">等待任务</div></div>
+            <div class="stat"><div class="label">活跃运行</div><div class="value accent" id="runtime-count">-</div><div class="hint">当前运行实例</div></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>服务实例</h2><span class="sub" id="stack-target">DOCKER COMPOSE</span></div>
+            <div id="service-list" class="service-list"><div class="empty">正在读取</div></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>健康端点</h2><span class="sub">AGENTSUPPORT API</span></div>
+            <div class="health-grid" id="health-cards">
+              <div class="health-card" data-endpoint="/live"><div class="path">/live</div><div class="state">-</div></div>
+              <div class="health-card" data-endpoint="/ready"><div class="path">/ready</div><div class="state">-</div></div>
+              <div class="health-card" data-endpoint="/metrics"><div class="path">/metrics</div><div class="state">-</div></div>
+              <div class="health-card" data-endpoint="/cores"><div class="path">/cores</div><div class="state">-</div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ DEPLOY: actions ============ -->
+        <section class="view" id="view-deploy-actions">
+          <div class="page-head">
+            <div>
+              <h1>部署操作</h1>
+              <p>在 Compose 栈外管理分布式服务：构建、启动、扩缩容与停止。</p>
+            </div>
+          </div>
+          <div class="deploy-grid">
+            <div class="card">
+              <div class="card-head"><h2>启动参数</h2></div>
+              <div class="field">
+                <label>Docker 执行位置</label>
+                <select id="docker-transport">
+                  <option value="auto">自动</option>
+                  <option value="wsl2">WSL2 发行版</option>
+                  <option value="local">本机 Docker CLI</option>
+                  <option value="context">Docker context</option>
+                </select>
+              </div>
+              <div class="field" id="wsl-distribution-field" hidden>
+                <label>WSL 发行版</label>
+                <input id="wsl-distribution" type="text" list="wsl-distributions" placeholder="默认发行版">
+                <datalist id="wsl-distributions"></datalist>
+              </div>
+              <div class="field" id="docker-context-field" hidden>
+                <label>Context 名称</label>
+                <input id="docker-context" type="text" placeholder="default">
+              </div>
+              <div class="two-col">
+                <div class="field"><label>API 副本</label><input id="api-replicas" type="number" value="2" min="1" max="8"></div>
+                <div class="field"><label>Worker 副本</label><input id="worker-replicas" type="number" value="3" min="1" max="16"></div>
+              </div>
+              <div class="field">
+                <label>Runner 模式</label>
+                <div class="seg">
+                  <label><input type="radio" name="runner-mode" value="deterministic" checked><span>确定性</span></label>
+                  <label><input type="radio" name="runner-mode" value="trae"><span>Trae</span></label>
+                </div>
+              </div>
+              <div class="check-row"><input id="rebuild-image" type="checkbox" checked><label for="rebuild-image">重新构建镜像（使用当前工作区源码）</label></div>
+              <div class="connection-state" id="docker-connection">
+                <span id="connection-dot" class="dot warn"></span>
+                <span id="connection-label">尚未检测 Docker</span>
+                <button class="btn sm" type="button" id="probe-connection">检测</button>
+              </div>
+              <div class="action-row" style="margin-top:12px;">
+                <button class="btn primary" type="button" id="deploy-button">部署并启动</button>
+                <button class="btn" type="button" id="start-button">直接启动</button>
+              </div>
+              <button class="btn danger" style="width:100%; margin-top:10px;" type="button" id="stop-button">停止服务</button>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>部署说明</h2><span class="sub">BEST PRACTICE</span></div>
+              <div class="entity-desc" style="min-height:0;">控制台运行在 Compose 栈之外，容器替换期间仍可用；WSL2 构建会把构建输入暂存到 WSL 文件系统，避免 DrvFS 元数据限制。部署完成后自动等待 <code>/ready</code> 就绪再返回结果。</div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+                <span class="chip gray">docker compose up -d</span>
+                <span class="chip gray">--scale api=N</span>
+                <span class="chip gray">--scale worker=N</span>
+                <span class="chip gray">SESSION_RUNNER_MODE</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ DEPLOY: acceptance ============ -->
+        <section class="view" id="view-deploy-acceptance">
+          <div class="page-head">
+            <div>
+              <h1>验收中心</h1>
+              <p>两层验收：部署回归（静态检查 / pytest / PostgreSQL 并发 / 在线冒烟）与 API 契约验收（全量操作覆盖）。</p>
+            </div>
+          </div>
+          <div class="accept-grid">
+            <div class="card">
+              <div class="card-head"><h2>部署回归验收</h2></div>
+              <div class="check-row"><input id="include-postgres" type="checkbox" checked><label for="include-postgres">PostgreSQL 并发测试</label></div>
+              <div class="check-row"><input id="include-task" type="checkbox" checked><label for="include-task">真实任务闭环冒烟</label></div>
+              <button class="btn primary" style="width:100%; margin-top:12px;" type="button" id="accept-button">执行回归验收</button>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>API 契约验收</h2></div>
+              <div class="check-row"><input id="api-accept-negative" type="checkbox" checked><label for="api-accept-negative">错误路径与边界</label></div>
+              <div class="check-row"><input id="api-accept-sse" type="checkbox" checked><label for="api-accept-sse">SSE 断线续传</label></div>
+              <div class="check-row"><input id="api-accept-task" type="checkbox" checked><label for="api-accept-task">任务流与交互闭环</label></div>
+              <button class="btn primary" style="width:100%; margin-top:12px;" type="button" id="api-accept-button">执行 API 契约验收</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>最近一次验收报告</h2><span id="last-report-badge" class="chip gray">未执行</span></div>
+            <div id="last-report-empty" class="empty">执行验收后，完整报告会显示在右下角操作坞中。</div>
+            <div id="last-report" hidden></div>
+          </div>
+        </section>
+
+        <!-- ============ DEPLOY: API reference ============ -->
+        <section class="view" id="view-deploy-api">
+          <div class="page-head">
+            <div>
+              <h1>API 参考</h1>
+              <p>由运行时 OpenAPI 自动生成的全部接口：搜索、构造请求并查看响应，也是 API 使用参考。</p>
+            </div>
+            <button class="btn" type="button" id="reload-spec">重新载入 OpenAPI</button>
+          </div>
+          <div class="card explorer-toolbar">
+            <div class="field" style="margin:0; flex:1;">
+              <label>搜索接口</label>
+              <input id="explorer-search" type="search" placeholder="按路径、摘要或标签过滤">
+            </div>
+            <div class="field" style="margin:0; min-width:180px;">
+              <label>标签</label>
+              <select id="explorer-tag"><option value="">全部</option></select>
+            </div>
+            <span class="mono" id="explorer-count" style="align-self:flex-end; padding-bottom:8px;">-</span>
+          </div>
+          <div class="explorer-layout">
+            <aside class="card operation-list-panel">
+              <div class="card-head"><h2>操作列表</h2></div>
+              <div id="operation-list" class="operation-list"></div>
+            </aside>
+            <section class="card request-panel">
+              <div class="card-head"><h2 id="request-title">选择一个接口</h2></div>
+              <p class="entity-desc" id="operation-summary" style="min-height:0; margin-bottom:12px;">从左侧选择一个操作，自动生成请求表单。</p>
+              <div id="request-builder" hidden>
+                <div class="endpoint-line">
+                  <span id="request-method" class="method-badge get">GET</span>
+                  <code id="request-path" class="endpoint-path"></code>
+                </div>
+                <div id="path-params" class="param-grid"></div>
+                <div id="query-params" class="param-grid"></div>
+                <details class="collapsible" open>
+                  <summary>请求头</summary>
+                  <div class="param-grid two-col">
+                    <div class="field" style="margin:0;"><label>Idempotency-Key（POST 幂等）</label><input id="idempotency-key" type="text"></div>
+                    <div class="field" style="margin:0;"><label>X-Correlation-ID</label><input id="correlation-id" type="text"></div>
+                  </div>
+                  <button class="btn sm" type="button" id="regenerate-keys" style="margin-top:8px;">重新生成</button>
+                </details>
+                <div id="body-editor-block" class="field">
+                  <div class="editor-heading">
+                    <label>请求体 (JSON)</label>
+                    <span id="body-required-badge" class="chip gray">可选</span>
+                  </div>
+                  <textarea id="body-editor" class="json-editor" rows="10" spellcheck="false"></textarea>
+                  <button class="btn sm" type="button" id="reset-body" style="margin-top:6px;">重置示例</button>
+                </div>
+                <div class="send-row">
+                  <button class="btn primary" type="button" id="send-request">发送请求</button>
+                  <button class="btn" type="button" id="copy-curl">复制 cURL</button>
+                  <span id="request-status" class="chip gray">READY</span>
+                </div>
+                <details class="collapsible" id="reference-details" style="margin-top:14px;">
+                  <summary>接口参考（参数 / 请求体 / 响应）</summary>
+                  <div id="reference-body"></div>
+                </details>
+              </div>
+            </section>
+            <section class="card response-panel">
+              <div class="card-head"><h2 id="response-title">响应</h2></div>
+              <div class="response-meta">
+                <span id="response-status" class="chip gray">-</span>
+                <span class="mono" id="response-duration">-</span>
+                <div style="margin-left:auto; display:flex; gap:8px;">
+                  <button class="btn sm" type="button" id="copy-response">复制 JSON</button>
+                </div>
+              </div>
+              <details class="collapsible">
+                <summary>响应头</summary>
+                <pre id="response-headers-text" class="headers-text"></pre>
+              </details>
+              <pre id="response-body" class="response-body">// 发送请求后在此显示响应</pre>
+            </section>
+          </div>
+        </section>
+
+        <!-- ============ DEPLOY: monitor ============ -->
+        <section class="view" id="view-monitor">
+          <div class="page-head">
+            <div>
+              <h1>监控中心</h1>
+              <p>持续监控 WSL、Docker、容器与 API；部署后意外下线会自动采集证据（容器日志 + 系统日志 + Windows 事件）。</p>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted);">
+                <input id="monitor-auto" type="checkbox" checked>自动刷新
+              </label>
+              <button class="btn" type="button" id="monitor-refresh-btn">刷新</button>
+            </div>
+          </div>
+
+          <div class="grid stats-grid" style="grid-template-columns: repeat(4, 1fr);">
+            <div class="stat"><div class="label">WSL 环境</div><div class="value" id="mon-wsl-state">-</div><div class="hint" id="mon-wsl-boot">-</div></div>
+            <div class="stat"><div class="label">Docker 引擎</div><div class="value" id="mon-docker-state">-</div><div class="hint" id="mon-docker-start">-</div></div>
+            <div class="stat"><div class="label">API 就绪</div><div class="value" id="mon-api-state">-</div><div class="hint" id="mon-api-url">-</div></div>
+            <div class="stat"><div class="label">监控运行</div><div class="value accent" id="mon-uptime">-</div><div class="hint" id="mon-counts">-</div></div>
+          </div>
+
+          <div id="monitor-armed" class="empty" style="display:none; padding:12px; border:1px solid var(--warn); border-radius:10px; margin-bottom:16px; text-align:left;"></div>
+
+          <div class="deploy-grid">
+            <div class="card">
+              <div class="card-head"><h2>容器状态</h2><span class="sub" id="mon-stack-target">DOCKER COMPOSE</span></div>
+              <div id="mon-container-list" class="service-list"><div class="empty">正在读取</div></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>容器日志</h2><span class="sub">DOCKER LOGS</span></div>
+              <div class="field" style="flex-direction:row; gap:8px; align-items:end;">
+                <select id="mon-log-service" style="flex:1;"></select>
+                <select id="mon-log-lines" style="width:110px;">
+                  <option value="100">100 行</option>
+                  <option value="300" selected>300 行</option>
+                  <option value="800">800 行</option>
+                </select>
+                <button class="btn sm" type="button" id="mon-log-refresh">加载</button>
+              </div>
+              <pre id="mon-log-view" class="terminal-output" style="height:280px;">// 选择服务后加载日志</pre>
+            </div>
+          </div>
+
+          <div class="deploy-grid">
+            <div class="card">
+              <div class="card-head"><h2>系统日志（WSL / Docker）</h2><span class="sub">JOURNALCTL</span></div>
+              <div class="field" style="flex-direction:row; gap:8px; align-items:end;">
+                <select id="mon-journal-kind" style="flex:1;">
+                  <option value="wsl" selected>WSL 终止 / Docker 重启 相关</option>
+                  <option value="all">全部（最近）</option>
+                </select>
+                <button class="btn sm" type="button" id="mon-journal-refresh">加载</button>
+              </div>
+              <pre id="mon-journal-view" class="terminal-output" style="height:240px;">// 加载系统日志</pre>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>控制台自身日志</h2><span class="sub">DEV CONSOLE</span></div>
+              <button class="btn sm" type="button" id="mon-console-refresh">加载</button>
+              <pre id="mon-console-view" class="terminal-output" style="height:240px;">// 加载控制台日志</pre>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>事件时间线</h2><span class="sub" id="mon-event-count">-</span></div>
+            <div id="mon-events" class="empty">暂无事件</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- operation dock -->
+    <div class="op-dock" id="op-dock" hidden>
+      <div class="op-dock-head">
+        <span id="op-dock-title">操作</span>
+        <span id="op-dock-status" class="chip gray">IDLE</span>
+        <div style="margin-left:auto; display:flex; gap:6px;">
+          <button class="icon-btn" type="button" id="op-dock-collapse" title="收起/展开">−</button>
+          <button class="icon-btn" type="button" id="op-dock-close" title="关闭">×</button>
+        </div>
+      </div>
+      <div class="op-dock-body" id="op-dock-body">
+        <ol id="op-dock-steps" class="step-track"></ol>
+        <div class="terminal-toolbar"><span>实时输出</span><button class="text-btn" type="button" id="op-dock-copy">复制日志</button></div>
+        <pre id="op-dock-log" class="terminal-output">$ 等待命令</pre>
+        <div id="op-dock-report" hidden></div>
+      </div>
+    </div>
+
+    <!-- modal -->
+    <div class="modal-mask" id="modal-mask">
+      <div class="modal">
+        <h3 id="modal-title">新建</h3>
+        <div class="sub" id="modal-sub"></div>
+        <div id="modal-fields"></div>
+        <div class="modal-actions">
+          <button class="btn" type="button" id="modal-cancel">取消</button>
+          <button class="btn primary" type="button" id="modal-ok">创建</button>
+        </div>
+      </div>
+    </div>
+    <div class="toast" id="toast"></div>
+
     <script src="/assets/app.js" defer></script>
+    <script src="/assets/demo.js" defer></script>
+    <script src="/assets/api.js" defer></script>
+    <script src="/assets/ops.js" defer></script>
+    <script src="/assets/monitor.js" defer></script>
   </body>
 </html>

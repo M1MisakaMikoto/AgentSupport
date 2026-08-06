@@ -102,9 +102,15 @@ Open `http://127.0.0.1:8010`. The console manages the Compose stack, service sca
 logs, task debugging and the repository's predefined validation suites. It runs outside the
 Compose stack, so it remains available while containers are replaced.
 
-The task UI and regression acceptance cover the main API workflow, but they are not a complete
-API conformance suite. See the [API full-test plan](docs/testing/api-full-test-plan.md) for the
-endpoint matrix, missing cases and release criteria.
+The console is organized as an AI-software-style platform with exactly two sections:
+
+| Section | Pages | Capability |
+| --- | --- | --- |
+| Demo | Overview / Organizations / Users / Projects / Presets / Agent Workspace | Full management of organizations (tenants), users, projects and presets (CRUD, preset import with snapshot semantics); the Agent Workspace provides session selection, conversational task submission, an SSE event timeline, input/approval/cancel gates and derived sub-conversations |
+| Deployment | Service Status / Deploy Actions / Acceptance / API Reference | Compose service topology and health endpoints (`/live` `/ready` `/metrics` `/cores`), deploy/start/stop and scaling, deployment regression plus API contract acceptance (structured assertions across all public operations, error paths, idempotency, optimistic concurrency, SSE resume and an OpenAPI operation-coverage report), and an interactive API reference generated from the runtime `/openapi.json` |
+
+API contract acceptance is a repeatable in-console check; release criteria still follow the
+[API full-test plan](docs/testing/api-full-test-plan.md).
 
 The console supports WSL2 Docker Engine, a local `docker` CLI and named Docker contexts. Configure
 the default transport when automatic detection is not suitable:
