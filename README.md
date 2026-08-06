@@ -81,6 +81,29 @@ $env:TMP=$env:TEMP
 | `http://127.0.0.1:8000/ready` | 就绪状态与当前配置 |
 | `http://127.0.0.1:8000/metrics` | Prometheus 指标 |
 
+## API 鉴权与前置条件自动补全
+
+AgentSupport 公共 API **有意不提供 token / API Key 等鉴权措施**，这是被契约测试
+（`tests/contract/agentsupport_api/test_no_auth.py`）固定的部署模式：
+`AGENTSUPPORT_API_AUTH_MODE` 仅支持 `none`，配置为其他值会启动失败。正式对公网开放前，
+请在网关层补充限流（当前仓库不提供正式认证和租户隔离）。
+
+资源创建接口之间**没有前后条件要求**：请求中引用的前置资源不存在时，平台默认自动补全，
+并仅在创建类接口的 201 响应中追加 `auto_created` 字段回传新实体 ID。例如向不存在的
+`/sessions/{session_id}/conversations` 发起对话，会自动创建默认 Workspace 和该 Session。
+流式/运行态接口（SSE 事件流、事件轮询、input/approval/cancel）仍要求资源已存在；
+只读查询不触发自动创建，保持 404。
+
+自动补全默认开启，可配置关闭或收窄作用域：
+
+| 变量 | 默认 | 用途 |
+| --- | --- | --- |
+| `AGENTSUPPORT_AUTO_CREATE_MISSING` | `true` | 总开关；`false` 恢复严格 404 行为 |
+| `AGENTSUPPORT_AUTO_CREATE_SCOPES` | `all` | `all` 或逗号分隔：`organization,user,preset,project,workspace,session` |
+| `AGENTSUPPORT_DEFAULT_WORKSPACE_ID` | 空 | 自动创建 Workspace 时使用的稳定 ID |
+| `AGENTSUPPORT_DEFAULT_USER_ID` | 空 | 自动创建 User 时使用的稳定 ID |
+| `AGENTSUPPORT_AUTO_RESOURCE_NAME` | `auto` | 自动创建资源的默认名称 |
+
 在开发 Runner 的 HTTP 契约时，可以用确定性模式单独启动私有 Runner：
 
 ```powershell
@@ -196,6 +219,8 @@ $env:TRAE_API_KEY="<api-key>"
 | `AGENTSUPPORT_WORKSPACE_ROOT` | 工作区数据目录 |
 | `AGENTSUPPORT_MAX_ACTIVE_SESSIONS` | 并发活跃 Session 上限 |
 | `AGENTSUPPORT_MAX_QUEUED_CONVERSATIONS` | Conversation 队列上限 |
+| `AGENTSUPPORT_AUTO_CREATE_MISSING` | 缺失前置条件自动补全总开关（默认开启） |
+| `AGENTSUPPORT_API_AUTH_MODE` | API 鉴权模式，仅支持 `none` |
 | `SESSION_RUNNER_MODE` | `deterministic` 或 `trae` Runner 模式 |
 | `TRAE_PROVIDER` | 模型提供方实现 |
 | `TRAE_MODEL`、`TRAE_MODEL_BASE_URL`、`TRAE_API_KEY` | Runner 模型配置 |
@@ -247,4 +272,6 @@ kubectl apply -f deploy/kubernetes/agentsupport.yaml
 ## 生产注意事项
 
 当前仓库不提供正式认证、租户隔离、托管 MCP/Skill 市场集成、对象存储备份或多区域协调。生产使用前，
-请将其部署在经过认证的网关之后，并制定数据库、工作区卷和密钥的备份策略。
+请将其部署在经过认证的网关之后，并制定数据库、工作区卷和密钥的备份策略。由于 API 无鉴权且前置条件
+自动补全默认开启（一个请求即可创建整条资源链），公网暴露前必须在网关配置限流，必要时关闭自动补全
+（`AGENTSUPPORT_AUTO_CREATE_MISSING=false`）。

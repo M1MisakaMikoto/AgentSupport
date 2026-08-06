@@ -33,19 +33,24 @@ http://localhost:8000
 ## 2. 推荐调用流程
 
 ```text
-创建用户（可选，未创建时使用默认组织）
-    -> 创建预设（可选，复用 Skill/工具/资源/权限设定）
-        -> 创建项目（可导入预设）
-            -> 在项目内创建 Session
-                -> 创建 Conversation（提交任务）
-                    -> 查询或订阅事件
-                        -> 按事件要求提交 input / approval
-                            -> 等待完成，或主动 cancel
+任意资源创建入口（缺前置时自动补全，默认开启）
+    -> 创建 Conversation（提交任务）
+        -> 查询或订阅事件
+            -> 按事件要求提交 input / approval
+                -> 等待完成，或主动 cancel
 ```
 
 创建资源时应保存响应中的 `user.id`、`preset.id`、`project.id`、`session.id` 和 `conversation.id`。
 业务层级为 `租户 -> 用户 -> 项目 -> 会话 -> 对话`；旧接口 `POST /workspaces`、`POST /sessions`
 仍然可用，创建的资源没有项目归属，运行使用部署级默认配置。
+
+**前置条件自动补全（默认开启）**：资源创建接口之间没有前后条件要求。请求中引用的
+Workspace、Session、Project、User 或 Organization 不存在时，平台会按需创建（沿用调用方
+传入的 UUID，重复调用收敛到同一实体），并在 201 响应中追加 `auto_created` 字段回传新实体 ID。
+例如向不存在的 `/sessions/{session_id}/conversations` 发起对话，会自动创建默认 Workspace 和该
+Session。流式/运行态接口（SSE 事件流、事件轮询、input/approval/cancel）仍要求资源已存在；
+只读查询不触发自动创建，保持 404。可通过 `AGENTSUPPORT_AUTO_CREATE_MISSING=false` 关闭，
+或用 `AGENTSUPPORT_AUTO_CREATE_SCOPES` 收窄作用域（见 3.6）。
 
 ## 3. 通用约定
 
@@ -88,6 +93,17 @@ X-Correlation-ID: <trace-id>
 
 事件接口的 `after_seq=N` 采用排他语义，只返回 `seq > N` 的事件。`after_seq` 默认为 `0`，且不能为负数。
 
+### 3.6 鉴权与前置条件自动补全
+
+- **鉴权**：公共 API 不提供 token / API Key / 签名等鉴权措施，这是被契约测试固定的部署模式。
+  `AGENTSUPPORT_API_AUTH_MODE` 仅支持 `none`，配置为其他值会启动失败。正式对公网开放前应在
+  网关层补充限流与认证（当前仓库不提供正式认证和租户隔离）。
+- **自动补全**：`AGENTSUPPORT_AUTO_CREATE_MISSING` 默认 `true`；`false` 时资源创建接口恢复
+  严格 404 行为。`AGENTSUPPORT_AUTO_CREATE_SCOPES` 默认 `all`，可设为逗号分隔的
+  `organization,user,preset,project,workspace,session`。`AGENTSUPPORT_DEFAULT_WORKSPACE_ID`、
+  `AGENTSUPPORT_DEFAULT_USER_ID` 可指定自动创建时使用的稳定 ID（缺省使用派生稳定 UUID），
+  `AGENTSUPPORT_AUTO_RESOURCE_NAME` 控制默认名称（默认 `auto`）。
+
 ## 4. 资源 API
 
 ### 4.1 创建 Workspace
@@ -125,11 +141,14 @@ POST /sessions
 
 ```json
 {
-  "workspace_id": "d93d3e3f-a066-44c3-a5e0-5f2718fcfa6a"
+  "workspace_id": "d93d3e3f-a066-44c3-a5e0-5f2718fcfa6a",
+  "project_id": null,
+  "name": null
 }
 ```
 
-成功返回 `201`：
+`project_id` 可选（归属项目），`name` 可选（自动创建 Workspace 时的名称提示）。
+Workspace 不存在时，默认自动创建（沿用传入的 `workspace_id`）并返回：
 
 ```json
 {
@@ -142,7 +161,20 @@ POST /sessions
 }
 ```
 
-Workspace 不存在时返回 `404 WORKSPACE_NOT_FOUND`。
+Workspace 不存在时返回 `404 WORKSPACE_NOT_FOUND`（仅当关闭自动补全时）。
+自动补全开启时响应追加：
+
+```json
+{
+  "auto_created": {
+    "workspace": {
+      "id": "d93d3e3f-a066-44c3-a5e0-5f2718fcfa6a",
+      "name": "auto",
+      "root_path": "/workspace/d93d3e3f-a066-44c3-a5e0-5f2718fcfa6a"
+    }
+  }
+}
+```
 
 ### 4.3 创建 Conversation 并提交任务
 
@@ -155,12 +187,16 @@ POST /sessions/{session_id}/conversations
 ```json
 {
   "task": "分析项目并修复测试失败",
-  "parent_conversation_id": null
+  "parent_conversation_id": null,
+  "workspace_id": null,
+  "project_id": null
 }
 ```
 
 - `task` 不能为空。
 - `parent_conversation_id` 可选，用于从同一 Session 的已有 Conversation 派生新任务。
+- `workspace_id` / `project_id` 可选，仅在 Session 不存在且自动补全开启时用于决定新建 Session
+  的归属；两者都缺省时使用部署默认 Workspace。
 - 创建后平台会立即排队或启动 Run。
 
 成功返回 `201`：
@@ -189,9 +225,12 @@ POST /sessions/{session_id}/conversations
 
 | 状态码 | 错误码 | 含义 |
 | --- | --- | --- |
-| `404` | `SESSION_NOT_FOUND` | Session 不存在 |
+| `404` | `SESSION_NOT_FOUND` | Session 不存在（仅当关闭自动补全时） |
 | `404` | `PARENT_NOT_FOUND` | 父 Conversation 不存在或不属于当前 Session |
 | `429` | `RESOURCE_EXHAUSTED` | 等待队列或执行容量已满 |
+
+Session 不存在且自动补全开启时，平台自动创建该 Session（沿用路径中的 `session_id`）并返回
+`auto_created`（含 `session`、`workspace`，以及按需的 `project`/`user`）。
 
 ### 4.4 组织与用户 API
 
@@ -270,7 +309,7 @@ DELETE /presets/{preset_id}
 
 | 状态码 | 错误码 | 含义 |
 | --- | --- | --- |
-| `404` | `USER_NOT_FOUND` | 用户不存在 |
+| `404` | `USER_NOT_FOUND` | 用户不存在（仅关闭自动补全时；开启则自动创建并返回 `auto_created`） |
 | `404` | `PRESET_NOT_FOUND` | 预设不存在 |
 | `409` | `IDEMPOTENCY_CONFLICT` | 幂等键冲突 |
 
@@ -343,7 +382,9 @@ GET /conversations/{conversation_id}
 | 状态码 | 错误码 | 含义 |
 | --- | --- | --- |
 | `403` | `PRESET_NOT_OWNED` | 预设不属于该用户 |
-| `404` | `PROJECT_NOT_FOUND` | 项目不存在 |
+| `404` | `USER_NOT_FOUND` | 用户不存在（仅关闭自动补全时；开启则自动创建） |
+| `404` | `PRESET_NOT_FOUND` | 预设不存在（preset 作用域关闭时；开启则回退部署默认配置并返回 `preset_fallback`） |
+| `404` | `PROJECT_NOT_FOUND` | 项目不存在（仅关闭自动补全时；开启则自动补全） |
 | `422` | `PRESET_DISABLED` | 预设已停用，不能导入 |
 
 ## 5. 事件 API
@@ -513,7 +554,7 @@ Conversation 的 `run.state` 可能为：
 
 | 状态码 | 典型错误码 | 处理建议 |
 | --- | --- | --- |
-| `404` | `WORKSPACE_NOT_FOUND`、`SESSION_NOT_FOUND`、`CONVERSATION_NOT_FOUND` | 检查资源 ID 和创建顺序 |
+| `404` | `WORKSPACE_NOT_FOUND`、`SESSION_NOT_FOUND`、`CONVERSATION_NOT_FOUND` | 检查资源 ID 和创建顺序；创建类接口在自动补全开启（默认）时对缺失的 Workspace/Session/Project/User 返回 `201` + `auto_created`，仅只读与运行态接口保持 `404` |
 | `409` | `CONFLICT`、`INVALID_STATE`、`IDEMPOTENCY_CONFLICT`、`COMMAND_CONFLICT`、`CHECKPOINT_INVALID` | 刷新事件或修正请求，不要盲目重试 |
 | `422` | `INVALID_DECISION` 或 FastAPI 参数校验错误 | 修正请求字段 |
 | `429` | `RESOURCE_EXHAUSTED` | 按退避策略重试 |

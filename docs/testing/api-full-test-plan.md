@@ -31,6 +31,11 @@
 5. SSE 验证历史重放、排他游标、顺序、去重和断线续传。
 6. 9 个 Session Runner 私有路径通过独立契约套件，不能由公共 API 的页面冒烟替代。
 7. 内存模式和真实 Compose 分布式模式都通过；PostgreSQL 并发与进程重启场景通过。
+8. 公共 API 无 token 鉴权：OpenAPI 不含 `securitySchemes`，所有操作无 `security` 声明；
+   请求不带任何 `Authorization` 头也能通过（`tests/contract/agentsupport_api/test_no_auth.py`）。
+9. 资源创建接口默认开启前置条件自动补全：缺失的 Workspace/Session/Project/User/Organization
+   按需创建并在响应中回传 `auto_created`；关闭开关（`AGENTSUPPORT_AUTO_CREATE_MISSING=false`）
+   后必须恢复严格 `404` 行为。
 
 “全量”指当前公开契约和明确支持的失败行为，不要求通过不存在的资源查询、认证或租户 API。
 
@@ -50,11 +55,19 @@
 | 编号 | 接口 | 正向场景 | 反向与边界场景 |
 | --- | --- | --- | --- |
 | RS-01 | `POST /workspaces` | 创建并验证 UUID、名称、路径、时间 | 空名称、121 字符、缺字段、额外/错误类型字段策略 |
-| RS-02 | `POST /sessions` | 绑定已存在 Workspace | 无效 UUID、Workspace 不存在 |
-| RS-03 | `POST /sessions/{id}/conversations` | 根任务、同 Session 子任务、运行状态和初始事件 | Session 不存在、空任务、父任务不存在、跨 Session 父任务、容量耗尽 `429` |
+| RS-02 | `POST /sessions` | 绑定已存在 Workspace | 无效 UUID；Workspace 不存在（默认自动创建并返回 `auto_created`，关闭自动补全后 `404 WORKSPACE_NOT_FOUND`） |
+| RS-03 | `POST /sessions/{id}/conversations` | 根任务、同 Session 子任务、运行状态和初始事件 | Session 不存在（默认自动创建，关闭后 `404 SESSION_NOT_FOUND`）；空任务、父任务不存在、跨 Session 父任务、容量耗尽 `429` |
 
 RS-01 至 RS-03 都必须使用相同 `Idempotency-Key` 重放相同请求，确认返回同一资源且没有新增事件；
 再用相同 Key 提交不同请求，确认返回 `409 IDEMPOTENCY_CONFLICT`。
+
+自动补全路径必须额外断言：
+
+- 缺失资源沿用调用方传入的 UUID；重复调用同一 UUID 收敛到同一实体，不产生重复资源。
+- 201 响应包含 `auto_created`（含 `workspace`、`session`、按需的 `project`/`user`），
+  未发生自动补全的响应不得包含该字段。
+- preset 缺失时回退部署默认配置并返回 `preset_fallback: "default"`。
+- 只读查询与流式/运行态接口（事件轮询、SSE、input/approval/cancel）不触发自动创建，保持 `404`。
 
 ### 3.3 事件接口
 
@@ -86,6 +99,16 @@ IN-01 至 IN-03 都必须验证相同 Key 重放不产生第二个命令或事�
 - 业务错误体包含 `code`、`message`、`retryable`、`operation`、`correlation_id` 和 `details`。
 - FastAPI 参数校验错误固定为 `422`，测试不把它误认为统一业务错误体。
 - JSON Schema/OpenAPI 响应校验通过；未知字段策略由契约测试固定，避免框架升级时静默变化。
+
+### 3.6 鉴权与前置条件自动补全契约
+
+- 无鉴权契约：`openapi.json` 无 `securitySchemes`；每个公开 operation 无 `security`；
+  `/live`、`/ready`、`/metrics`、`/cores` 与资源创建接口在无 `Authorization` 头时均可用；
+  参数校验错误为 `422` 而非 `401/403`。
+- 自动补全矩阵：分别在 `AGENTSUPPORT_AUTO_CREATE_MISSING=true`（默认）与 `false` 两种配置下，
+  覆盖 `organization -> user -> preset/project -> workspace -> session -> conversation` 每条
+  缺失链路，断言 201+`auto_created` 或 404 与作用域收窄（`AGENTSUPPORT_AUTO_CREATE_SCOPES`）。
+- `AGENTSUPPORT_API_AUTH_MODE` 配置为非 `none` 时必须启动失败（fail-fast）。
 
 ## 4. Session Runner 私有契约
 

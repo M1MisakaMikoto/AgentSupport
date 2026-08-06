@@ -196,6 +196,26 @@ GET  /projects/{project_id}/sessions
 }
 ```
 
+### 6.4 前置条件自动补全
+
+为消除资源创建接口之间的前后条件依赖，服务层在缺失前置资源时按需补全（默认开启，
+`AGENTSUPPORT_AUTO_CREATE_MISSING=true`），并沿用调用方传入的 UUID 保证重复调用收敛到同一实体：
+
+| 接口 | 缺失前置 | 自动补全行为 |
+| --- | --- | --- |
+| `POST /users`（传 `organization_id`） | Organization | 创建组织（作用域 `organization`） |
+| `POST /presets` | User | 创建用户（作用域 `user`，用户名 `auto-<id前8位>`） |
+| `POST /projects` | User / Preset | 创建用户；preset 缺失时回退部署默认配置并返回 `preset_fallback: "default"` |
+| `POST /projects/{id}/sessions` | Project | 补全 `default user -> project -> workspace -> session` |
+| `POST /sessions` | Workspace | 创建 Workspace（可携带 `name` 名称提示） |
+| `POST /sessions/{id}/conversations` | Session | 按请求体 `project_id`/`workspace_id` 或部署默认 Workspace 补全链路 |
+| `POST /projects/{id}/preset` | Project | 创建项目后导入预设（preset 本身必须存在） |
+
+未显式提供稳定 ID 时，默认 Workspace/User 使用派生的稳定 UUID
+（`AGENTSUPPORT_DEFAULT_WORKSPACE_ID` / `AGENTSUPPORT_DEFAULT_USER_ID` 可覆盖），
+`AGENTSUPPORT_AUTO_CREATE_SCOPES` 可按作用域收窄，`auto_created` 字段回传全部新建实体 ID。
+只读查询与流式/运行态接口不自动补全，保持 `404`。
+
 ## 7. 数据模型与迁移
 
 ### 7.1 新增表
@@ -234,6 +254,8 @@ GET  /projects/{project_id}/sessions
 - [x] 查询与列表 API：用户/预设/项目/会话/对话
 - [x] 项目编辑（改名/改配置）与删除（带会话保护）
 - [x] 分布式 Worker 按项目解析 Skill/工具策略
+- [x] 前置条件自动补全：缺失 User/Preset/Project/Workspace/Session/Organization 按需创建，
+      默认开启，`auto_created` 回传；无鉴权契约测试固定
 - [x] 单元测试与文档
 
 后续待办（超出首版范围）：

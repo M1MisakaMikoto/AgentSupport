@@ -76,6 +76,32 @@ Useful local endpoints:
 | `http://127.0.0.1:8000/ready` | Readiness and active configuration |
 | `http://127.0.0.1:8000/metrics` | Prometheus metrics |
 
+## API authentication and precondition auto-completion
+
+The AgentSupport public API **intentionally ships without token / API Key authentication**.
+This is a contract enforced by `tests/contract/agentsupport_api/test_no_auth.py`:
+`AGENTSUPPORT_API_AUTH_MODE` only accepts `none`, and any other value fails startup. Add
+rate limiting at the gateway before exposing the API publicly (the repository provides no
+formal authentication or tenant isolation).
+
+Resource creation endpoints have **no cross-API precondition requirements**: when a referenced
+resource does not exist, the platform creates it on demand by default, and creation responses
+append an `auto_created` field with the new entity IDs. For example, posting a conversation to a
+non-existent `/sessions/{session_id}/conversations` automatically creates a default Workspace and
+that Session. Streaming / run-state endpoints (SSE event streams, event polling, and
+input/approval/cancel) still require the resource to exist; read-only queries never auto-create
+and keep returning `404`.
+
+Auto-completion is enabled by default and can be disabled or narrowed:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AGENTSUPPORT_AUTO_CREATE_MISSING` | `true` | Master switch; `false` restores strict `404` behavior |
+| `AGENTSUPPORT_AUTO_CREATE_SCOPES` | `all` | `all` or comma-separated: `organization,user,preset,project,workspace,session` |
+| `AGENTSUPPORT_DEFAULT_WORKSPACE_ID` | empty | Stable ID used when auto-creating a Workspace |
+| `AGENTSUPPORT_DEFAULT_USER_ID` | empty | Stable ID used when auto-creating a User |
+| `AGENTSUPPORT_AUTO_RESOURCE_NAME` | `auto` | Default name for auto-created resources |
+
 The private Runner can be started separately in deterministic mode when working on its HTTP
 contract:
 
@@ -195,6 +221,8 @@ other repository files.
 | `AGENTSUPPORT_WORKSPACE_ROOT` | Workspace data directory |
 | `AGENTSUPPORT_MAX_ACTIVE_SESSIONS` | Concurrent active Session limit |
 | `AGENTSUPPORT_MAX_QUEUED_CONVERSATIONS` | Conversation queue limit |
+| `AGENTSUPPORT_AUTO_CREATE_MISSING` | Missing-precondition auto-completion switch (default on) |
+| `AGENTSUPPORT_API_AUTH_MODE` | API auth mode; only `none` is supported |
 | `SESSION_RUNNER_MODE` | `deterministic` or `trae` Runner mode |
 | `TRAE_PROVIDER` | Model provider implementation |
 | `TRAE_MODEL`, `TRAE_MODEL_BASE_URL`, `TRAE_API_KEY` | Runner model configuration |
@@ -249,4 +277,7 @@ Worker replica count. Workspace PVCs require a StorageClass compatible with `Rea
 The current repository does not provide formal authentication, tenant isolation, managed
 MCP/Skill marketplace integration, object-storage backups or multi-region coordination. Deploy it
 behind an authenticated gateway and define database, workspace-volume and secret backup policies
-before production use.
+before production use. Because the API has no authentication and precondition auto-completion is
+enabled by default (a single request can create a whole resource chain), configure rate limiting at
+the gateway before public exposure, and disable auto-completion
+(`AGENTSUPPORT_AUTO_CREATE_MISSING=false`) when appropriate.
