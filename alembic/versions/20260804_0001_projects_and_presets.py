@@ -5,6 +5,7 @@ Revises: 20260728_0003
 Create Date: 2026-08-04
 """
 
+import uuid
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -97,8 +98,6 @@ def downgrade() -> None:
 
 
 def _backfill_projects(bind) -> None:
-    import uuid
-
     rows = bind.execute(sa.text("SELECT id, name FROM organizations")).fetchall()
     for org_id, _org_name in rows:
         users = bind.execute(
@@ -107,12 +106,13 @@ def _backfill_projects(bind) -> None:
         ).fetchall()
         if not users:
             user_id = str(uuid.uuid4())
+            username = _default_username(bind, org_id)
             bind.execute(
                 sa.text(
                     "INSERT INTO users (id, organization_id, username, created_at) "
-                    "VALUES (:id, :org_id, 'default', CURRENT_TIMESTAMP)"
+                    "VALUES (:id, :org_id, :username, CURRENT_TIMESTAMP)"
                 ),
-                {"id": user_id, "org_id": org_id},
+                {"id": user_id, "org_id": org_id, "username": username},
             )
             users = [(user_id,)]
         owner_id = users[0][0]
@@ -152,3 +152,26 @@ def _backfill_projects(bind) -> None:
                 ),
                 {"pid": project_id, "wid": workspace_id},
             )
+
+
+def _default_username(bind, org_id: str) -> str:
+    """Return a globally unique username for an organization's default user.
+
+    ``username`` is deployment-unique, so when ``default`` is already taken by
+    another organization the backfill must fall back to a deterministic
+    org-scoped name instead of failing the whole migration.
+    """
+
+    candidate = "default"
+    while bind.execute(
+        sa.text("SELECT 1 FROM users WHERE username = :name"),
+        {"name": candidate},
+    ).fetchone():
+        candidate = f"default-{org_id[:8]}"
+        if bind.execute(
+            sa.text("SELECT 1 FROM users WHERE username = :name"),
+            {"name": candidate},
+        ).fetchone():
+            candidate = f"default-{org_id[:8]}-{uuid.uuid4().hex[:6]}"
+            break
+    return candidate

@@ -290,12 +290,13 @@ def backfill_projects(engine) -> None:
             ).fetchall()
             if not users:
                 user_id = str(uuid.uuid4())
+                username = _default_username(connection, org_id)
                 connection.execute(
                     text(
                         "INSERT INTO users (id, organization_id, username, created_at) "
-                        "VALUES (:id, :org_id, 'default', CURRENT_TIMESTAMP)"
+                        "VALUES (:id, :org_id, :username, CURRENT_TIMESTAMP)"
                     ),
-                    {"id": user_id, "org_id": org_id},
+                    {"id": user_id, "org_id": org_id, "username": username},
                 )
                 users = [(user_id,)]
             owner_id = users[0][0]
@@ -335,6 +336,29 @@ def backfill_projects(engine) -> None:
                     ),
                     {"pid": project_id, "wid": workspace_id},
                 )
+
+
+def _default_username(connection, org_id: str) -> str:
+    """Return a globally unique username for an organization's default user.
+
+    ``username`` is deployment-unique, so when ``default`` is already taken by
+    another organization the backfill must fall back to a deterministic
+    org-scoped name instead of failing.
+    """
+
+    candidate = "default"
+    while connection.execute(
+        text("SELECT 1 FROM users WHERE username = :name"),
+        {"name": candidate},
+    ).fetchone():
+        candidate = f"default-{org_id[:8]}"
+        if connection.execute(
+            text("SELECT 1 FROM users WHERE username = :name"),
+            {"name": candidate},
+        ).fetchone():
+            candidate = f"default-{org_id[:8]}-{uuid4().hex[:6]}"
+            break
+    return candidate
 
 
 if __name__ == "__main__":
