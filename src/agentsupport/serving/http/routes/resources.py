@@ -1,6 +1,8 @@
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Request, Response
+from pydantic import BaseModel
 
 from ....domain import PresetDefinition, ProjectConfig
 from ..dependencies import agentsupport_service
@@ -18,6 +20,16 @@ from ..schemas import (
 )
 
 router = APIRouter()
+
+
+def _created(entity: BaseModel, auto_created: dict[str, Any]) -> dict[str, Any]:
+    """Serialize a created entity, appending auto_created when the platform
+    completed missing preconditions on the caller's behalf."""
+
+    payload = entity.model_dump(mode="json")
+    if auto_created:
+        payload["auto_created"] = auto_created
+    return payload
 
 
 @router.post("/organizations", status_code=201)
@@ -52,9 +64,11 @@ async def create_user(
     body: UserCreate,
     idempotency_key: str | None = Header(default=None),
 ):
-    return agentsupport_service(request).create_user(
-        body.username, body.organization_id, idempotency_key
+    auto_created: dict[str, Any] = {}
+    user = agentsupport_service(request).create_user(
+        body.username, body.organization_id, idempotency_key, auto_created=auto_created
     )
+    return _created(user, auto_created)
 
 
 @router.get("/users/{user_id}")
@@ -91,9 +105,16 @@ async def create_preset(
     definition = (
         PresetDefinition(**body.definition.model_dump()) if body.definition else None
     )
-    return agentsupport_service(request).create_preset(
-        body.user_id, body.name, body.description, definition, idempotency_key
+    auto_created: dict[str, Any] = {}
+    preset = agentsupport_service(request).create_preset(
+        body.user_id,
+        body.name,
+        body.description,
+        definition,
+        idempotency_key,
+        auto_created=auto_created,
     )
+    return _created(preset, auto_created)
 
 
 @router.get("/presets/{preset_id}")
@@ -123,9 +144,15 @@ async def create_project(
     body: ProjectCreate,
     idempotency_key: str | None = Header(default=None),
 ):
-    return agentsupport_service(request).create_project(
-        body.name, body.user_id, body.preset_id, idempotency_key
+    auto_created: dict[str, Any] = {}
+    project = agentsupport_service(request).create_project(
+        body.name,
+        body.user_id,
+        body.preset_id,
+        idempotency_key,
+        auto_created=auto_created,
     )
+    return _created(project, auto_created)
 
 
 @router.get("/projects/{project_id}")
@@ -167,10 +194,17 @@ async def import_preset(
     request: Request, project_id: UUID, body: ProjectImportPreset
 ):
     service = agentsupport_service(request)
+    auto_created: dict[str, Any] = {}
     project, previous_config = service.import_preset_to_project(
-        project_id, body.preset_id
+        project_id, body.preset_id, auto_created=auto_created
     )
-    return {"project": project, "previous_config": previous_config}
+    response: dict[str, Any] = {
+        "project": project,
+        "previous_config": previous_config,
+    }
+    if auto_created:
+        response["auto_created"] = auto_created
+    return response
 
 
 @router.post("/projects/{project_id}/sessions", status_code=201)
@@ -179,9 +213,11 @@ async def create_project_session(
     project_id: UUID,
     idempotency_key: str | None = Header(default=None),
 ):
-    return agentsupport_service(request).create_project_session(
-        project_id, idempotency_key
+    auto_created: dict[str, Any] = {}
+    session = agentsupport_service(request).create_project_session(
+        project_id, idempotency_key, auto_created=auto_created
     )
+    return _created(session, auto_created)
 
 
 @router.get("/sessions/{session_id}")
@@ -215,7 +251,15 @@ async def create_session(
     body: SessionCreate,
     idempotency_key: str | None = Header(default=None),
 ):
-    return agentsupport_service(request).create_session(body.workspace_id, idempotency_key)
+    auto_created: dict[str, Any] = {}
+    session = agentsupport_service(request).create_session(
+        body.workspace_id,
+        idempotency_key,
+        body.project_id,
+        name=body.name,
+        auto_created=auto_created,
+    )
+    return _created(session, auto_created)
 
 
 @router.post("/sessions/{session_id}/conversations", status_code=201)
@@ -225,6 +269,14 @@ async def create_conversation(
     body: ConversationCreate,
     idempotency_key: str | None = Header(default=None),
 ):
-    return await agentsupport_service(request).create_conversation(
-        session_id, body.task, body.parent_conversation_id, idempotency_key
+    auto_created: dict[str, Any] = {}
+    conversation = await agentsupport_service(request).create_conversation(
+        session_id,
+        body.task,
+        body.parent_conversation_id,
+        idempotency_key,
+        workspace_id=body.workspace_id,
+        project_id=body.project_id,
+        auto_created=auto_created,
     )
+    return _created(conversation, auto_created)

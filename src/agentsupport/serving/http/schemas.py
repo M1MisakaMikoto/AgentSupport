@@ -87,11 +87,15 @@ class WorkspaceCreate(BaseModel):
 
 class SessionCreate(BaseModel):
     workspace_id: UUID
+    project_id: UUID | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 class ConversationCreate(BaseModel):
     task: str = Field(min_length=1)
     parent_conversation_id: UUID | None = None
+    workspace_id: UUID | None = None
+    project_id: UUID | None = None
 
 
 class InteractionRequest(BaseModel):

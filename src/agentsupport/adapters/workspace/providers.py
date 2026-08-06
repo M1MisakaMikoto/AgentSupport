@@ -10,9 +10,12 @@ class LocalWorkspaceProvider:
         self.root.mkdir(parents=True, exist_ok=True)
         self._paths: dict[UUID, Path] = {}
 
-    def create(self, name: str) -> tuple[UUID, str]:
-        workspace_id = uuid4()
+    def create(self, name: str, workspace_id: UUID | None = None) -> tuple[UUID, str]:
+        workspace_id = workspace_id or uuid4()
         path = self.root / str(workspace_id)
+        if path.exists():
+            self._paths[workspace_id] = path
+            return workspace_id, str(path)
         path.mkdir(parents=True, exist_ok=False)
         (path / ".workspace").write_text(name + "\n", encoding="utf-8")
         self._paths[workspace_id] = path
@@ -44,9 +47,9 @@ class KubernetesWorkspaceProvider:
     def _reference(workspace_id: UUID) -> str:
         return f"pvc://workspace-{workspace_id}"
 
-    def create(self, name: str) -> tuple[UUID, str]:
+    def create(self, name: str, workspace_id: UUID | None = None) -> tuple[UUID, str]:
         del name
-        workspace_id = uuid4()
+        workspace_id = workspace_id or uuid4()
         return workspace_id, self._reference(workspace_id)
 
     def path(self, workspace_id: UUID) -> str:

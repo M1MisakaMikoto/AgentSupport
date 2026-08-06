@@ -314,15 +314,21 @@ class ApiContractVerifier:
             missing = await self.client.post(
                 "/sessions", json={"workspace_id": str(uuid4())}
             )
-            assert missing.status_code == 404, (
-                f"missing workspace expected 404, got {missing.status_code}"
-            )
-            assert missing.json().get("code") == "WORKSPACE_NOT_FOUND"
+            if missing.status_code == 201:
+                assert missing.json().get("auto_created", {}).get("workspace", {}).get(
+                    "id"
+                ), "auto-created workspace id missing"
+                notes.append("201 auto-created workspace, 422 invalid UUID")
+            else:
+                assert missing.status_code == 404, (
+                    f"missing workspace expected 404, got {missing.status_code}"
+                )
+                assert missing.json().get("code") == "WORKSPACE_NOT_FOUND"
+                notes.append("404 WORKSPACE_NOT_FOUND, 422 invalid UUID")
             invalid = await self.client.get("/sessions/not-a-uuid")
             assert invalid.status_code == 422, (
                 f"invalid UUID expected 422, got {invalid.status_code}"
             )
-            notes.append("404 WORKSPACE_NOT_FOUND, 422 invalid UUID")
         return ", ".join(notes)
 
     async def _check_org_user_preset_project(self) -> str:

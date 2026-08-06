@@ -142,6 +142,8 @@ class PostgresRepository:
         name: str,
         request_hash: str,
         idempotency_key: str | None,
+        *,
+        organization_id: UUID | None = None,
     ) -> Organization:
         with self.transaction() as db:
             self._lock_idempotency(db, "organization", idempotency_key)
@@ -152,7 +154,15 @@ class PostgresRepository:
                 org = self.get_organization(existing, db=db)
                 if org:
                     return org
-            organization = Organization(name=name)
+            if organization_id is not None:
+                org = self.get_organization(organization_id, db=db)
+                if org:
+                    return org
+            organization = (
+                Organization(id=organization_id, name=name)
+                if organization_id is not None
+                else Organization(name=name)
+            )
             db.add(
                 OrganizationRow(
                     id=str(organization.id),
@@ -199,6 +209,8 @@ class PostgresRepository:
         organization_id: UUID,
         request_hash: str,
         idempotency_key: str | None,
+        *,
+        user_id: UUID | None = None,
     ) -> User:
         with self.transaction() as db:
             self._lock_idempotency(db, "user", idempotency_key)
@@ -207,7 +219,15 @@ class PostgresRepository:
                 user = self.get_user(existing, db=db)
                 if user:
                     return user
-            user = User(organization_id=organization_id, username=username)
+            if user_id is not None:
+                user = self.get_user(user_id, db=db)
+                if user:
+                    return user
+            user = (
+                User(id=user_id, organization_id=organization_id, username=username)
+                if user_id is not None
+                else User(organization_id=organization_id, username=username)
+            )
             db.add(
                 UserRow(
                     id=str(user.id),
@@ -455,6 +475,7 @@ class PostgresRepository:
         config: ProjectConfig,
         request_hash: str,
         idempotency_key: str | None,
+        project_id: UUID | None = None,
     ) -> tuple[Project, Workspace]:
         with self.transaction() as db:
             self._lock_idempotency(db, "project", idempotency_key)
@@ -464,6 +485,12 @@ class PostgresRepository:
                 workspace = self.get_workspace(project.workspace_id, db=db) if project else None
                 if project and workspace:
                     return project, workspace
+            if project_id is not None:
+                project = self.get_project(project_id, db=db)
+                if project:
+                    workspace = self.get_workspace(project.workspace_id, db=db)
+                    if workspace:
+                        return project, workspace
             user = db.get(UserRow, str(user_id))
             if not user:
                 raise RepositoryConflict("user does not exist")
@@ -482,13 +509,25 @@ class PostgresRepository:
                     created_at=now,
                 )
             )
-            project = Project(
-                organization_id=UUID(user.organization_id),
-                user_id=user_id,
-                workspace_id=workspace_id,
-                name=name,
-                preset_id=preset_id,
-                config=config,
+            project = (
+                Project(
+                    id=project_id,
+                    organization_id=UUID(user.organization_id),
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    name=name,
+                    preset_id=preset_id,
+                    config=config,
+                )
+                if project_id is not None
+                else Project(
+                    organization_id=UUID(user.organization_id),
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    name=name,
+                    preset_id=preset_id,
+                    config=config,
+                )
             )
             db.add(
                 ProjectRow(
@@ -688,14 +727,28 @@ class PostgresRepository:
             self._save_idempotency(db, scope, key, request_hash, resource_id, response_payload)
 
     def create_workspace(
-        self, name: str, root_path: str, request_hash: str, idempotency_key: str | None
+        self,
+        name: str,
+        root_path: str,
+        request_hash: str,
+        idempotency_key: str | None,
+        *,
+        workspace_id: UUID | None = None,
     ) -> Workspace:
         with self.transaction() as db:
             self._lock_idempotency(db, "workspace", idempotency_key)
             existing = self._idempotent_resource(db, "workspace", idempotency_key, request_hash)
             if existing:
                 return self.get_workspace(existing, db=db)
-            workspace = Workspace(name=name, root_path=root_path)
+            if workspace_id is not None:
+                workspace = self.get_workspace(workspace_id, db=db)
+                if workspace:
+                    return workspace
+            workspace = (
+                Workspace(id=workspace_id, name=name, root_path=root_path)
+                if workspace_id is not None
+                else Workspace(name=name, root_path=root_path)
+            )
             db.add(
                 WorkspaceRow(
                     id=str(workspace.id),
@@ -745,13 +798,23 @@ class PostgresRepository:
         request_hash: str,
         idempotency_key: str | None,
         project_id: UUID | None = None,
+        *,
+        session_id: UUID | None = None,
     ) -> Session:
         with self.transaction() as db:
             self._lock_idempotency(db, "session", idempotency_key)
             existing = self._idempotent_resource(db, "session", idempotency_key, request_hash)
             if existing:
                 return self.get_session(existing, db=db)
-            session = Session(workspace_id=workspace.id, project_id=project_id)
+            if session_id is not None:
+                session = self.get_session(session_id, db=db)
+                if session:
+                    return session
+            session = (
+                Session(id=session_id, workspace_id=workspace.id, project_id=project_id)
+                if session_id is not None
+                else Session(workspace_id=workspace.id, project_id=project_id)
+            )
             db.add(
                 SessionRow(
                     id=str(session.id),

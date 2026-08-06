@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from agent_runner_contracts.checkpoint import (
     tool_policy_hash,
@@ -248,12 +248,151 @@ class AgentSupportService:
         return self._tool_policy()
 
     # ------------------------------------------------------------------
+    # Missing-precondition auto-completion (configurable, default ON)
+    # ------------------------------------------------------------------
+
+    def _auto_create(self, scope: str) -> bool:
+        """Whether missing resources of ``scope`` may be auto-created."""
+
+        if not getattr(self.config, "auto_create_missing", False):
+            return False
+        scopes = getattr(self.config, "auto_create_scopes_set", None)
+        if scopes is None:
+            raw = getattr(self.config, "auto_create_scopes", "all")
+            scopes = (
+                {"all"}
+                if str(raw).strip() == "all"
+                else {item.strip() for item in str(raw).split(",") if item.strip()}
+            )
+        return "all" in scopes or scope in scopes
+
+    def _stable_default_id(self, label: str) -> UUID:
+        return uuid5(NAMESPACE_URL, f"https://agentsupport.local/{label}")
+
+    def _default_workspace_id(self) -> UUID:
+        configured = getattr(self.config, "default_workspace_id", None)
+        return configured or self._stable_default_id("default-workspace")
+
+    def _default_user_id(self) -> UUID:
+        configured = getattr(self.config, "default_user_id", None)
+        return configured or self._stable_default_id("default-user")
+
+    def _resolve_or_auto_organization(
+        self,
+        organization_id: UUID,
+        *,
+        name: str | None = None,
+        auto_created: dict[str, Any] | None = None,
+    ) -> Organization:
+        try:
+            return self.get_organization(organization_id)
+        except ServiceError as exc:
+            if exc.code != "ORGANIZATION_NOT_FOUND" or not self._auto_create("organization"):
+                raise
+            return self.create_organization(
+                name or self.config.auto_resource_name,
+                idempotency_key=None,
+                organization_id=organization_id,
+                auto_created=auto_created,
+            )
+
+    def _resolve_or_auto_user(
+        self,
+        user_id: UUID,
+        *,
+        username: str | None = None,
+        organization_id: UUID | None = None,
+        auto_created: dict[str, Any] | None = None,
+    ) -> User:
+        try:
+            return self._require_user(user_id)
+        except ServiceError as exc:
+            if exc.code != "USER_NOT_FOUND" or not self._auto_create("user"):
+                raise
+            if organization_id is not None:
+                organization = self._resolve_or_auto_organization(
+                    organization_id, auto_created=auto_created
+                )
+            else:
+                organization = self.get_organization(self.organization_id)
+            unique_username = username or (
+                f"{self.config.auto_resource_name}-{str(user_id)[:8]}"
+            )
+            return self.create_user(
+                unique_username,
+                organization.id,
+                idempotency_key=None,
+                user_id=user_id,
+                auto_created=auto_created,
+            )
+
+    def _resolve_or_auto_workspace(
+        self,
+        workspace_id: UUID,
+        *,
+        name: str | None = None,
+        auto_created: dict[str, Any] | None = None,
+    ) -> Workspace:
+        workspace = None if self.distributed else self.workspaces.get(workspace_id)
+        if not workspace and self.repository:
+            workspace = self.repository.get_workspace(workspace_id)
+            if workspace:
+                self.workspaces[workspace.id] = workspace
+        if workspace:
+            return workspace
+        if not self._auto_create("workspace"):
+            raise ServiceError("WORKSPACE_NOT_FOUND", "workspace does not exist", 404)
+        return self.create_workspace(
+            name or self.config.auto_resource_name,
+            idempotency_key=None,
+            workspace_id=workspace_id,
+            auto_created=auto_created,
+        )
+
+    def _resolve_or_auto_project(
+        self,
+        project_id: UUID,
+        *,
+        name: str | None = None,
+        user_id: UUID | None = None,
+        auto_created: dict[str, Any] | None = None,
+    ) -> Project:
+        try:
+            return self._project(project_id)
+        except ServiceError as exc:
+            if exc.code != "PROJECT_NOT_FOUND" or not self._auto_create("project"):
+                raise
+            owner = self._resolve_or_auto_user(
+                user_id or self._default_user_id(), auto_created=auto_created
+            )
+            return self.create_project(
+                name or self.config.auto_resource_name,
+                owner.id,
+                idempotency_key=None,
+                project_id=project_id,
+                auto_created=auto_created,
+            )
+
+    # ------------------------------------------------------------------
     # Organizations
     # ------------------------------------------------------------------
 
     def create_organization(
-        self, name: str, idempotency_key: str | None = None
+        self,
+        name: str,
+        idempotency_key: str | None = None,
+        *,
+        organization_id: UUID | None = None,
+        auto_created: dict[str, Any] | None = None,
     ) -> Organization:
+        if organization_id is not None:
+            existing = self.organizations.get(organization_id)
+            if not existing and self.repository:
+                existing = self.repository.get_organization(organization_id)
+                if existing:
+                    self.organizations[existing.id] = existing
+            if existing:
+                return existing
         payload = {"name": name}
         existing = self._idempotent("organization", idempotency_key, payload)
         if existing:
@@ -261,14 +400,23 @@ class AgentSupportService:
         if self.repository:
             try:
                 organization = self.repository.create_organization(
-                    name, _hash_request(payload), idempotency_key
+                    name,
+                    _hash_request(payload),
+                    idempotency_key,
+                    organization_id=organization_id,
                 )
             except RepositoryConflict as exc:
                 raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
             self.organizations[organization.id] = organization
         else:
-            organization = Organization(name=name)
+            organization = (
+                Organization(id=organization_id, name=name)
+                if organization_id is not None
+                else Organization(name=name)
+            )
             self.organizations[organization.id] = organization
+        if auto_created is not None:
+            auto_created["organization"] = organization.model_dump(mode="json")
         self._remember("organization", idempotency_key, payload, organization.id)
         return organization
 
@@ -300,8 +448,25 @@ class AgentSupportService:
         username: str,
         organization_id: UUID | None = None,
         idempotency_key: str | None = None,
+        *,
+        user_id: UUID | None = None,
+        auto_created: dict[str, Any] | None = None,
     ) -> User:
-        org_id = organization_id or self.organization_id
+        if organization_id is not None:
+            organization = self._resolve_or_auto_organization(
+                organization_id, auto_created=auto_created
+            )
+            org_id = organization.id
+        else:
+            org_id = self.organization_id
+        if user_id is not None:
+            existing_user = None if self.distributed else self.users.get(user_id)
+            if not existing_user and self.repository:
+                existing_user = self.repository.get_user(user_id)
+                if existing_user:
+                    self.users[existing_user.id] = existing_user
+            if existing_user:
+                return existing_user
         payload = {"username": username, "organization_id": str(org_id)}
         existing = self._idempotent("user", idempotency_key, payload)
         if existing:
@@ -322,7 +487,11 @@ class AgentSupportService:
         if self.repository:
             try:
                 user = self.repository.create_user(
-                    username, org_id, _hash_request(payload), idempotency_key
+                    username,
+                    org_id,
+                    _hash_request(payload),
+                    idempotency_key,
+                    user_id=user_id,
                 )
             except RepositoryConflict as exc:
                 raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
@@ -330,8 +499,14 @@ class AgentSupportService:
         else:
             if any(item.username == username for item in self.users.values()):
                 raise ServiceError("USERNAME_TAKEN", "username already exists", 409)
-            user = User(organization_id=org_id, username=username)
+            user = (
+                User(id=user_id, organization_id=org_id, username=username)
+                if user_id is not None
+                else User(organization_id=org_id, username=username)
+            )
             self.users[user.id] = user
+        if auto_created is not None:
+            auto_created["user"] = user.model_dump(mode="json")
         self._remember("user", idempotency_key, payload, user.id)
         return user
 
@@ -357,8 +532,10 @@ class AgentSupportService:
         description: str = "",
         definition: PresetDefinition | None = None,
         idempotency_key: str | None = None,
+        *,
+        auto_created: dict[str, Any] | None = None,
     ) -> Preset:
-        user = self._require_user(user_id)
+        user = self._resolve_or_auto_user(user_id, auto_created=auto_created)
         definition = definition or PresetDefinition()
         payload = {
             "user_id": str(user_id),
@@ -447,19 +624,46 @@ class AgentSupportService:
         user_id: UUID,
         preset_id: UUID | None = None,
         idempotency_key: str | None = None,
+        *,
+        project_id: UUID | None = None,
+        auto_created: dict[str, Any] | None = None,
     ) -> Project:
-        user = self._require_user(user_id)
+        user = self._resolve_or_auto_user(user_id, auto_created=auto_created)
+        config = None
         if preset_id:
-            preset = self._preset(preset_id)
-            if preset.user_id != user_id or preset.organization_id != user.organization_id:
-                raise ServiceError(
-                    "PRESET_NOT_OWNED", "preset does not belong to the user", 403
-                )
-            if not preset.definition.enabled:
-                raise ServiceError("PRESET_DISABLED", "preset is disabled and cannot be imported", 422)
-            config = project_config_from_definition(preset.definition)
-        else:
+            try:
+                preset = self._preset(preset_id)
+            except ServiceError as exc:
+                if exc.code != "PRESET_NOT_FOUND" or not self._auto_create("preset"):
+                    raise
+                preset_id = None
+                if auto_created is not None:
+                    auto_created["preset_fallback"] = "default"
+            else:
+                if (
+                    preset.user_id != user_id
+                    or preset.organization_id != user.organization_id
+                ):
+                    raise ServiceError(
+                        "PRESET_NOT_OWNED", "preset does not belong to the user", 403
+                    )
+                if not preset.definition.enabled:
+                    raise ServiceError(
+                        "PRESET_DISABLED",
+                        "preset is disabled and cannot be imported",
+                        422,
+                    )
+                config = project_config_from_definition(preset.definition)
+        if config is None:
             config = default_project_config(enabled_skills=self.enabled_skills)
+        if project_id is not None:
+            existing = None if self.distributed else self.projects.get(project_id)
+            if not existing and self.repository:
+                existing = self.repository.get_project(project_id)
+                if existing:
+                    self.projects[existing.id] = existing
+            if existing:
+                return existing
         payload = {
             "user_id": str(user_id),
             "name": name,
@@ -493,24 +697,43 @@ class AgentSupportService:
                     config=config,
                     request_hash=_hash_request(payload),
                     idempotency_key=idempotency_key,
+                    project_id=project_id,
                 )
             except RepositoryConflict as exc:
                 raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
             self.projects[project.id] = project
             self.workspaces[workspace.id] = workspace
+            if auto_created is not None:
+                auto_created["project"] = project.model_dump(mode="json")
+                auto_created["workspace"] = workspace.model_dump(mode="json")
             self._remember("project", idempotency_key, payload, project.id)
             return project
         workspace = Workspace(id=workspace_id, name=name, root_path=path)
-        project = Project(
-            organization_id=user.organization_id,
-            user_id=user_id,
-            workspace_id=workspace_id,
-            name=name,
-            preset_id=preset_id,
-            config=config,
+        project = (
+            Project(
+                id=project_id,
+                organization_id=user.organization_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                name=name,
+                preset_id=preset_id,
+                config=config,
+            )
+            if project_id is not None
+            else Project(
+                organization_id=user.organization_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                name=name,
+                preset_id=preset_id,
+                config=config,
+            )
         )
         self.workspaces[workspace.id] = workspace
         self.projects[project.id] = project
+        if auto_created is not None:
+            auto_created["project"] = project.model_dump(mode="json")
+            auto_created["workspace"] = workspace.model_dump(mode="json")
         self._remember("project", idempotency_key, payload, project.id)
         return project
 
@@ -526,12 +749,28 @@ class AgentSupportService:
         return sorted(items, key=lambda item: item.created_at)
 
     def import_preset_to_project(
-        self, project_id: UUID, preset_id: UUID
-    ) -> tuple[Project, ProjectConfig]:
+        self,
+        project_id: UUID,
+        preset_id: UUID,
+        *,
+        auto_created: dict[str, Any] | None = None,
+    ) -> tuple[Project, ProjectConfig | None]:
         """Re-apply a preset snapshot to a project, replacing its current config."""
 
-        project = self._project(project_id)
         preset = self._preset(preset_id)
+        try:
+            project = self._project(project_id)
+        except ServiceError as exc:
+            if exc.code != "PROJECT_NOT_FOUND" or not self._auto_create("project"):
+                raise
+            project = self.create_project(
+                preset.name,
+                preset.user_id,
+                preset_id=preset.id,
+                project_id=project_id,
+                auto_created=auto_created,
+            )
+            return project, None
         if preset.user_id != project.user_id or preset.organization_id != project.organization_id:
             raise ServiceError("PRESET_NOT_OWNED", "preset does not belong to the project owner", 403)
         if not preset.definition.enabled:
@@ -617,11 +856,20 @@ class AgentSupportService:
         return sorted(items, key=lambda item: item.created_at)
 
     def create_project_session(
-        self, project_id: UUID, idempotency_key: str | None = None
+        self,
+        project_id: UUID,
+        idempotency_key: str | None = None,
+        *,
+        session_id: UUID | None = None,
+        auto_created: dict[str, Any] | None = None,
     ) -> Session:
-        project = self._project(project_id)
+        project = self._resolve_or_auto_project(project_id, auto_created=auto_created)
         return self.create_session(
-            project.workspace_id, idempotency_key, project_id=project.id
+            project.workspace_id,
+            idempotency_key,
+            project_id=project.id,
+            session_id=session_id,
+            auto_created=auto_created,
         )
 
     def _remember(
@@ -647,7 +895,22 @@ class AgentSupportService:
             except RepositoryConflict as exc:
                 raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
 
-    def create_workspace(self, name: str, idempotency_key: str | None = None) -> Workspace:
+    def create_workspace(
+        self,
+        name: str,
+        idempotency_key: str | None = None,
+        *,
+        workspace_id: UUID | None = None,
+        auto_created: dict[str, Any] | None = None,
+    ) -> Workspace:
+        if workspace_id is not None:
+            existing = None if self.distributed else self.workspaces.get(workspace_id)
+            if not existing and self.repository:
+                existing = self.repository.get_workspace(workspace_id)
+                if existing:
+                    self.workspaces[existing.id] = existing
+            if existing:
+                return existing
         payload = {"name": name}
         existing = self._idempotent("workspace", idempotency_key, payload)
         if existing:
@@ -665,16 +928,22 @@ class AgentSupportService:
                     self.workspaces[workspace.id] = workspace
                     self._remember("workspace", idempotency_key, payload, workspace.id)
                     return workspace
-        workspace_id, path = self.workspace_provider.create(name)
+        workspace_id, path = self.workspace_provider.create(name, workspace_id)
         workspace = Workspace(id=workspace_id, name=name, root_path=path)
         if self.repository:
             try:
                 workspace = self.repository.create_workspace(
-                    name, path, _hash_request(payload), idempotency_key
+                    name,
+                    path,
+                    _hash_request(payload),
+                    idempotency_key,
+                    workspace_id=workspace_id,
                 )
             except RepositoryConflict as exc:
                 raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
         self.workspaces[workspace.id] = workspace
+        if auto_created is not None:
+            auto_created["workspace"] = workspace.model_dump(mode="json")
         self._remember("workspace", idempotency_key, payload, workspace.id)
         return workspace
 
@@ -683,22 +952,30 @@ class AgentSupportService:
         workspace_id: UUID,
         idempotency_key: str | None = None,
         project_id: UUID | None = None,
+        *,
+        session_id: UUID | None = None,
+        name: str | None = None,
+        auto_created: dict[str, Any] | None = None,
     ) -> Session:
-        workspace = None if self.distributed else self.workspaces.get(workspace_id)
-        if not workspace and self.repository:
-            workspace = self.repository.get_workspace(workspace_id)
-            if workspace:
-                self.workspaces[workspace.id] = workspace
-        if not workspace:
-            raise ServiceError("WORKSPACE_NOT_FOUND", "workspace does not exist", 404)
+        workspace = self._resolve_or_auto_workspace(
+            workspace_id, name=name, auto_created=auto_created
+        )
         if project_id is not None:
-            project = self._project(project_id)
+            project = self._resolve_or_auto_project(project_id, auto_created=auto_created)
             if project.workspace_id != workspace_id:
                 raise ServiceError(
                     "PROJECT_WORKSPACE_MISMATCH",
                     "session project does not match the workspace",
                     422,
                 )
+        if session_id is not None:
+            existing = None if self.distributed else self.sessions.get(session_id)
+            if not existing and self.repository:
+                existing = self.repository.get_session(session_id)
+                if existing:
+                    self.sessions[existing.id] = existing
+            if existing:
+                return existing
         payload = {
             "workspace_id": workspace_id,
             "project_id": str(project_id) if project_id else None,
@@ -706,7 +983,11 @@ class AgentSupportService:
         existing = self._idempotent("session", idempotency_key, payload)
         if existing:
             return self.sessions[existing]
-        session = Session(workspace_id=workspace_id, project_id=project_id)
+        session = (
+            Session(id=session_id, workspace_id=workspace_id, project_id=project_id)
+            if session_id is not None
+            else Session(workspace_id=workspace_id, project_id=project_id)
+        )
         if self.repository:
             try:
                 session = self.repository.create_session(
@@ -714,10 +995,13 @@ class AgentSupportService:
                     _hash_request(payload),
                     idempotency_key,
                     project_id=project_id,
+                    session_id=session_id,
                 )
             except RepositoryConflict as exc:
                 raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
         self.sessions[session.id] = session
+        if auto_created is not None:
+            auto_created["session"] = session.model_dump(mode="json")
         self._remember("session", idempotency_key, payload, session.id)
         return session
 
@@ -824,6 +1108,10 @@ class AgentSupportService:
         task: str,
         parent_conversation_id: UUID | None = None,
         idempotency_key: str | None = None,
+        *,
+        workspace_id: UUID | None = None,
+        project_id: UUID | None = None,
+        auto_created: dict[str, Any] | None = None,
     ) -> Conversation:
         session = None if self.distributed else self.sessions.get(session_id)
         if not session and self.repository:
@@ -831,7 +1119,22 @@ class AgentSupportService:
             if session:
                 self.sessions[session.id] = session
         if not session:
-            raise ServiceError("SESSION_NOT_FOUND", "session does not exist", 404)
+            if not self._auto_create("session"):
+                raise ServiceError("SESSION_NOT_FOUND", "session does not exist", 404)
+            if project_id is not None:
+                project = self._resolve_or_auto_project(project_id, auto_created=auto_created)
+                resolved_workspace_id = project.workspace_id
+            elif workspace_id is not None:
+                resolved_workspace_id = workspace_id
+            else:
+                resolved_workspace_id = self._default_workspace_id()
+            session = self.create_session(
+                resolved_workspace_id,
+                idempotency_key=None,
+                project_id=project_id,
+                session_id=session_id,
+                auto_created=auto_created,
+            )
         if parent_conversation_id:
             parent = None if self.distributed else self.conversations.get(parent_conversation_id)
             if not parent and self.repository:

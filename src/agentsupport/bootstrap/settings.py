@@ -1,5 +1,7 @@
 from pathlib import Path
+from uuid import UUID
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +47,37 @@ class Settings(BaseSettings):
     health_failure_threshold: int = 3
     skills_root: Path = Path("skills")
     enabled_skills: str = ""
+    # API authentication contract: this platform intentionally ships without
+    # token-based authentication. Only "none" is implemented; any other value
+    # fails fast so a half-baked auth mode cannot silently reach production.
+    api_auth_mode: str = "none"
+    # Missing-precondition auto-completion (default ON): when a request refers
+    # to a resource that does not exist yet, the platform creates it on demand.
+    auto_create_missing: bool = True
+    # Comma-separated scopes, or "all": organization,user,preset,project,workspace,session
+    auto_create_scopes: str = "all"
+    # Optional stable IDs used when a missing workspace/user must be created
+    # and the request carries no explicit reference. When unset, stable
+    # namespaced UUIDs are derived so repeated calls converge on one entity.
+    default_workspace_id: UUID | None = None
+    default_user_id: UUID | None = None
+    auto_resource_name: str = "auto"
+
+    @model_validator(mode="after")
+    def _validate_auth_mode(self) -> "Settings":
+        if self.api_auth_mode != "none":
+            raise ValueError(
+                "only api_auth_mode='none' is implemented; "
+                "token-based authentication is intentionally not provided"
+            )
+        return self
+
+    @property
+    def auto_create_scopes_set(self) -> set[str]:
+        raw = self.auto_create_scopes.strip()
+        if raw == "all":
+            return {"all"}
+        return {item.strip() for item in raw.split(",") if item.strip()}
 
 
 settings = Settings()

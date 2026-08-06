@@ -59,12 +59,34 @@ async def test_workspace_session_conversation_and_idempotency(service):
         assert conversation.json()["run"]["state"] == "RUNNING"
         events = await client.get(f"/conversations/{conversation.json()['id']}/events")
         assert [event["seq"] for event in events.json()] == [1, 2]
+        auto = await client.post(
+            "/sessions", json={"workspace_id": "00000000-0000-0000-0000-000000000000"}
+        )
+        assert auto.status_code == 201
+        assert auto.json()["workspace_id"] == "00000000-0000-0000-0000-000000000000"
+        assert auto.json()["auto_created"]["workspace"]["id"] == (
+            "00000000-0000-0000-0000-000000000000"
+        )
+
+
+@pytest.mark.asyncio
+async def test_missing_preconditions_404_when_auto_create_disabled(tmp_path):
+    service = AgentSupportService(Settings(workspace_root=tmp_path, auto_create_missing=False))
+    app = create_app(service)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         conflict = await client.post(
             "/sessions", json={"workspace_id": "00000000-0000-0000-0000-000000000000"}
         )
         assert conflict.status_code == 404
         assert conflict.json()["operation"] == "POST /sessions"
         assert conflict.json()["correlation_id"] == conflict.headers["X-Correlation-ID"]
+
+        missing = await client.post(
+            "/sessions/00000000-0000-0000-0000-000000000001/conversations",
+            json={"task": "no session"},
+        )
+        assert missing.status_code == 404
+        assert missing.json()["code"] == "SESSION_NOT_FOUND"
 
 
 @pytest.mark.asyncio
