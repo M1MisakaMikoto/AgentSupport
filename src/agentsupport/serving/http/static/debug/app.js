@@ -16,6 +16,7 @@ const elements = Object.fromEntries(
     "run-form", "workspace-name", "task-text", "start-button", "clear-button",
     "workspace-id", "session-id", "conversation-id", "event-count", "refresh-button",
     "cancel-button", "run-state", "last-seq", "run-id", "event-empty", "event-list",
+    "busy-indicator", "busy-text",
     "interaction-empty", "interaction-content", "interaction-kind", "interaction-id",
     "approval-view", "batch-hash", "tool-calls", "reject-button", "approve-button",
     "input-form", "interaction-value", "raw-output", "copy-button", "toast",
@@ -77,8 +78,10 @@ function persist() {
   }));
 }
 
-function setBusy(busy) {
+function setBusy(busy, message) {
   state.busy = busy;
+  elements["busy-indicator"].hidden = !busy;
+  if (message) elements["busy-text"].textContent = message;
   elements["start-button"].disabled = busy;
   elements["continue-button"].disabled = busy || !state.conversation;
   elements["approve-button"].disabled = busy;
@@ -253,6 +256,25 @@ async function refreshEvents(reopen = false) {
   if (reopen) openStream();
 }
 
+async function latestExpectedSeq() {
+  // The authoritative sequence comes from the server projection, not from the
+  // locally observed event list: internal events (checkpoint.created, run.paused)
+  // can advance conversation.run.last_seq before the browser has seen them.
+  state.conversation = await request(`/conversations/${state.conversation.id}`);
+  return state.conversation?.run?.last_seq ?? 0;
+}
+
+async function refreshAfterFailure() {
+  try {
+    await refreshEvents(true);
+    return true;
+  } catch (error) {
+    showToast(`${error.message}；事件刷新失败，请点击“刷新”按钮后再试`, true);
+    setBusy(true, "操作未完成：请点击“刷新”按钮恢复操作");
+    return false;
+  }
+}
+
 async function checkConnection() {
   try {
     const health = await request("/live");
@@ -268,7 +290,7 @@ async function checkConnection() {
 
 async function startRun(event) {
   event.preventDefault();
-  setBusy(true);
+  setBusy(true, "正在创建验收任务…");
   closeStream();
   state.events = [];
   renderEvents();
@@ -310,7 +332,7 @@ async function continueRun(event) {
   }
   const content = elements["continue-text"].value.trim();
   if (!content) return;
-  setBusy(true);
+  setBusy(true, "正在创建继续任务…");
   closeStream();
   state.events = [];
   renderEvents();
@@ -340,26 +362,29 @@ async function continueRun(event) {
 async function decide(decision) {
   const interaction = unresolvedInteraction()?.payload;
   if (!interaction) return;
-  setBusy(true);
+  setBusy(true, "正在提交批准…");
+  let recovered = false;
   try {
+    const expected_seq = await latestExpectedSeq();
     state.conversation = await request(`/conversations/${state.conversation.id}/approval`, {
       method: "POST",
       headers: { "Idempotency-Key": makeKey(`approval-${interaction.interaction_id}`) },
       body: JSON.stringify({
         approval_id: interaction.interaction_id,
         decision,
-        expected_seq: state.events.at(-1)?.seq || 0,
+        expected_seq,
       }),
     });
     persist();
     updateResources();
     await refreshEvents(true);
+    recovered = true;
     showToast(decision === "APPROVE_ONCE" ? "已批准本次工具调用" : "已拒绝工具调用");
   } catch (error) {
     showToast(error.message, true);
-    await refreshEvents(true).catch(() => {});
+    recovered = await refreshAfterFailure();
   } finally {
-    setBusy(false);
+    if (recovered) setBusy(false);
     updateResources();
   }
 }
@@ -368,47 +393,55 @@ async function submitInput(event) {
   event.preventDefault();
   const interaction = unresolvedInteraction()?.payload;
   if (!interaction) return;
-  setBusy(true);
+  setBusy(true, "正在提交回复…");
+  let recovered = false;
   try {
+    const expected_seq = await latestExpectedSeq();
     state.conversation = await request(`/conversations/${state.conversation.id}/input`, {
       method: "POST",
       headers: { "Idempotency-Key": makeKey(`input-${interaction.interaction_id}`) },
       body: JSON.stringify({
         interaction_id: interaction.interaction_id,
         value: elements["interaction-value"].value,
-        expected_seq: state.events.at(-1)?.seq || 0,
+        expected_seq,
       }),
     });
     elements["interaction-value"].value = "";
     persist();
     updateResources();
     await refreshEvents(true);
+    recovered = true;
     showToast("回复已提交");
   } catch (error) {
     showToast(error.message, true);
+    recovered = await refreshAfterFailure();
   } finally {
-    setBusy(false);
+    if (recovered) setBusy(false);
     updateResources();
   }
 }
 
 async function cancelRun() {
   if (!state.conversation) return;
-  setBusy(true);
+  setBusy(true, "正在取消运行…");
+  let recovered = false;
   try {
+    const expected_seq = await latestExpectedSeq();
     state.conversation = await request(`/conversations/${state.conversation.id}/cancel`, {
       method: "POST",
       headers: { "Idempotency-Key": makeKey("cancel") },
-      body: JSON.stringify({ expected_seq: state.events.at(-1)?.seq || 0 }),
+      body: JSON.stringify({ expected_seq }),
     });
     persist();
     updateResources();
     await refreshEvents(true);
+    recovered = true;
     showToast("运行已取消");
   } catch (error) {
     showToast(error.message, true);
+    recovered = await refreshAfterFailure();
   } finally {
-    setBusy(false);
+    if (recovered) setBusy(false);
     updateResources();
   }
 }
@@ -454,7 +487,14 @@ function restore() {
 elements["connect-button"].addEventListener("click", checkConnection);
 elements["run-form"].addEventListener("submit", startRun);
 elements["continue-form"].addEventListener("submit", continueRun);
-elements["refresh-button"].addEventListener("click", () => refreshEvents(true).catch((error) => showToast(error.message, true)));
+elements["refresh-button"].addEventListener("click", () => {
+  refreshEvents(true)
+    .then(() => {
+      setBusy(false);
+      updateResources();
+    })
+    .catch((error) => showToast(error.message, true));
+});
 elements["approve-button"].addEventListener("click", () => decide("APPROVE_ONCE"));
 elements["reject-button"].addEventListener("click", () => decide("REJECT"));
 elements["input-form"].addEventListener("submit", submitInput);
