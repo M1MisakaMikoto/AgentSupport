@@ -15,3 +15,7 @@ does not modify Trae's agent loop directly; integration is performed through the
   recorded assistant message so extended-thinking tool calls echo the blocks (with signatures)
   back to the API. Anthropic-compatible providers (e.g. DeepSeek) reject the follow-up message
   otherwise. Re-apply when syncing a newer snapshot.
+- `trae_agent/agent/trae_agent.py`: support an optional `_system_prompt` override so hosts such as
+  AgentSupport can plug in a custom system prompt, and fall back to a neutral `[User request]`
+  user-message template when no issue text is provided (instead of always framing every message
+  as a GitHub issue). Re-apply when syncing a newer snapshot.

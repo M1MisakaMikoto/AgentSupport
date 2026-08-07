@@ -224,6 +224,7 @@ $env:TRAE_API_KEY="<api-key>"
 | `SESSION_RUNNER_MODE` | `deterministic` 或 `trae` Runner 模式 |
 | `TRAE_PROVIDER` | 模型提供方实现 |
 | `TRAE_MODEL`、`TRAE_MODEL_BASE_URL`、`TRAE_API_KEY` | Runner 模型配置 |
+| `SESSION_RUNNER_TRAE_PROMPT_FILE` | 可选的 Trae 系统提示词文件路径；未配置时使用内置提示词 |
 
 ## 数据库迁移
 

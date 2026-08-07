@@ -42,6 +42,7 @@ class TraeRuntimeSettings:
     api_key: str
     max_steps: int
     workspace_roots: tuple[Path, ...]
+    system_prompt_file: Path | None = None
 
     @classmethod
     def from_environment(cls) -> TraeRuntimeSettings:
@@ -54,6 +55,7 @@ class TraeRuntimeSettings:
             ).split(",")
             if value.strip()
         )
+        prompt_file = os.getenv("SESSION_RUNNER_TRAE_PROMPT_FILE")
         default_config = Path(__file__).resolve().parents[1] / "trae_config.yaml"
         return cls(
             config_path=Path(os.getenv("SESSION_RUNNER_TRAE_CONFIG", str(default_config))),
@@ -63,6 +65,7 @@ class TraeRuntimeSettings:
             api_key=api_key,
             max_steps=int(os.getenv("TRAE_MAX_STEPS", "8")),
             workspace_roots=roots,
+            system_prompt_file=Path(prompt_file) if prompt_file else None,
         )
 
     def validate(self) -> None:
@@ -100,6 +103,27 @@ def _ensure_vendored_trae_path() -> None:
             return
 
 
+def _resolve_system_prompt(settings: TraeRuntimeSettings, request: Any) -> str | None:
+    """Resolve a custom system prompt for the Trae agent.
+
+    Precedence: an explicitly configured prompt file
+    (``SESSION_RUNNER_TRAE_PROMPT_FILE``) wins, then the ``system_prompt``
+    field carried by the request context bundle (so preset/project config can
+    inject a prompt). Returns ``None`` to fall back to the built-in prompt.
+    """
+    if settings.system_prompt_file is not None:
+        path = settings.system_prompt_file.resolve()
+        if not path.is_file():
+            raise ValueError(f"Trae system prompt file does not exist: {path}")
+        return path.read_text(encoding="utf-8")
+    bundle = getattr(request, "context_bundle", None)
+    if isinstance(bundle, dict):
+        prompt = bundle.get("system_prompt")
+        if isinstance(prompt, str) and prompt.strip():
+            return prompt
+    return None
+
+
 def _default_agent_factory(settings: TraeRuntimeSettings, request: Any, trajectory: Path) -> Any:
     _ensure_vendored_trae_path()
     from trae_agent.agent.agent import Agent
@@ -112,7 +136,11 @@ def _default_agent_factory(settings: TraeRuntimeSettings, request: Any, trajecto
         api_key=settings.api_key,
         max_steps=settings.max_steps,
     )
-    return Agent("trae_agent", config, str(trajectory))
+    agent = Agent("trae_agent", config, str(trajectory))
+    system_prompt = _resolve_system_prompt(settings, request)
+    if system_prompt is not None:
+        agent.agent._system_prompt = system_prompt
+    return agent
 
 
 def _trae_tool_result(
@@ -339,10 +367,7 @@ class TraeExecutionAdapter:
         self._initialize_agent()
         execution = await self.agent.run(
             self.request.context_bundle.get("task", ""),
-            {
-                "project_path": str(self.workspace),
-                "issue": self.request.context_bundle.get("task", ""),
-            },
+            {"project_path": str(self.workspace)},
         )
         self._emit_trajectory()
         if not execution.success:
@@ -397,7 +422,7 @@ class TraeExecutionAdapter:
         task = checkpoint.context_bundle.task
         self.agent.agent.new_task(
             task,
-            {"project_path": str(self.workspace), "issue": task},
+            {"project_path": str(self.workspace)},
         )
         calls = [TraeToolCall(**call) for call in raw_calls]
         method = pending.get("tool_method", "sequential_tool_call")

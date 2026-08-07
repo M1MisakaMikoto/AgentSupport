@@ -46,6 +46,7 @@ class TraeAgent(BaseAgent):
             docker_config: Optional configuration for running in a Docker environment.
         """
         self.project_path: str = ""
+        self._system_prompt: str | None = None
         self.base_commit: str | None = None
         self.must_patch: str = "false"
         self.patch_path: str | None = None
@@ -135,7 +136,12 @@ class TraeAgent(BaseAgent):
             user_message += f"[Project root path]:\n{self.project_path}\n\n"
 
         if "issue" in extra_args:
-            user_message += f"[Problem statement]: We're currently solving the following issue within our repository. Here's the issue text:\n{extra_args['issue']}\n"
+            user_message += (
+                f"[Problem statement]: We're currently solving the following issue within our "
+                f"repository. Here's the issue text:\n{extra_args['issue']}\n"
+            )
+        elif task:
+            user_message += f"[User request]:\n{task}\n"
         optional_attrs_to_set = ["base_commit", "must_patch", "patch_path"]
         for attr in optional_attrs_to_set:
             if attr in extra_args:
@@ -171,7 +177,7 @@ class TraeAgent(BaseAgent):
 
     def get_system_prompt(self) -> str:
         """Get the system prompt for TraeAgent."""
-        return TRAE_AGENT_SYSTEM_PROMPT
+        return self._system_prompt or TRAE_AGENT_SYSTEM_PROMPT
 
     @override
     def reflect_on_result(self, tool_results: list[ToolResult]) -> str | None:
