@@ -192,3 +192,91 @@ def test_anthropic_client_echoes_thinking_blocks_with_tool_results() -> None:
     assert blocks[1].id == "call-1"
     assert captured.request_messages[-1]["role"] == "user"
     assert captured.request_messages[-1]["content"][0]["type"] == "tool_result"
+
+
+def test_anthropic_client_batches_parallel_tool_results_in_one_user_message() -> None:
+    types = trae_types()
+    config = model_config(types, "anthropic")
+    client = types.AnthropicClient(config)
+    captured = CapturingMessages()
+    client.client = SimpleNamespace(messages=captured)
+
+    first_tool_use = SimpleNamespace(
+        type="tool_use",
+        id="call-1",
+        name="bash",
+        input={"command": "ls"},
+    )
+    second_tool_use = SimpleNamespace(
+        type="tool_use",
+        id="call-2",
+        name="str_replace_based_edit_tool",
+        input={"command": "view", "path": "/workspace"},
+    )
+    calls = {"count": 0}
+
+    def fake_create(**kwargs):
+        captured.request = kwargs
+        captured.request_messages = list(kwargs["messages"])
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return SimpleNamespace(
+                content=[first_tool_use, second_tool_use],
+                usage=None,
+                model=config.model,
+                stop_reason="tool_use",
+            )
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="completed")],
+            usage=None,
+            model=config.model,
+            stop_reason="end_turn",
+        )
+
+    captured.create = fake_create
+
+    first = client.chat(
+        [types.LLMMessage(role="user", content="Inspect the workspace")],
+        config,
+        tools=[types.BashTool("anthropic"), types.TextEditorTool("anthropic")],
+    )
+    assert [call.call_id for call in first.tool_calls] == ["call-1", "call-2"]
+
+    client.chat(
+        [
+            types.LLMMessage(
+                role="user",
+                tool_result=SimpleNamespace(
+                    call_id="call-1",
+                    name="bash",
+                    success=True,
+                    result="ok",
+                    error=None,
+                ),
+            ),
+            types.LLMMessage(
+                role="user",
+                tool_result=SimpleNamespace(
+                    call_id="call-2",
+                    name="str_replace_based_edit_tool",
+                    success=True,
+                    result="ok",
+                    error=None,
+                ),
+            ),
+        ],
+        config,
+        tools=[types.BashTool("anthropic"), types.TextEditorTool("anthropic")],
+    )
+
+    assert captured.request_messages is not None
+    assistant = captured.request_messages[-2]
+    tool_results = captured.request_messages[-1]
+    assert assistant["role"] == "assistant"
+    assert [block.id for block in assistant["content"]] == ["call-1", "call-2"]
+    assert tool_results["role"] == "user"
+    assert [block["type"] for block in tool_results["content"]] == [
+        "tool_result",
+        "tool_result",
+    ]
+    assert [block["tool_use_id"] for block in tool_results["content"]] == ["call-1", "call-2"]

@@ -163,23 +163,32 @@ class AnthropicClient(BaseLLMClient):
     def parse_messages(self, messages: list[LLMMessage]) -> list[anthropic.types.MessageParam]:
         """Parse the messages to Anthropic format."""
         anthropic_messages: list[anthropic.types.MessageParam] = []
+        pending_tool_results: list[anthropic.types.ToolResultBlockParam] = []
+
+        def flush_tool_results() -> None:
+            if not pending_tool_results:
+                return
+            anthropic_messages.append(
+                anthropic.types.MessageParam(role="user", content=list(pending_tool_results))
+            )
+            pending_tool_results.clear()
+
         for msg in messages:
             if msg.role == "system":
                 self.system_message = msg.content if msg.content else anthropic.NOT_GIVEN
             elif msg.tool_result:
-                anthropic_messages.append(
-                    anthropic.types.MessageParam(
-                        role="user",
-                        content=[self.parse_tool_call_result(msg.tool_result)],
-                    )
-                )
+                # Anthropic-compatible APIs require every tool_result for a tool_use
+                # batch to be delivered together in the single next user message.
+                pending_tool_results.append(self.parse_tool_call_result(msg.tool_result))
             elif msg.tool_call:
+                flush_tool_results()
                 anthropic_messages.append(
                     anthropic.types.MessageParam(
                         role="assistant", content=[self.parse_tool_call(msg.tool_call)]
                     )
                 )
             else:
+                flush_tool_results()
                 if msg.role == "user":
                     role = "user"
                 elif msg.role == "assistant":
@@ -193,6 +202,7 @@ class AnthropicClient(BaseLLMClient):
                 anthropic_messages.append(
                     anthropic.types.MessageParam(role=role, content=msg.content)
                 )
+        flush_tool_results()
         return anthropic_messages
 
     def parse_tool_call(self, tool_call: ToolCall) -> anthropic.types.ToolUseBlockParam:
