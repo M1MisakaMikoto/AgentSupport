@@ -72,7 +72,13 @@ def upgrade() -> None:
             )
             op.create_index("ix_sessions_project_id", "sessions", ["project_id"])
 
-    _backfill_projects(bind)
+    tables_after = set(sa.inspect(bind).get_table_names())
+    # The organizations/users tables were created by the earlier schema
+    # initialization. Fresh v0.2 databases no longer have them, so the
+    # business backfill must be skipped there (migration 20260811_0003
+    # drops the business tables entirely).
+    if "organizations" in tables_after and "users" in tables_after:
+        _backfill_projects(bind)
 
 
 def downgrade() -> None:

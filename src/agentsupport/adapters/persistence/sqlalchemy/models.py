@@ -23,50 +23,9 @@ class Base(DeclarativeBase):
     pass
 
 
-class OrganizationRow(Base):
-    __tablename__ = "organizations"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class UserRow(Base):
-    __tablename__ = "users"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    username: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class PresetRow(Base):
-    __tablename__ = "presets"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    definition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class ProjectRow(Base):
-    __tablename__ = "projects"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    workspace_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True, index=True)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    preset_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class WorkspaceRow(Base):
     __tablename__ = "workspaces"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    organization_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     storage_ref: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -270,16 +229,25 @@ def create_schema(database_url: str) -> None:
 
     engine = create_engine(database_url, pool_pre_ping=True)
     Base.metadata.create_all(engine)
-    if "active_run_id" not in {
+    session_columns = {
         column["name"] for column in inspect(engine).get_columns("sessions")
-    }:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE sessions ADD COLUMN active_run_id VARCHAR(36)"))
-    if "project_id" not in {
-        column["name"] for column in inspect(engine).get_columns("sessions")
-    }:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE sessions ADD COLUMN project_id VARCHAR(36)"))
+    }
+    for name, sql_type, default in {
+        "active_run_id": ("VARCHAR(36)", None),
+        "tenant_id": ("VARCHAR(120)", None),
+        "user_id": ("VARCHAR(120)", None),
+        "project_id": ("VARCHAR(120)", None),
+        "metadata": ("JSON", "'{}'"),
+        "config": ("JSON", None),
+    }.items():
+        if name not in session_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE sessions ADD COLUMN {name} {sql_type}"
+                        + (f" NOT NULL DEFAULT {default}" if default else "")
+                    )
+                )
     if "checkpoint_id" not in {
         column["name"] for column in inspect(engine).get_columns("conversations")
     }:
@@ -297,98 +265,6 @@ def create_schema(database_url: str) -> None:
                     "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
                 )
             )
-    backfill_projects(engine)
-
-
-def backfill_projects(engine) -> None:
-    """Backfill default users, projects and session ownership for pre-upgrade data.
-
-    1. Every organization without users gets a `default` user.
-    2. Every workspace without a project gets a same-named project owned by the
-       organization's first user, with an empty (deployment-default) config.
-    3. Sessions without project_id are pointed at their workspace's project.
-    """
-
-    import uuid
-
-    with engine.begin() as connection:
-        rows = connection.execute(text("SELECT id, name FROM organizations")).fetchall()
-        for org_id, _org_name in rows:
-            users = connection.execute(
-                text("SELECT id FROM users WHERE organization_id = :org_id ORDER BY created_at"),
-                {"org_id": org_id},
-            ).fetchall()
-            if not users:
-                user_id = str(uuid.uuid4())
-                username = _default_username(connection, org_id)
-                connection.execute(
-                    text(
-                        "INSERT INTO users (id, organization_id, username, created_at) "
-                        "VALUES (:id, :org_id, :username, CURRENT_TIMESTAMP)"
-                    ),
-                    {"id": user_id, "org_id": org_id, "username": username},
-                )
-                users = [(user_id,)]
-            owner_id = users[0][0]
-            workspaces = connection.execute(
-                text("SELECT id, name FROM workspaces WHERE organization_id = :org_id"),
-                {"org_id": org_id},
-            ).fetchall()
-            for workspace_id, workspace_name in workspaces:
-                project = connection.execute(
-                    text("SELECT id FROM projects WHERE workspace_id = :wid"),
-                    {"wid": workspace_id},
-                ).fetchone()
-                if project:
-                    project_id = project[0]
-                else:
-                    project_id = str(uuid.uuid4())
-                    connection.execute(
-                        text(
-                            "INSERT INTO projects "
-                            "(id, organization_id, user_id, workspace_id, name, preset_id, config, "
-                            "created_at, updated_at) "
-                            "VALUES (:id, :org_id, :user_id, :wid, :name, NULL, '{}', "
-                            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
-                        ),
-                        {
-                            "id": project_id,
-                            "org_id": org_id,
-                            "user_id": owner_id,
-                            "wid": workspace_id,
-                            "name": workspace_name,
-                        },
-                    )
-                connection.execute(
-                    text(
-                        "UPDATE sessions SET project_id = :pid "
-                        "WHERE workspace_id = :wid AND project_id IS NULL"
-                    ),
-                    {"pid": project_id, "wid": workspace_id},
-                )
-
-
-def _default_username(connection, org_id: str) -> str:
-    """Return a globally unique username for an organization's default user.
-
-    ``username`` is deployment-unique, so when ``default`` is already taken by
-    another organization the backfill must fall back to a deterministic
-    org-scoped name instead of failing.
-    """
-
-    candidate = "default"
-    while connection.execute(
-        text("SELECT 1 FROM users WHERE username = :name"),
-        {"name": candidate},
-    ).fetchone():
-        candidate = f"default-{org_id[:8]}"
-        if connection.execute(
-            text("SELECT 1 FROM users WHERE username = :name"),
-            {"name": candidate},
-        ).fetchone():
-            candidate = f"default-{org_id[:8]}-{uuid4().hex[:6]}"
-            break
-    return candidate
 
 
 if __name__ == "__main__":
