@@ -1,10 +1,12 @@
-from uuid import UUID, uuid4
+"""v0.2 auto-create semantics: explicit-ID create-if-missing only."""
+
+from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from agentsupport.api import create_app
-from agentsupport.bootstrap.container import build_agentsupport_service
+from agentsupport.application.service import ServiceError
 from agentsupport.config import Settings
 from agentsupport.services import AgentSupportService
 
@@ -16,62 +18,14 @@ def service(tmp_path):
     )
 
 
-def _stub_session_id() -> str:
-    return "00000000-0000-0000-0000-0000000000ab"
-
-
-def test_auto_create_defaults_to_enabled(tmp_path):
+def test_auto_create_defaults_to_enabled_with_narrowed_scopes(tmp_path):
     settings = Settings(workspace_root=tmp_path)
     assert settings.auto_create_missing is True
-    assert settings.auto_create_scopes_set == {"all"}
+    assert settings.auto_create_scopes_set == {"workspace", "session"}
     assert settings.api_auth_mode == "none"
 
 
-@pytest.mark.asyncio
-async def test_conversation_auto_creates_session_and_default_workspace(service):
-    session_id = uuid4()
-    auto_created: dict = {}
-    conversation = await service.create_conversation(
-        session_id, "run without setup", auto_created=auto_created
-    )
-
-    assert conversation.session_id == session_id
-    session = service.get_session(session_id)
-    assert session.workspace_id == service._default_workspace_id()
-    assert auto_created["session"]["id"] == str(session_id)
-    assert auto_created["workspace"]["id"] == str(session.workspace_id)
-
-
-@pytest.mark.asyncio
-async def test_conversation_auto_create_honors_workspace_hint(service):
-    workspace_id = uuid4()
-    auto_created: dict = {}
-    conversation = await service.create_conversation(
-        uuid4(), "task", workspace_id=workspace_id, auto_created=auto_created
-    )
-
-    session = service.get_session(conversation.session_id)
-    assert session.workspace_id == workspace_id
-    assert auto_created["workspace"]["id"] == str(workspace_id)
-
-
-@pytest.mark.asyncio
-async def test_conversation_auto_create_honors_project_hint(service):
-    project_id = uuid4()
-    auto_created: dict = {}
-    conversation = await service.create_conversation(
-        uuid4(), "task", project_id=project_id, auto_created=auto_created
-    )
-
-    session = service.get_session(conversation.session_id)
-    project = service.get_project(project_id)
-    assert session.project_id == project_id
-    assert session.workspace_id == project.workspace_id
-    assert auto_created["project"]["id"] == str(project_id)
-    assert auto_created["user"]["id"] == str(service._default_user_id())
-
-
-def test_session_auto_creates_workspace(service):
+def test_session_auto_creates_workspace_with_explicit_id(service):
     workspace_id = uuid4()
     auto_created: dict = {}
     session = service.create_session(
@@ -84,147 +38,90 @@ def test_session_auto_creates_workspace(service):
     assert auto_created["session"]["id"] == str(session.id)
 
 
-def test_project_auto_creates_user_and_falls_back_preset(service):
-    user_id = uuid4()
-    missing_preset = uuid4()
-    auto_created: dict = {}
-    project = service.create_project(
-        "shop", user_id, preset_id=missing_preset, auto_created=auto_created
-    )
-
-    assert project.user_id == user_id
-    assert service.get_user(user_id).username == f"auto-{str(user_id)[:8]}"
-    assert project.preset_id is None
-    assert auto_created["user"]["id"] == str(user_id)
-    assert auto_created["preset_fallback"] == "default"
-
-
-def test_preset_auto_creates_user(service):
-    user_id = uuid4()
-    auto_created: dict = {}
-    preset = service.create_preset(
-        user_id, "review", auto_created=auto_created
-    )
-
-    assert preset.user_id == user_id
-    assert service.get_user(user_id).id == user_id
-    assert auto_created["user"]["id"] == str(user_id)
-
-
-def test_user_auto_creates_organization(service):
-    organization_id = uuid4()
-    auto_created: dict = {}
-    user = service.create_user(
-        "alice", organization_id=organization_id, auto_created=auto_created
-    )
-
-    assert user.organization_id == organization_id
-    assert service.get_organization(organization_id).id == organization_id
-    assert auto_created["organization"]["id"] == str(organization_id)
-
-
-def test_project_session_auto_creates_chain(service):
-    project_id = uuid4()
-    auto_created: dict = {}
-    session = service.create_project_session(project_id, auto_created=auto_created)
-
-    project = service.get_project(project_id)
-    assert session.project_id == project_id
-    assert session.workspace_id == project.workspace_id
-    assert auto_created["project"]["id"] == str(project_id)
-    assert auto_created["session"]["id"] == str(session.id)
-    assert auto_created["user"]["id"] == str(service._default_user_id())
-
-
-def test_auto_create_disabled_keeps_404(service):
-    service.config.auto_create_missing = False
-    with pytest.raises(Exception) as missing_workspace:
-        service.create_session(uuid4())
-    assert missing_workspace.value.code == "WORKSPACE_NOT_FOUND"
-
-    with pytest.raises(Exception) as missing_user:
-        service.create_preset(uuid4(), "review")
-    assert missing_user.value.code == "USER_NOT_FOUND"
-
-
-def test_scopes_can_restrict_auto_creation(service):
-    service.config.auto_create_scopes = "session"
-    with pytest.raises(Exception) as missing_workspace:
-        service.create_session(uuid4())
-    assert missing_workspace.value.code == "WORKSPACE_NOT_FOUND"
-
-    service.config.auto_create_scopes = "session,workspace"
-    session = service.create_session(uuid4())
-    assert session.workspace_id is not None
-
-
-def test_repeated_auto_create_converges_on_same_entities(service):
-    session_id = uuid4()
+def test_repeated_explicit_id_converges(service):
     workspace_id = uuid4()
-    first = service.create_session(
-        workspace_id, session_id=session_id, auto_created={}
-    )
-    second = service.create_session(
-        workspace_id, session_id=session_id, auto_created={}
-    )
+    first = service.create_session(workspace_id)
+    second = service.create_session(workspace_id)
+    assert first.workspace_id == second.workspace_id == workspace_id
+    assert len(service.list_workspaces()) == 1
 
-    assert first.id == second.id == session_id
-    assert len(service.workspaces) == 1
-    assert len(service.sessions) == 1
+
+def test_auto_create_disabled_keeps_404(tmp_path):
+    service = AgentSupportService(
+        Settings(workspace_root=tmp_path, auto_create_missing=False)
+    )
+    with pytest.raises(ServiceError) as exc:
+        service.create_session(uuid4())
+    assert exc.value.code == "WORKSPACE_NOT_FOUND"
 
 
 @pytest.mark.asyncio
-async def test_parent_conversation_missing_still_404(service):
-    session = service.create_session(uuid4())
-    with pytest.raises(Exception) as missing_parent:
-        await service.create_conversation(
-            session.id, "task", parent_conversation_id=uuid4()
+async def test_conversation_auto_creates_session_and_workspace(service):
+    session_id = uuid4()
+    workspace_id = uuid4()
+    auto_created: dict = {}
+    conversation = await service.create_conversation(
+        session_id, "task", workspace_id=workspace_id, auto_created=auto_created
+    )
+
+    session = service.get_session(session_id)
+    assert session.workspace_id == workspace_id
+    assert conversation.session_id == session_id
+    assert auto_created["session"]["id"] == str(session_id)
+    assert auto_created["workspace"]["id"] == str(workspace_id)
+
+
+@pytest.mark.asyncio
+async def test_conversation_without_workspace_hint_keeps_404(service):
+    with pytest.raises(ServiceError) as exc:
+        await service.create_conversation(uuid4(), "task")
+    assert exc.value.code == "SESSION_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_conversation_auto_create_disabled_keeps_404(tmp_path):
+    service = AgentSupportService(
+        Settings(workspace_root=tmp_path, auto_create_missing=False)
+    )
+    with pytest.raises(ServiceError) as exc:
+        await service.create_conversation(uuid4(), "task", workspace_id=uuid4())
+    assert exc.value.code == "SESSION_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_http_session_auto_create_returns_auto_created(service):
+    app = create_app(service)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        workspace_id = str(uuid4())
+        response = await client.post(
+            "/sessions", json={"workspace_id": workspace_id, "name": "demo"}
         )
-    assert missing_parent.value.code == "PARENT_NOT_FOUND"
-
-
-def test_reads_do_not_auto_create(service):
-    with pytest.raises(Exception) as missing_session:
-        service.get_session(uuid4())
-    assert missing_session.value.code == "SESSION_NOT_FOUND"
+        assert response.status_code == 201
+        body = response.json()
+        assert body["auto_created"]["workspace"]["id"] == workspace_id
+        assert body["auto_created"]["session"]["id"] == body["id"]
 
 
 @pytest.mark.asyncio
 async def test_http_conversation_auto_create_returns_auto_created(service):
     app = create_app(service)
-    session_id = "00000000-0000-0000-0000-0000000000cd"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = str(uuid4())
+        workspace_id = str(uuid4())
         response = await client.post(
-            f"/sessions/{session_id}/conversations", json={"task": "hello"}
+            f"/sessions/{session_id}/conversations",
+            json={"task": "hello", "workspace_id": workspace_id},
         )
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["session_id"] == session_id
-    assert body["auto_created"]["session"]["id"] == session_id
-    assert "workspace" in body["auto_created"]
+        assert response.status_code == 201
+        body = response.json()
+        assert body["auto_created"]["session"]["id"] == session_id
+        assert body["auto_created"]["workspace"]["id"] == workspace_id
 
 
-@pytest.mark.asyncio
-async def test_http_project_auto_create_with_missing_user(tmp_path):
-    service = build_agentsupport_service(
-        Settings(
-            workspace_root=tmp_path / "ws",
-            persistence_mode="postgres",
-            database_url=f"sqlite:///{tmp_path / 'auto.db'}",
-        )
+def test_labels_are_opaque_and_never_created(service):
+    session = service.create_session(
+        uuid4(), tenant_id="t-1", user_id="u-1", project_id="p-2"
     )
-    app = create_app(service)
-    user_id = "00000000-0000-0000-0000-0000000000ef"
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/projects", json={"user_id": user_id, "name": "auto-shop"}
-        )
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["user_id"] == user_id
-    assert body["auto_created"]["user"]["id"] == user_id
-    assert body["auto_created"]["project"]["id"] == body["id"]
-    assert "workspace" in body["auto_created"]
-    assert str(service.get_user(UUID(user_id)).id) == user_id
+    assert session.tenant_id == "t-1"
+    assert session.user_id == "u-1"
+    assert session.project_id == "p-2"

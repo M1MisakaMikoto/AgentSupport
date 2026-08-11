@@ -1,84 +1,40 @@
+"""HTTP request schemas for the v0.2 public API (execution resources only)."""
+
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 
-class UserCreate(BaseModel):
-    username: str = Field(min_length=1, max_length=120)
-    organization_id: UUID | None = None
-
-
-class OrganizationCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
-
-
-class PresetSkillInput(BaseModel):
+class ConfigSkillInput(BaseModel):
     skill_id: str = Field(min_length=1, max_length=120)
     enabled: bool = True
 
 
-class PresetToolPolicyInput(BaseModel):
+class ConfigToolPolicyInput(BaseModel):
     allowed_tools: list[str] = Field(default_factory=list)
     approval_required_tools: list[str] = Field(default_factory=list)
     tool_descriptors: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class PresetResourcesInput(BaseModel):
+class ConfigResourcesInput(BaseModel):
     mcp_refs: list[dict[str, Any]] = Field(default_factory=list)
     workspace_template: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
 
 
-class PresetPermissionsInput(BaseModel):
+class ConfigPermissionsInput(BaseModel):
     max_active_sessions: int | None = None
     allow_network: bool = True
     allow_workspace_write: bool = True
 
 
-class PresetDefinitionInput(BaseModel):
+class SessionConfigInput(BaseModel):
     version: int = 1
-    skills: list[PresetSkillInput] = Field(default_factory=list)
-    tool_policy: PresetToolPolicyInput = Field(default_factory=PresetToolPolicyInput)
-    resources: PresetResourcesInput = Field(default_factory=PresetResourcesInput)
-    permissions: PresetPermissionsInput = Field(default_factory=PresetPermissionsInput)
-    enabled: bool = True
-
-
-class PresetCreate(BaseModel):
-    user_id: UUID
-    name: str = Field(min_length=1, max_length=120)
-    description: str = ""
-    definition: PresetDefinitionInput | None = None
-
-
-class PresetUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    description: str | None = None
-    definition: PresetDefinitionInput | None = None
-
-
-class ProjectCreate(BaseModel):
-    user_id: UUID
-    name: str = Field(min_length=1, max_length=120)
-    preset_id: UUID | None = None
-
-
-class ProjectConfigInput(BaseModel):
-    version: int = 1
-    skills: list[PresetSkillInput] = Field(default_factory=list)
-    tool_policy: PresetToolPolicyInput = Field(default_factory=PresetToolPolicyInput)
-    resources: PresetResourcesInput = Field(default_factory=PresetResourcesInput)
-    permissions: PresetPermissionsInput = Field(default_factory=PresetPermissionsInput)
-
-
-class ProjectUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    config: ProjectConfigInput | None = None
-
-
-class ProjectImportPreset(BaseModel):
-    preset_id: UUID
+    skills: list[ConfigSkillInput] = Field(default_factory=list)
+    tool_policy: ConfigToolPolicyInput = Field(default_factory=ConfigToolPolicyInput)
+    resources: ConfigResourcesInput = Field(default_factory=ConfigResourcesInput)
+    permissions: ConfigPermissionsInput = Field(default_factory=ConfigPermissionsInput)
 
 
 class WorkspaceCreate(BaseModel):
@@ -87,15 +43,18 @@ class WorkspaceCreate(BaseModel):
 
 class SessionCreate(BaseModel):
     workspace_id: UUID
-    project_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=120)
+    tenant_id: str | None = Field(default=None, max_length=120)
+    user_id: str | None = Field(default=None, max_length=120)
+    project_id: str | None = Field(default=None, max_length=120)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    config: SessionConfigInput | None = None
 
 
 class ConversationCreate(BaseModel):
     task: str = Field(min_length=1)
     parent_conversation_id: UUID | None = None
     workspace_id: UUID | None = None
-    project_id: UUID | None = None
 
 
 class InteractionRequest(BaseModel):
@@ -112,3 +71,18 @@ class ApprovalRequest(BaseModel):
 
 class CancelRequest(BaseModel):
     expected_seq: int | None = None
+
+
+__all__ = [
+    "ApprovalRequest",
+    "CancelRequest",
+    "ConfigPermissionsInput",
+    "ConfigResourcesInput",
+    "ConfigSkillInput",
+    "ConfigToolPolicyInput",
+    "ConversationCreate",
+    "InteractionRequest",
+    "SessionConfigInput",
+    "SessionCreate",
+    "WorkspaceCreate",
+]

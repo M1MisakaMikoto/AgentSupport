@@ -6,9 +6,9 @@ from agentsupport.config import Settings
 from agentsupport.coordination import JobState
 from agentsupport.core_runtime import TraeCoreRunnerRuntime
 from agentsupport.domain import (
-    PresetDefinition,
     PresetSkill,
     PresetToolPolicy,
+    ProjectConfig,
 )
 from agentsupport.reconciler import DistributedReconciler
 from agentsupport.runtime import DockerRuntimeDriver
@@ -131,14 +131,13 @@ async def test_worker_executes_and_releases_distributed_job(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_distributed_worker_uses_project_config(tmp_path):
+async def test_distributed_worker_uses_session_config(tmp_path):
     config = _settings(tmp_path)
     api = AgentSupportService(config)
-    user = api.create_user("alice")
-    preset = api.create_preset(
-        user.id,
-        "review",
-        definition=PresetDefinition(
+    workspace = api.create_workspace("shop")
+    session = api.create_session(
+        workspace.id,
+        config=ProjectConfig(
             skills=[PresetSkill(skill_id="review", enabled=True)],
             tool_policy=PresetToolPolicy(
                 allowed_tools=["bash", "task_done"],
@@ -146,8 +145,6 @@ async def test_distributed_worker_uses_project_config(tmp_path):
             ),
         ),
     )
-    project = api.create_project("shop", user.id, preset_id=preset.id)
-    session = api.create_project_session(project.id)
     conversation = await api.create_conversation(session.id, "finish")
     assert conversation.run.state == "QUEUED"
 

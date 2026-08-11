@@ -76,7 +76,11 @@ class SessionRow(Base):
     __tablename__ = "sessions"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     workspace_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    project_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    labels: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     lease_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     active_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

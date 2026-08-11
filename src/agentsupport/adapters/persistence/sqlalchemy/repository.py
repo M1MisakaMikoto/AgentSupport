@@ -812,9 +812,13 @@ class PostgresRepository:
         workspace: Workspace,
         request_hash: str,
         idempotency_key: str | None,
-        project_id: UUID | None = None,
+        project_id: str | None = None,
         *,
         session_id: UUID | None = None,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        config: ProjectConfig | None = None,
     ) -> Session:
         with self.transaction() as db:
             self._lock_idempotency(db, "session", idempotency_key)
@@ -826,15 +830,38 @@ class PostgresRepository:
                 if session:
                     return session
             session = (
-                Session(id=session_id, workspace_id=workspace.id, project_id=project_id)
+                Session(
+                    id=session_id,
+                    workspace_id=workspace.id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    project_id=project_id,
+                    metadata=metadata or {},
+                    config=config,
+                )
                 if session_id is not None
-                else Session(workspace_id=workspace.id, project_id=project_id)
+                else Session(
+                    workspace_id=workspace.id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    project_id=project_id,
+                    metadata=metadata or {},
+                    config=config,
+                )
             )
             db.add(
                 SessionRow(
                     id=str(session.id),
                     workspace_id=str(session.workspace_id),
+                    tenant_id=session.tenant_id,
+                    user_id=session.user_id,
                     project_id=str(session.project_id) if session.project_id else None,
+                    labels=dict(session.metadata),
+                    config=(
+                        session.config.model_dump(mode="json")
+                        if session.config is not None
+                        else None
+                    ),
                     lease_epoch=session.lease_epoch,
                     created_at=session.created_at,
                 )
@@ -865,15 +892,29 @@ class PostgresRepository:
         return Session(
             id=UUID(row.id),
             workspace_id=UUID(row.workspace_id),
-            project_id=UUID(row.project_id) if row.project_id else None,
+            tenant_id=row.tenant_id,
+            user_id=row.user_id,
+            project_id=row.project_id,
+            metadata=dict(row.labels),
+            config=ProjectConfig.model_validate(row.config) if row.config else None,
             lease_epoch=row.lease_epoch,
             active_run_id=UUID(row.active_run_id) if row.active_run_id else None,
             active_container_id=active.container_id if active else None,
         )
 
-    def list_sessions(self, project_id: UUID | None = None) -> list[Session]:
+    def list_sessions(
+        self,
+        *,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[Session]:
         with self.transaction() as db:
             statement = select(SessionRow).order_by(SessionRow.created_at)
+            if tenant_id is not None:
+                statement = statement.where(SessionRow.tenant_id == tenant_id)
+            if user_id is not None:
+                statement = statement.where(SessionRow.user_id == user_id)
             if project_id is not None:
                 statement = statement.where(SessionRow.project_id == str(project_id))
             rows = db.execute(statement).scalars()
@@ -886,8 +927,14 @@ class PostgresRepository:
                 raise RepositoryConflict("session does not exist")
             row.lease_epoch = session.lease_epoch
             row.active_run_id = str(session.active_run_id) if session.active_run_id else None
+            row.tenant_id = session.tenant_id
+            row.user_id = session.user_id
             if session.project_id:
                 row.project_id = str(session.project_id)
+            row.labels = dict(session.metadata)
+            row.config = (
+                session.config.model_dump(mode="json") if session.config is not None else None
+            )
 
     def create_runtime_operation(self, operation: str, resource_id: str) -> UUID:
         operation_id = uuid4()

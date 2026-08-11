@@ -384,40 +384,29 @@ async def test_full_hierarchy_chain_tenant_user_preset_project_session_conversat
     app = create_app(service)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        org = await client.post("/organizations", json={"name": "acme"})
-        assert org.status_code == 201
-        user = await client.post(
-            "/users",
-            json={"username": "alice", "organization_id": org.json()["id"]},
-        )
-        assert user.status_code == 201
-        preset = await client.post(
-            "/presets",
+        workspace = await client.post("/workspaces", json={"name": "shop"})
+        assert workspace.status_code == 201
+        session = await client.post(
+            "/sessions",
             json={
-                "user_id": user.json()["id"],
-                "name": "review",
-                "definition": {
+                "workspace_id": workspace.json()["id"],
+                "tenant_id": "t-1",
+                "user_id": "u-1",
+                "project_id": "p-2",
+                "metadata": {"team": "platform"},
+                "config": {
                     "skills": [{"skill_id": "review", "enabled": True}],
-                    "tools": {
+                    "tool_policy": {
                         "allowed_tools": ["bash", "task_done"],
                         "approval_required_tools": ["bash"],
                     },
                 },
             },
         )
-        assert preset.status_code == 201
-        project = await client.post(
-            "/projects",
-            json={
-                "user_id": user.json()["id"],
-                "name": "shop",
-                "preset_id": preset.json()["id"],
-            },
-        )
-        assert project.status_code == 201
-        session = await client.post(f"/projects/{project.json()['id']}/sessions")
         assert session.status_code == 201
-        assert session.json()["project_id"] == project.json()["id"]
+        assert session.json()["tenant_id"] == "t-1"
+        assert session.json()["user_id"] == "u-1"
+        assert session.json()["project_id"] == "p-2"
 
         conversation = await client.post(
             f"/sessions/{session.json()['id']}/conversations",
@@ -432,6 +421,8 @@ async def test_full_hierarchy_chain_tenant_user_preset_project_session_conversat
 
         events = await client.get(f"/conversations/{conversation_id}/events")
         assert events.json()[-1]["type"] == "interaction.requested"
+        assert events.json()[-1]["tenant_id"] == "t-1"
+        assert events.json()[-1]["project_id"] == "p-2"
 
         submitted = await client.post(
             f"/conversations/{conversation_id}/input",

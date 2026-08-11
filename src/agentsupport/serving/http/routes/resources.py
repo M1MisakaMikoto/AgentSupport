@@ -1,239 +1,47 @@
+"""v0.2 public resource API: Workspaces, Sessions, Conversations.
+
+Business entities (organizations, users, presets, projects) are managed by the
+upstream caller; this platform only stores their identifiers as optional labels.
+"""
+
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Request, Response
+from fastapi import APIRouter, Header, Request
 from pydantic import BaseModel
 
-from ....domain import PresetDefinition, ProjectConfig
+from ....domain import ProjectConfig
 from ..dependencies import agentsupport_service
 from ..schemas import (
     ConversationCreate,
-    OrganizationCreate,
-    PresetCreate,
-    PresetUpdate,
-    ProjectCreate,
-    ProjectImportPreset,
-    ProjectUpdate,
     SessionCreate,
-    UserCreate,
     WorkspaceCreate,
 )
 
 router = APIRouter()
 
 
-def _created(entity: BaseModel, auto_created: dict[str, Any]) -> dict[str, Any]:
-    """Serialize a created entity, appending auto_created when the platform
-    completed missing preconditions on the caller's behalf."""
-
+def _created(entity: BaseModel, auto_created: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = entity.model_dump(mode="json")
     if auto_created:
         payload["auto_created"] = auto_created
     return payload
 
 
-@router.post("/organizations", status_code=201)
-async def create_organization(
-    request: Request,
-    body: OrganizationCreate,
-    idempotency_key: str | None = Header(default=None),
-):
-    return agentsupport_service(request).create_organization(
-        body.name, idempotency_key
-    )
+def _session_labels(
+    body: SessionCreate,
+    *,
+    x_tenant: str | None,
+    x_user: str | None,
+    x_project: str | None,
+) -> dict[str, str | None]:
+    """Identity headers from the gateway win over request-body labels."""
 
-
-@router.get("/organizations")
-async def list_organizations(request: Request):
-    return agentsupport_service(request).list_organizations()
-
-
-@router.get("/organizations/{organization_id}")
-async def get_organization(request: Request, organization_id: UUID):
-    return agentsupport_service(request).get_organization(organization_id)
-
-
-@router.get("/organizations/{organization_id}/users")
-async def list_organization_users(request: Request, organization_id: UUID):
-    return agentsupport_service(request).list_users(organization_id)
-
-
-@router.post("/users", status_code=201)
-async def create_user(
-    request: Request,
-    body: UserCreate,
-    idempotency_key: str | None = Header(default=None),
-):
-    auto_created: dict[str, Any] = {}
-    user = agentsupport_service(request).create_user(
-        body.username, body.organization_id, idempotency_key, auto_created=auto_created
-    )
-    return _created(user, auto_created)
-
-
-@router.get("/users/{user_id}")
-async def get_user(request: Request, user_id: UUID):
-    return agentsupport_service(request).get_user(user_id)
-
-
-@router.get("/users")
-async def list_users(request: Request):
-    return agentsupport_service(request).list_users()
-
-
-@router.get("/users/{user_id}/projects")
-async def list_user_projects(request: Request, user_id: UUID):
-    return agentsupport_service(request).list_projects(user_id)
-
-
-@router.get("/users/{user_id}/presets")
-async def list_user_presets(request: Request, user_id: UUID):
-    return agentsupport_service(request).list_presets(user_id)
-
-
-@router.get("/presets")
-async def list_presets(request: Request, user_id: UUID | None = None):
-    return agentsupport_service(request).list_presets(user_id)
-
-
-@router.post("/presets", status_code=201)
-async def create_preset(
-    request: Request,
-    body: PresetCreate,
-    idempotency_key: str | None = Header(default=None),
-):
-    definition = (
-        PresetDefinition(**body.definition.model_dump()) if body.definition else None
-    )
-    auto_created: dict[str, Any] = {}
-    preset = agentsupport_service(request).create_preset(
-        body.user_id,
-        body.name,
-        body.description,
-        definition,
-        idempotency_key,
-        auto_created=auto_created,
-    )
-    return _created(preset, auto_created)
-
-
-@router.get("/presets/{preset_id}")
-async def get_preset(request: Request, preset_id: UUID):
-    return agentsupport_service(request).get_preset(preset_id)
-
-
-@router.patch("/presets/{preset_id}")
-async def update_preset(request: Request, preset_id: UUID, body: PresetUpdate):
-    definition = (
-        PresetDefinition(**body.definition.model_dump()) if body.definition else None
-    )
-    return agentsupport_service(request).update_preset(
-        preset_id, name=body.name, description=body.description, definition=definition
-    )
-
-
-@router.delete("/presets/{preset_id}", status_code=204)
-async def delete_preset(request: Request, preset_id: UUID):
-    agentsupport_service(request).delete_preset(preset_id)
-    return Response(status_code=204)
-
-
-@router.post("/projects", status_code=201)
-async def create_project(
-    request: Request,
-    body: ProjectCreate,
-    idempotency_key: str | None = Header(default=None),
-):
-    auto_created: dict[str, Any] = {}
-    project = agentsupport_service(request).create_project(
-        body.name,
-        body.user_id,
-        body.preset_id,
-        idempotency_key,
-        auto_created=auto_created,
-    )
-    return _created(project, auto_created)
-
-
-@router.get("/projects/{project_id}")
-async def get_project(request: Request, project_id: UUID):
-    return agentsupport_service(request).get_project(project_id)
-
-
-@router.get("/projects")
-async def list_projects(request: Request, user_id: UUID | None = None):
-    return agentsupport_service(request).list_projects(user_id)
-
-
-@router.patch("/projects/{project_id}")
-async def update_project(
-    request: Request, project_id: UUID, body: ProjectUpdate
-):
-    config = (
-        ProjectConfig(**body.config.model_dump()) if body.config else None
-    )
-    return agentsupport_service(request).update_project(
-        project_id, name=body.name, config=config
-    )
-
-
-@router.delete("/projects/{project_id}", status_code=204)
-async def delete_project(request: Request, project_id: UUID):
-    agentsupport_service(request).delete_project(project_id)
-    return Response(status_code=204)
-
-
-@router.get("/projects/{project_id}/sessions")
-async def list_project_sessions(request: Request, project_id: UUID):
-    agentsupport_service(request).get_project(project_id)
-    return agentsupport_service(request).list_sessions(project_id)
-
-
-@router.post("/projects/{project_id}/preset")
-async def import_preset(
-    request: Request, project_id: UUID, body: ProjectImportPreset
-):
-    service = agentsupport_service(request)
-    auto_created: dict[str, Any] = {}
-    project, previous_config = service.import_preset_to_project(
-        project_id, body.preset_id, auto_created=auto_created
-    )
-    response: dict[str, Any] = {
-        "project": project,
-        "previous_config": previous_config,
+    return {
+        "tenant_id": x_tenant or body.tenant_id,
+        "user_id": x_user or body.user_id,
+        "project_id": x_project or body.project_id,
     }
-    if auto_created:
-        response["auto_created"] = auto_created
-    return response
-
-
-@router.post("/projects/{project_id}/sessions", status_code=201)
-async def create_project_session(
-    request: Request,
-    project_id: UUID,
-    idempotency_key: str | None = Header(default=None),
-):
-    auto_created: dict[str, Any] = {}
-    session = agentsupport_service(request).create_project_session(
-        project_id, idempotency_key, auto_created=auto_created
-    )
-    return _created(session, auto_created)
-
-
-@router.get("/sessions/{session_id}")
-async def get_session(request: Request, session_id: UUID):
-    return agentsupport_service(request).get_session(session_id)
-
-
-@router.get("/sessions/{session_id}/conversations")
-async def list_session_conversations(request: Request, session_id: UUID):
-    agentsupport_service(request).get_session(session_id)
-    return agentsupport_service(request).list_conversations(session_id)
-
-
-@router.get("/conversations/{conversation_id}")
-async def get_conversation(request: Request, conversation_id: UUID):
-    return agentsupport_service(request).get_conversation(conversation_id)
 
 
 @router.post("/workspaces", status_code=201)
@@ -242,7 +50,19 @@ async def create_workspace(
     body: WorkspaceCreate,
     idempotency_key: str | None = Header(default=None),
 ):
-    return agentsupport_service(request).create_workspace(body.name, idempotency_key)
+    return agentsupport_service(request).create_workspace(
+        body.name, idempotency_key
+    ).model_dump(mode="json")
+
+
+@router.get("/workspaces")
+async def list_workspaces(request: Request):
+    return [item.model_dump(mode="json") for item in agentsupport_service(request).list_workspaces()]
+
+
+@router.get("/workspaces/{workspace_id}")
+async def get_workspace(request: Request, workspace_id: UUID):
+    return agentsupport_service(request).get_workspace(workspace_id).model_dump(mode="json")
 
 
 @router.post("/sessions", status_code=201)
@@ -250,16 +70,54 @@ async def create_session(
     request: Request,
     body: SessionCreate,
     idempotency_key: str | None = Header(default=None),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_project_id: str | None = Header(default=None, alias="X-Project-Id"),
 ):
+    labels = _session_labels(
+        body, x_tenant=x_tenant_id, x_user=x_user_id, x_project=x_project_id
+    )
     auto_created: dict[str, Any] = {}
     session = agentsupport_service(request).create_session(
         body.workspace_id,
         idempotency_key,
-        body.project_id,
         name=body.name,
+        tenant_id=labels["tenant_id"],
+        user_id=labels["user_id"],
+        project_id=labels["project_id"],
+        metadata=body.metadata,
+        config=(
+            ProjectConfig.model_validate(body.config.model_dump())
+            if body.config is not None
+            else None
+        ),
         auto_created=auto_created,
     )
     return _created(session, auto_created)
+
+
+@router.get("/sessions")
+async def list_sessions(
+    request: Request,
+    workspace_id: UUID | None = None,
+    tenant_id: str | None = None,
+    user_id: str | None = None,
+    project_id: str | None = None,
+):
+    return [
+        item.model_dump(mode="json")
+        for item in agentsupport_service(request).list_sessions(
+            workspace_id=workspace_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            project_id=project_id,
+        )
+    ]
+
+
+@router.get("/sessions/{session_id}")
+async def get_session(request: Request, session_id: UUID):
+    return agentsupport_service(request).get_session(session_id).model_dump(mode="json")
 
 
 @router.post("/sessions/{session_id}/conversations", status_code=201)
@@ -273,10 +131,24 @@ async def create_conversation(
     conversation = await agentsupport_service(request).create_conversation(
         session_id,
         body.task,
-        body.parent_conversation_id,
-        idempotency_key,
+        parent_conversation_id=body.parent_conversation_id,
+        idempotency_key=idempotency_key,
         workspace_id=body.workspace_id,
-        project_id=body.project_id,
         auto_created=auto_created,
     )
     return _created(conversation, auto_created)
+
+
+@router.get("/sessions/{session_id}/conversations")
+async def list_session_conversations(request: Request, session_id: UUID):
+    service = agentsupport_service(request)
+    service.get_session(session_id)
+    return [
+        item.model_dump(mode="json")
+        for item in service.list_conversations(session_id=session_id)
+    ]
+
+
+@router.get("/conversations/{conversation_id}")
+async def get_conversation(request: Request, conversation_id: UUID):
+    return agentsupport_service(request).get_conversation(conversation_id).model_dump(mode="json")

@@ -193,15 +193,14 @@ class DistributedWorker:
                 error={"code": "RESOURCE_NOT_FOUND"},
             )
             return
-        project = self.repository.get_session_project(session.id) if session.project_id else None
         skills = (
-            project.config.enabled_skill_ids()
-            if project is not None and not project.config.is_empty()
+            session.config.enabled_skill_ids()
+            if session.config is not None and not session.config.is_empty()
             else self.enabled_skills
         )
-        project_tool_policy = (
-            project.config.tool_policy_dict()
-            if project is not None and not project.config.is_empty()
+        session_tool_policy = (
+            session.config.tool_policy_dict()
+            if session.config is not None and not session.config.is_empty()
             else {}
         )
         resuming = conversation.run.state == ExecutionState.RESUMING
@@ -251,7 +250,7 @@ class DistributedWorker:
             if register:
                 register(claim.job.run_id, endpoint_url)
             workspace_ref = self._workspace_ref(workspace.root_path, dynamic_endpoint)
-            tool_policy = project_tool_policy or {
+            tool_policy = session_tool_policy or {
                 "allowed_tools": [
                     "bash",
                     "str_replace_based_edit_tool",

@@ -14,5 +14,8 @@ class EventEnvelope(BaseModel):
     seq: int
     type: str
     payload: dict[str, Any] = Field(default_factory=dict)
+    tenant_id: str | None = None
+    user_id: str | None = None
+    project_id: str | None = None
     source: str = "agentsupport"
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

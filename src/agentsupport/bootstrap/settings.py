@@ -1,5 +1,4 @@
 from pathlib import Path
-from uuid import UUID
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -55,13 +54,10 @@ class Settings(BaseSettings):
     # to a resource that does not exist yet, the platform creates it on demand.
     auto_create_missing: bool = True
     # Comma-separated scopes, or "all": organization,user,preset,project,workspace,session
-    auto_create_scopes: str = "all"
+    auto_create_scopes: str = "workspace,session"
     # Optional stable IDs used when a missing workspace/user must be created
     # and the request carries no explicit reference. When unset, stable
     # namespaced UUIDs are derived so repeated calls converge on one entity.
-    default_workspace_id: UUID | None = None
-    default_user_id: UUID | None = None
-    auto_resource_name: str = "auto"
     # Retention windows for transient coordination state. Inline (in-memory)
     # mode prunes idempotency records and unreferenced checkpoints on the
     # background timer; PostgreSQL mode applies the same windows plus event,
