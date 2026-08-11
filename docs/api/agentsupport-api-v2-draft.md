@@ -1,7 +1,7 @@
 # AgentSupport API v0.2 契约草案（B+ 方案）
 
-状态：草案，与 [ADR-002](../adr/002-platform-boundary-and-api-v2.md) 配套；
-评审通过前不代表已实现，仅用于定边界。
+状态：已定稿并随 `0.2.0` 实现，与 [ADR-002](../adr/002-platform-boundary-and-api-v2.md) 配套；
+生命周期 API（PATCH / DELETE / pause / resume）与租户配额仍为契约项，尚未实现。
 
 ## 1. 范围
 

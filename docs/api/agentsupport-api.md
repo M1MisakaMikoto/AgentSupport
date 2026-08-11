@@ -1,5 +1,11 @@
 # AgentSupport API 参考
 
+> 本文档为 v0.1 冻结快照。现行 v0.2 契约（执行资源 + 标签 + Runner 注册）见
+> [agentsupport-api-v2-draft.md](agentsupport-api-v2-draft.md)，迁移说明见
+> [迁移指南](../migration/v0.1-to-v0.2.md)。
+
+以下为 v0.1 历史内容，业务实体路由（组织 / 用户 / 预设 / 项目）在 v0.2 中已移除。
+
 本文档描述 AgentSupport `0.1.0` 当前实际实现的 HTTP API。平台由两层组成：
 
 - **AgentSupport API**：面向业务调用方的控制面 API，负责 Workspace、Session、Conversation、事件和交互。

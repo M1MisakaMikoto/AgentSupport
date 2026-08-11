@@ -53,7 +53,7 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
             with suppress(asyncio.CancelledError):
                 await health
 
-    app = FastAPI(title="AgentSupport", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="AgentSupport", version="0.2.0", lifespan=lifespan)
     app.state.service = selected_service
 
     @app.middleware("http")
