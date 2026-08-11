@@ -114,6 +114,18 @@ class PostgresRepository:
                                 f"ALTER TABLE conversation_checkpoints ADD COLUMN {name} {sql_type}"
                             )
                         )
+            idempotency_columns = {
+                column["name"]
+                for column in inspect(self.engine).get_columns("idempotency_keys")
+            }
+            if "created_at" not in idempotency_columns:
+                with self.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE idempotency_keys ADD COLUMN created_at "
+                            "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                        )
+                    )
         self._ensure_organization()
 
     @contextmanager
@@ -704,6 +716,7 @@ class PostgresRepository:
                     request_hash=request_hash,
                     resource_id=str(resource_id),
                     response_payload=response_payload,
+                    created_at=_now(),
                 )
             )
 
@@ -2438,3 +2451,112 @@ class PostgresRepository:
                 row.published_at = _now()
             row.claimed_by = None
             row.claim_expires_at = None
+
+    def retention_cleanup(
+        self,
+        *,
+        idempotency_hours: int = 24,
+        unreferenced_checkpoints_hours: int = 24,
+        published_outbox_days: int = 7,
+        terminal_jobs_days: int = 30,
+        terminal_events_days: int = 90,
+    ) -> dict[str, int]:
+        """Delete coordination rows that outlived their retention windows.
+
+        Each window of ``0`` disables cleanup for that table. Authoritative
+        resources (workspaces, sessions, conversations, users, projects) are
+        never deleted here; only transient coordination state is.
+        """
+
+        now = _now()
+        result: dict[str, int] = {}
+        with self.transaction() as db:
+            if idempotency_hours > 0:
+                cutoff = now - timedelta(hours=idempotency_hours)
+                result["idempotency_keys"] = db.execute(
+                    delete(IdempotencyKeyRow).where(IdempotencyKeyRow.created_at < cutoff)
+                ).rowcount
+            if unreferenced_checkpoints_hours > 0:
+                cutoff = now - timedelta(hours=unreferenced_checkpoints_hours)
+                referenced = select(ConversationRow.checkpoint_id).where(
+                    ConversationRow.checkpoint_id.is_not(None)
+                )
+                result["conversation_checkpoints"] = db.execute(
+                    delete(ConversationCheckpointRow).where(
+                        ConversationCheckpointRow.created_at < cutoff,
+                        ConversationCheckpointRow.id.not_in(referenced),
+                    )
+                ).rowcount
+            if published_outbox_days > 0:
+                cutoff = now - timedelta(days=published_outbox_days)
+                result["outbox_events"] = db.execute(
+                    delete(OutboxEventRow).where(
+                        OutboxEventRow.published_at.is_not(None),
+                        OutboxEventRow.published_at < cutoff,
+                    )
+                ).rowcount
+            if terminal_jobs_days > 0:
+                cutoff = now - timedelta(days=terminal_jobs_days)
+                terminal_run_ids = select(ExecutionJobRow.run_id).where(
+                    ExecutionJobRow.state.in_(
+                        [
+                            JobState.COMPLETED.value,
+                            JobState.FAILED.value,
+                            JobState.CANCELLED.value,
+                        ]
+                    ),
+                    ExecutionJobRow.updated_at < cutoff,
+                )
+                result["execution_jobs"] = db.execute(
+                    delete(ExecutionJobRow).where(ExecutionJobRow.run_id.in_(terminal_run_ids))
+                ).rowcount
+                result["runner_endpoints"] = db.execute(
+                    delete(RunnerEndpointRow).where(RunnerEndpointRow.run_id.in_(terminal_run_ids))
+                ).rowcount
+                result["run_commands"] = db.execute(
+                    delete(RunCommandRow).where(
+                        RunCommandRow.state.in_(
+                            [CommandState.APPLIED.value, CommandState.FAILED.value]
+                        ),
+                        RunCommandRow.created_at < cutoff,
+                    )
+                ).rowcount
+                result["runtime_operations"] = db.execute(
+                    delete(RuntimeOperationRow).where(
+                        RuntimeOperationRow.status.in_(["SUCCEEDED", "FAILED"]),
+                        RuntimeOperationRow.created_at < cutoff,
+                    )
+                ).rowcount
+                result["container_leases"] = db.execute(
+                    delete(ContainerLeaseRow).where(
+                        ContainerLeaseRow.status != "ACTIVE",
+                        ContainerLeaseRow.expires_at.is_not(None),
+                        ContainerLeaseRow.expires_at < cutoff,
+                    )
+                ).rowcount
+                result["workspace_write_leases"] = db.execute(
+                    delete(WorkspaceWriteLeaseRow).where(
+                        WorkspaceWriteLeaseRow.status != "ACTIVE",
+                        WorkspaceWriteLeaseRow.expires_at.is_not(None),
+                        WorkspaceWriteLeaseRow.expires_at < cutoff,
+                    )
+                ).rowcount
+            if terminal_events_days > 0:
+                cutoff = now - timedelta(days=terminal_events_days)
+                terminal_conversation_ids = select(ConversationRow.id).where(
+                    ConversationRow.execution_state.in_(
+                        [
+                            ExecutionState.COMPLETED.value,
+                            ExecutionState.FAILED.value,
+                            ExecutionState.CANCELLED.value,
+                            ExecutionState.LOST.value,
+                        ]
+                    ),
+                    ConversationRow.created_at < cutoff,
+                )
+                result["conversation_events"] = db.execute(
+                    delete(ConversationEventRow).where(
+                        ConversationEventRow.conversation_id.in_(terminal_conversation_ids)
+                    )
+                ).rowcount
+        return result

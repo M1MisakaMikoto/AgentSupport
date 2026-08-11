@@ -110,6 +110,20 @@ services:
       db-migrate:
         condition: service_completed_successfully
 
+  retention:
+    image: agentsupport-api
+    command: python -m agentsupport.retention
+    environment:
+      AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
+      AGENTSUPPORT_PERSISTENCE_MODE: postgres
+      AGENTSUPPORT_AUTO_CREATE_SCHEMA: "false"
+      AGENTSUPPORT_EXECUTION_MODE: distributed
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
   runner:
     image: agentsupport-api
     command: uvicorn session_runner.main:app --host 0.0.0.0 --port 8080

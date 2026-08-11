@@ -10,6 +10,8 @@ from agent_runner_contracts.events import EventEnvelope
 
 from ...application.ports import EventSink
 
+TERMINAL_RUN_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELLED", "LOST"})
+
 
 class TraeCoreRunnerRuntime:
     """HTTP/JSON CoreRuntime adapter for a private Session Runner."""
@@ -61,6 +63,8 @@ class TraeCoreRunnerRuntime:
             result = response.json()
         for event in result.get("events", []):
             await event_sink(EventEnvelope.model_validate(event))
+        if result.get("status") in TERMINAL_RUN_STATUSES:
+            self.unregister_run_endpoint(run_id)
         return result
 
     async def accept_input(
@@ -81,7 +85,10 @@ class TraeCoreRunnerRuntime:
                 },
             )
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+        if result.get("status") in TERMINAL_RUN_STATUSES:
+            self.unregister_run_endpoint(run_id)
+        return result
 
     async def accept_approval(
         self,
@@ -101,7 +108,10 @@ class TraeCoreRunnerRuntime:
                 },
             )
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+        if result.get("status") in TERMINAL_RUN_STATUSES:
+            self.unregister_run_endpoint(run_id)
+        return result
 
     async def checkpoint(self, run_id: UUID, reason: str) -> Checkpoint:
         async with self._client(self._run_url(run_id)) as client:
@@ -133,6 +143,8 @@ class TraeCoreRunnerRuntime:
             result = response.json()
         for event in result.get("events", []):
             await event_sink(EventEnvelope.model_validate(event))
+        if result.get("status") in TERMINAL_RUN_STATUSES:
+            self.unregister_run_endpoint(checkpoint.run_id)
         return result
 
     async def cancel(

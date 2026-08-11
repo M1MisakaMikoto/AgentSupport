@@ -62,6 +62,17 @@ class Settings(BaseSettings):
     default_workspace_id: UUID | None = None
     default_user_id: UUID | None = None
     auto_resource_name: str = "auto"
+    # Retention windows for transient coordination state. Inline (in-memory)
+    # mode prunes idempotency records and unreferenced checkpoints on the
+    # background timer; PostgreSQL mode applies the same windows plus event,
+    # job and outbox retention via the dedicated retention process. A window
+    # of 0 disables that cleanup.
+    retention_idempotency_hours: int = 24
+    retention_unreferenced_checkpoints_hours: int = 24
+    retention_cleanup_interval_hours: int = 24
+    retention_published_outbox_days: int = 7
+    retention_terminal_jobs_days: int = 30
+    retention_terminal_events_days: int = 90
 
     @model_validator(mode="after")
     def _validate_auth_mode(self) -> "Settings":

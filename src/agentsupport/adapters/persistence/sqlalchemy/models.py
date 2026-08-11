@@ -233,6 +233,7 @@ class IdempotencyKeyRow(Base):
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     resource_id: Mapped[str] = mapped_column(String(36), nullable=False)
     response_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class RuntimeOperationRow(Base):
@@ -266,6 +267,16 @@ def create_schema(database_url: str) -> None:
         with engine.begin() as connection:
             connection.execute(
                 text("ALTER TABLE conversations ADD COLUMN checkpoint_id VARCHAR(36)")
+            )
+    if "created_at" not in {
+        column["name"] for column in inspect(engine).get_columns("idempotency_keys")
+    }:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE idempotency_keys ADD COLUMN created_at "
+                    "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                )
             )
     backfill_projects(engine)
 

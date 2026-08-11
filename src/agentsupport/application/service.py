@@ -6,8 +6,8 @@ import json
 import os
 import socket
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -68,6 +68,7 @@ def _hash_request(payload: dict[str, Any]) -> str:
 class IdempotencyRecord:
     request_hash: str
     resource_id: UUID
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class AgentSupportService:
@@ -1705,6 +1706,47 @@ class AgentSupportService:
             await self.pause(conversation.id, reason="waiting_input_timeout")
             paused += 1
         return paused
+
+    def prune_retained_state(self, now: datetime | None = None) -> dict[str, int]:
+        """Drop transient in-memory records that outlived their retention windows.
+
+        Only idempotency records and checkpoints that are no longer referenced
+        by any conversation are pruned. Workspaces, sessions, conversations and
+        events are authoritative data and are intentionally left untouched by
+        this pass; PostgreSQL-side retention is handled by the dedicated
+        retention process.
+        """
+
+        current = now or datetime.now(UTC)
+        idempotency_cutoff = current - timedelta(
+            hours=self.config.retention_idempotency_hours
+        )
+        stale_idempotency = [
+            key
+            for key, record in self.idempotency.items()
+            if record.created_at < idempotency_cutoff
+        ]
+        for key in stale_idempotency:
+            del self.idempotency[key]
+        referenced = {
+            conversation.run.checkpoint_id
+            for conversation in self.conversations.values()
+            if conversation.run.checkpoint_id is not None
+        }
+        checkpoint_cutoff = current - timedelta(
+            hours=self.config.retention_unreferenced_checkpoints_hours
+        )
+        stale_checkpoints = [
+            checkpoint_id
+            for checkpoint_id, checkpoint in self.checkpoints.items()
+            if checkpoint_id not in referenced and checkpoint.created_at < checkpoint_cutoff
+        ]
+        for checkpoint_id in stale_checkpoints:
+            del self.checkpoints[checkpoint_id]
+        return {
+            "idempotency_records": len(stale_idempotency),
+            "unreferenced_checkpoints": len(stale_checkpoints),
+        }
 
     async def supervise_active_sessions(self) -> int:
         """Mark sessions LOST only after repeated failed container health checks."""

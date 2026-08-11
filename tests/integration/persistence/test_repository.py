@@ -1,7 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import text
 
 from agentsupport.config import Settings
-from agentsupport.domain import Conversation, ExecutionState
+from agentsupport.domain import Checkpoint, ContextBundle, Conversation, ExecutionState
 from agentsupport.events import EventEnvelope
 from agentsupport.repository import PostgresRepository
 from agentsupport.services import AgentSupportService
@@ -104,3 +106,80 @@ async def test_cancel_clears_pending_interaction_after_repository_reload(tmp_pat
     assert loaded.run.state == ExecutionState.CANCELLED
     assert loaded.run.pending_interaction is None
     assert restarted.events(conversation.id)[-1].type == "run.cancelled"
+
+
+def test_retention_cleanup_deletes_only_transient_rows(tmp_path):
+    repository = PostgresRepository(f"sqlite:///{tmp_path / 'retention.db'}", create_schema=True)
+    request_hash = "r" * 64
+    workspace = repository.create_workspace("demo", "/workspace/demo", request_hash, "w1")
+    session = repository.create_session(workspace, request_hash, "s1")
+    conversation = Conversation(session_id=session.id, task="task")
+    repository.create_conversation(conversation, request_hash, "c1")
+    repository.remember_idempotent(
+        "input", "old-key", "d" * 64, conversation.id, {"id": str(conversation.id)}
+    )
+    event = EventEnvelope(
+        run_id=conversation.run.run_id,
+        seq=1,
+        type="run.started",
+        occurred_at=datetime.now(UTC),
+    )
+    repository.append_event(conversation, event)
+    checkpoint = Checkpoint(
+        conversation_id=conversation.id,
+        run_id=conversation.run.run_id,
+        last_event_seq=1,
+        context_bundle=ContextBundle(
+            task="task",
+            conversation_id=conversation.id,
+            workspace_ref="/workspace",
+        ),
+        workspace_ref="/workspace",
+        workspace_write_lease_epoch=0,
+        context_bundle_hash="a" * 64,
+    )
+    repository.save_checkpoint(checkpoint)
+    with repository.engine.begin() as connection:
+        connection.execute(
+            text("UPDATE idempotency_keys SET created_at = :old WHERE key = 'old-key'"),
+            {"old": datetime.now(UTC) - timedelta(hours=25)},
+        )
+        connection.execute(
+            text("UPDATE conversation_checkpoints SET created_at = :old"),
+            {"old": datetime.now(UTC) - timedelta(hours=25)},
+        )
+        connection.execute(
+            text("UPDATE outbox_events SET published_at = :old WHERE published_at IS NULL"),
+            {"old": datetime.now(UTC) - timedelta(days=2)},
+        )
+
+    removed = repository.retention_cleanup(
+        idempotency_hours=24,
+        unreferenced_checkpoints_hours=24,
+        published_outbox_days=1,
+        terminal_jobs_days=30,
+        terminal_events_days=90,
+    )
+
+    assert removed["idempotency_keys"] == 1
+    assert removed["conversation_checkpoints"] == 1
+    assert removed["outbox_events"] == 1
+    assert repository.find_idempotent("input", "old-key", "d" * 64) is None
+    assert repository.list_workspaces()[0].id == workspace.id
+    assert repository.list_sessions()[0].id == session.id
+    assert repository.list_conversations()[0].id == conversation.id
+    assert repository.list_events(conversation.id)[0].type == "run.started"
+
+
+def test_retention_cleanup_zero_windows_disable_cleanup(tmp_path):
+    repository = PostgresRepository(
+        f"sqlite:///{tmp_path / 'retention-off.db'}", create_schema=True
+    )
+    removed = repository.retention_cleanup(
+        idempotency_hours=0,
+        unreferenced_checkpoints_hours=0,
+        published_outbox_days=0,
+        terminal_jobs_days=0,
+        terminal_events_days=0,
+    )
+    assert removed == {}
