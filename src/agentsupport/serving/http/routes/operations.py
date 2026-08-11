@@ -25,11 +25,5 @@ async def metrics(request: Request) -> str:
 
 
 @router.get("/cores")
-async def list_cores():
-    return [
-        {
-            "type": "session_runner",
-            "version": "0.1.0",
-            "capabilities": ["run", "input", "checkpoint", "cancel", "events"],
-        }
-    ]
+async def list_cores(request: Request):
+    return agentsupport_service(request).runner_snapshot()

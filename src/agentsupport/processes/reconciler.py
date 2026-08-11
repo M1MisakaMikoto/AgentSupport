@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 
 from ..adapters.persistence.sqlalchemy.repository import PostgresRepository
 from ..application.ports import RuntimeDriver
@@ -29,6 +30,12 @@ class DistributedReconciler:
         )
 
     async def run_once(self) -> dict[str, int]:
+        expired_runners = len(
+            self.repository.expire_runner_registrations(
+                now=datetime.now(UTC),
+                timeout_seconds=self.config.runner_heartbeat_timeout_seconds,
+            )
+        )
         paused_endpoints = self.repository.pause_expired_waiting(
             self.config.waiting_input_timeout_seconds
         )
@@ -36,6 +43,7 @@ class DistributedReconciler:
             await self.runtime_driver.stop(endpoint.runtime_id)
         if not self.runtime_reconciliation_enabled:
             return {
+                "expired_runners": expired_runners,
                 "paused": len(paused_endpoints),
                 "missing": 0,
                 "removed_orphans": 0,
@@ -57,6 +65,7 @@ class DistributedReconciler:
                     await self.runtime_driver.stop(runtime_id, force=True)
                     removed_orphans += 1
         return {
+            "expired_runners": expired_runners,
             "paused": len(paused_endpoints),
             "missing": missing,
             "removed_orphans": removed_orphans,

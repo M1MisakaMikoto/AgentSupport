@@ -4,6 +4,7 @@ from typing import Any
 
 from ..adapters.notification import InMemoryEventStore, create_event_notifier
 from ..adapters.persistence.sqlalchemy import PostgresRepository
+from ..adapters.registry import SqlAlchemyRunnerRegistry
 from ..adapters.runner import TraeCoreRunnerRuntime
 from ..adapters.runtime import (
     DockerCliRuntimeDriver,
@@ -13,7 +14,8 @@ from ..adapters.runtime import (
 )
 from ..adapters.skills import LocalSkillProvider
 from ..adapters.workspace import KubernetesWorkspaceProvider, LocalWorkspaceProvider
-from ..application.ports import CoreRuntime, RuntimeDriver
+from ..application.ports import CoreRuntime, RunnerRegistry, RuntimeDriver
+from ..application.runner_registry import InMemoryRunnerRegistry
 from ..application.service import AgentSupportService
 from .settings import Settings, settings
 
@@ -55,6 +57,12 @@ def build_core_runtime(config: Settings) -> CoreRuntime | None:
     )
 
 
+def build_runner_registry(config: Settings, repository: PostgresRepository | None) -> RunnerRegistry:
+    if repository is not None:
+        return SqlAlchemyRunnerRegistry(repository)
+    return InMemoryRunnerRegistry()
+
+
 def build_workspace_provider(config: Settings) -> Any:
     if config.runtime_driver == "kubernetes":
         return KubernetesWorkspaceProvider()
@@ -66,6 +74,7 @@ def build_skill_provider(config: Settings) -> LocalSkillProvider:
 
 
 def build_agentsupport_dependencies(config: Settings) -> dict[str, Any]:
+    repository = build_repository(config)
     return {
         "events_store": InMemoryEventStore(),
         "event_notifier": create_event_notifier(config.redis_url),
@@ -73,7 +82,8 @@ def build_agentsupport_dependencies(config: Settings) -> dict[str, Any]:
         "skill_provider": build_skill_provider(config),
         "runtime_driver": build_runtime_driver(config),
         "core_runtime": build_core_runtime(config),
-        "repository": build_repository(config),
+        "repository": repository,
+        "runner_registry": build_runner_registry(config, repository),
     }
 
 

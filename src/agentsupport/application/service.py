@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import secrets
 import socket
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -18,6 +19,12 @@ from agent_runner_contracts.checkpoint import (
     validate_checkpoint,
 )
 from agent_runner_contracts.events import EventEnvelope
+from agent_runner_contracts.registration import (
+    RunnerHeartbeat,
+    RunnerRegistration,
+    RunnerRegistrationRequest,
+    RunnerRegistrationResponse,
+)
 from agent_runner_contracts.tools import ToolBatch
 
 from ..domain import (
@@ -42,10 +49,12 @@ from .ports import (
     EventNotifier,
     EventStore,
     RepositoryConflict,
+    RunnerRegistry,
     RuntimeDriver,
     SkillProvider,
     WorkspaceProvider,
 )
+from .runner_registry import InMemoryRunnerRegistry, RunnerRegistryConflict
 
 
 class ServiceError(Exception):
@@ -62,6 +71,10 @@ class ServiceError(Exception):
 def _hash_request(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 @dataclass
@@ -85,6 +98,7 @@ class AgentSupportService:
         runtime_driver: RuntimeDriver,
         core_runtime: CoreRuntime | None,
         repository: Any | None,
+        runner_registry: RunnerRegistry | None = None,
     ) -> None:
         self.config = config
         self.distributed = config.execution_mode == "distributed"
@@ -111,6 +125,7 @@ class AgentSupportService:
         self._health_failures: dict[UUID, int] = {}
         self._scheduler_lock = asyncio.Lock()
         self.repository = repository
+        self.runner_registry = runner_registry or InMemoryRunnerRegistry()
         self.organization_id = (
             getattr(self.repository, "organization_id", None) if self.repository else None
         ) or uuid4()
@@ -165,8 +180,11 @@ class AgentSupportService:
                     return endpoint
         return self.config.core_runner_url
 
-    async def _register_core_endpoint(self, session: Session, run_id: UUID) -> str | None:
-        endpoint = await self._runner_endpoint(session)
+    async def _register_core_endpoint(
+        self, session: Session, run_id: UUID, endpoint: str | None = None
+    ) -> str | None:
+        if endpoint is None:
+            endpoint = await self._runner_endpoint(session)
         if self.core_runtime is not None:
             register = getattr(self.core_runtime, "register_run_endpoint", None)
             if register is not None:
@@ -1265,7 +1283,14 @@ class AgentSupportService:
             else "/workspace"
         )
         runner_endpoint = await self._runner_endpoint(session)
-        if runner_endpoint and not self.config.core_runner_url:
+        registered_runner = self.select_ready_runner({"run"})
+        used_registered = False
+        if registered_runner and (
+            not runner_endpoint or runner_endpoint == self.config.core_runner_url
+        ):
+            runner_endpoint = registered_runner.endpoint
+            used_registered = True
+        if used_registered or (runner_endpoint and not self.config.core_runner_url):
             workspace_ref = "/workspace"
         tool_policy = self._tool_policy_for_session(session)
         request = {
@@ -1292,7 +1317,9 @@ class AgentSupportService:
             "tool_policy": tool_policy,
             "core_version": "0.1.0",
         }
-        runner_endpoint = await self._register_core_endpoint(session, conversation.run.run_id)
+        runner_endpoint = await self._register_core_endpoint(
+            session, conversation.run.run_id, runner_endpoint
+        )
         if runner_endpoint:
             request["runner_url"] = runner_endpoint
         try:
@@ -1747,6 +1774,80 @@ class AgentSupportService:
             "idempotency_records": len(stale_idempotency),
             "unreferenced_checkpoints": len(stale_checkpoints),
         }
+
+    def register_runner(
+        self, request: RunnerRegistrationRequest, *, bootstrap_token: str | None
+    ) -> RunnerRegistrationResponse:
+        if not self.config.runner_token:
+            raise ServiceError(
+                "RUNNER_REGISTRATION_DISABLED",
+                "runner registration is not configured; set AGENTSUPPORT_RUNNER_TOKEN",
+                503,
+            )
+        if not bootstrap_token or not secrets.compare_digest(
+            bootstrap_token, self.config.runner_token
+        ):
+            raise ServiceError("RUNNER_TOKEN_INVALID", "invalid runner token", 401)
+        runner_token = secrets.token_urlsafe(32)
+        try:
+            entry = self.runner_registry.register(request, _hash_token(runner_token))
+        except RunnerRegistryConflict as exc:
+            raise ServiceError("RUNNER_ALREADY_REGISTERED", str(exc), 409) from exc
+        return RunnerRegistrationResponse(
+            runner_id=entry.runner_id, token=runner_token
+        )
+
+    def _verify_runner_token(self, runner_id: UUID, runner_token: str | None) -> None:
+        if not runner_token:
+            raise ServiceError("RUNNER_TOKEN_INVALID", "missing runner token", 401)
+        stored = self.runner_registry.token_hash(runner_id)
+        if stored is None:
+            raise ServiceError("RUNNER_NOT_FOUND", "runner is not registered", 404)
+        if not secrets.compare_digest(_hash_token(runner_token), stored):
+            raise ServiceError("RUNNER_TOKEN_INVALID", "invalid runner token", 401)
+
+    def runner_heartbeat(
+        self, runner_id: UUID, payload: RunnerHeartbeat, *, runner_token: str | None
+    ) -> RunnerRegistration:
+        self._verify_runner_token(runner_id, runner_token)
+        updated = self.runner_registry.heartbeat(
+            runner_id,
+            payload.status,
+            payload.load,
+            capabilities=payload.capabilities,
+        )
+        if updated is None:
+            raise ServiceError("RUNNER_NOT_FOUND", "runner is not registered", 404)
+        return updated
+
+    def runner_deregister(self, runner_id: UUID, *, runner_token: str | None) -> None:
+        self._verify_runner_token(runner_id, runner_token)
+        if not self.runner_registry.deregister(runner_id):
+            raise ServiceError("RUNNER_NOT_FOUND", "runner is not registered", 404)
+
+    def runner_snapshot(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "runner_id": str(entry.runner_id),
+                "type": entry.provider,
+                "version": entry.version,
+                "capabilities": list(entry.capabilities),
+                "status": entry.status,
+            }
+            for entry in self.runner_registry.list_ready()
+        ]
+
+    def select_ready_runner(self, capabilities: set[str]) -> RunnerRegistration | None:
+        ready = self.runner_registry.list_ready(capabilities)
+        return ready[0] if ready else None
+
+    def prune_stale_runners(self) -> int:
+        return len(
+            self.runner_registry.expire_stale(
+                at=datetime.now(UTC),
+                timeout_seconds=self.config.runner_heartbeat_timeout_seconds,
+            )
+        )
 
     async def supervise_active_sessions(self) -> int:
         """Mark sessions LOST only after repeated failed container health checks."""

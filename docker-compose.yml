@@ -30,6 +30,8 @@ services:
       AGENTSUPPORT_CORE_RUNNER_TIMEOUT_SECONDS: 300
       AGENTSUPPORT_CORE_RUNNER_WORKSPACE_ROOT: /workspace-data
       AGENTSUPPORT_WORKSPACE_ROOT: /workspace-data
+      AGENTSUPPORT_RUNNER_TOKEN: ${AGENTSUPPORT_RUNNER_TOKEN:-}
+      AGENTSUPPORT_RUNNER_HEARTBEAT_TIMEOUT_SECONDS: 30
     expose:
       - "8000"
     volumes:
@@ -129,6 +131,12 @@ services:
     command: uvicorn session_runner.main:app --host 0.0.0.0 --port 8080
     environment:
       SESSION_RUNNER_MODE: ${SESSION_RUNNER_MODE:-trae}
+      SESSION_RUNNER_TOKEN: ${AGENTSUPPORT_RUNNER_TOKEN:-}
+      SESSION_RUNNER_ENDPOINT: http://runner:8080
+      SESSION_RUNNER_PROVIDER: ${SESSION_RUNNER_MODE:-trae}
+      SESSION_RUNNER_VERSION: 0.1.0
+      SESSION_RUNNER_HEARTBEAT_SECONDS: 10
+      AGENTSUPPORT_CONTROL_PLANE_URL: http://api:8000
       SESSION_RUNNER_TRAE_CONFIG: /app/src/session_runner/trae_config.yaml
       SESSION_RUNNER_WORKSPACE_ROOTS: /workspace,/workspace-data
       TRAE_PROVIDER: ${TRAE_PROVIDER:-anthropic}

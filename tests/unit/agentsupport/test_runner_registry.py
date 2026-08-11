@@ -1,0 +1,120 @@
+"""Unit tests for Runner registration, heartbeat and expiry in the service."""
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from agent_runner_contracts.registration import (
+    RUNNER_CAPABILITIES,
+    RunnerHeartbeat,
+    RunnerRegistrationRequest,
+)
+from agentsupport.application.service import ServiceError
+from agentsupport.config import Settings
+from agentsupport.services import AgentSupportService
+
+
+def _service(tmp_path, *, token: str = "bootstrap-secret"):
+    return AgentSupportService(
+        Settings(workspace_root=tmp_path, runner_token=token)
+    )
+
+
+def _request() -> RunnerRegistrationRequest:
+    return RunnerRegistrationRequest(
+        provider="deterministic",
+        endpoint="http://127.0.0.1:8080",
+        version="0.1.0",
+        capabilities=list(RUNNER_CAPABILITIES),
+    )
+
+
+def test_registration_requires_configured_token(tmp_path):
+    service = _service(tmp_path, token="")
+    with pytest.raises(ServiceError) as exc:
+        service.register_runner(_request(), bootstrap_token="anything")
+    assert exc.value.code == "RUNNER_REGISTRATION_DISABLED"
+    assert exc.value.status_code == 503
+
+
+def test_registration_rejects_wrong_bootstrap_token(tmp_path):
+    service = _service(tmp_path)
+    with pytest.raises(ServiceError) as exc:
+        service.register_runner(_request(), bootstrap_token="wrong")
+    assert exc.value.code == "RUNNER_TOKEN_INVALID"
+    assert exc.value.status_code == 401
+
+
+def test_register_heartbeat_deregister_roundtrip(tmp_path):
+    service = _service(tmp_path)
+    response = service.register_runner(_request(), bootstrap_token="bootstrap-secret")
+    assert response.runner_id is not None
+    assert response.token
+
+    snapshot = service.runner_snapshot()
+    assert len(snapshot) == 1
+    assert snapshot[0]["type"] == "deterministic"
+    assert "run" in snapshot[0]["capabilities"]
+
+    heartbeat = service.runner_heartbeat(
+        response.runner_id,
+        RunnerHeartbeat(status="READY", load=1),
+        runner_token=response.token,
+    )
+    assert heartbeat.load == 1
+
+    with pytest.raises(ServiceError) as exc:
+        service.runner_heartbeat(
+            response.runner_id,
+            RunnerHeartbeat(),
+            runner_token="not-the-runner-token",
+        )
+    assert exc.value.code == "RUNNER_TOKEN_INVALID"
+
+    service.runner_deregister(response.runner_id, runner_token=response.token)
+    assert service.runner_snapshot() == []
+    with pytest.raises(ServiceError) as exc:
+        service.runner_heartbeat(
+            response.runner_id, RunnerHeartbeat(), runner_token=response.token
+        )
+    assert exc.value.code == "RUNNER_NOT_FOUND"
+
+
+def test_duplicate_registration_conflicts(tmp_path):
+    service = _service(tmp_path)
+    service.register_runner(_request(), bootstrap_token="bootstrap-secret")
+    with pytest.raises(ServiceError) as exc:
+        service.register_runner(_request(), bootstrap_token="bootstrap-secret")
+    assert exc.value.code == "RUNNER_ALREADY_REGISTERED"
+    assert exc.value.status_code == 409
+
+
+def test_stale_runners_are_pruned(tmp_path):
+    service = _service(tmp_path)
+    response = service.register_runner(_request(), bootstrap_token="bootstrap-secret")
+    stale_at = datetime.now(UTC) - timedelta(seconds=service.config.runner_heartbeat_timeout_seconds + 5)
+    service.runner_registry._registrations[response.runner_id].last_heartbeat_at = stale_at
+
+    assert service.prune_stale_runners() == 1
+    assert service.runner_snapshot() == []
+
+
+async def test_registered_runner_is_used_for_inline_routing(tmp_path):
+    service = _service(tmp_path)
+    service.register_runner(_request(), bootstrap_token="bootstrap-secret")
+    captured: dict = {}
+
+    class _FakeCore:
+        async def run(self, request: dict, event_sink):
+            captured["runner_url"] = request.get("runner_url")
+            return {"status": "RUNNING", "events": []}
+
+        def register_run_endpoint(self, run_id, endpoint) -> None:
+            return None
+
+    service.core_runtime = _FakeCore()
+    workspace = service.create_workspace("demo")
+    session = service.create_session(workspace.id)
+    await service.create_conversation(session.id, "task")
+
+    assert captured["runner_url"] == "http://127.0.0.1:8080"

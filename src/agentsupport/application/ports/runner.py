@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
 from agent_runner_contracts.checkpoint import Checkpoint
 from agent_runner_contracts.events import EventEnvelope
+from agent_runner_contracts.registration import RunnerRegistration, RunnerRegistrationRequest
 
 EventSink = Callable[[EventEnvelope], Awaitable[None]]
 
@@ -46,3 +48,35 @@ class CoreRuntime(Protocol):
     ) -> dict[str, Any]: ...
 
     async def cancel(self, run_id: UUID, *, command_id: UUID | None = None) -> dict[str, Any]: ...
+
+
+class RunnerRegistry(Protocol):
+    """Directory of self-registered Runner services.
+
+    The registry is authoritative for provider/capability-based routing. In
+    PostgreSQL mode it must be shared across stateless API replicas.
+    """
+
+    def register(self, registration: RunnerRegistrationRequest, token_hash: str) -> RunnerRegistration: ...
+
+    def heartbeat(
+        self,
+        runner_id: UUID,
+        status: str,
+        load: int,
+        *,
+        capabilities: list[str] | None = None,
+        at: datetime | None = None,
+    ) -> RunnerRegistration | None: ...
+
+    def deregister(self, runner_id: UUID) -> bool: ...
+
+    def get(self, runner_id: UUID) -> RunnerRegistration | None: ...
+
+    def token_hash(self, runner_id: UUID) -> str | None: ...
+
+    def list_ready(self, capabilities: set[str] | None = None) -> list[RunnerRegistration]: ...
+
+    def expire_stale(
+        self, *, at: datetime | None = None, timeout_seconds: float
+    ) -> list[UUID]: ...

@@ -17,6 +17,13 @@ from .execution import (
     ResumeRequest,
     RunRequest,
 )
+from .registration import (
+    RUNNER_CAPABILITIES,
+    RunnerHeartbeat,
+    RunnerRegistration,
+    RunnerRegistrationRequest,
+    RunnerRegistrationResponse,
+)
 from .tools import (
     ApprovalDecision,
     AuthorizationResult,
@@ -30,6 +37,7 @@ from .tools import (
 )
 
 __all__ = [
+    "RUNNER_CAPABILITIES",
     "ApprovalDecision",
     "ApprovalRequest",
     "AuthorizationResult",
@@ -42,6 +50,10 @@ __all__ = [
     "InputRequest",
     "ResumeRequest",
     "RunRequest",
+    "RunnerHeartbeat",
+    "RunnerRegistration",
+    "RunnerRegistrationRequest",
+    "RunnerRegistrationResponse",
     "ToolBatch",
     "ToolCall",
     "ToolDescriptor",

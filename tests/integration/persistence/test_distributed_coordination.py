@@ -231,7 +231,12 @@ async def test_reconciler_expires_missing_runtime_for_worker_recovery(tmp_path):
     result = await reconciler.run_once()
     replacement = repository.claim_next_job("worker-b", capacity=1)
 
-    assert result == {"paused": 0, "missing": 1, "removed_orphans": 0}
+    assert result == {
+        "expired_runners": 0,
+        "paused": 0,
+        "missing": 1,
+        "removed_orphans": 0,
+    }
     assert replacement is not None
     assert replacement.job.run_id == conversation.run.run_id
     assert replacement.previous_state == JobState.RUNNING

@@ -2,7 +2,7 @@
 
 from .eventing import EventNotifier, EventStore
 from .persistence import RepositoryConflict, StaleClaim
-from .runner import CoreRuntime, EventSink
+from .runner import CoreRuntime, EventSink, RunnerRegistry
 from .runtime import RuntimeDriver
 from .skills import SkillProvider
 from .workspace import WorkspaceProvider, WorkspaceStorageDriver
@@ -13,6 +13,7 @@ __all__ = [
     "EventSink",
     "EventStore",
     "RepositoryConflict",
+    "RunnerRegistry",
     "RuntimeDriver",
     "SkillProvider",
     "StaleClaim",

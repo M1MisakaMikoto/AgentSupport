@@ -38,6 +38,10 @@ from ...adapters.mcp import ControlledMcpProvider
 from ...adapters.trae import AgentFactory, TraeExecutionAdapter, TraeRuntimeSettings
 from ...application import RunRegistry
 from ...domain import RunState
+from ...registration import (
+    RunnerRegistrationClient,
+    runner_registration_client_from_env,
+)
 from ...tools import ToolGatewayExecutor
 
 
@@ -116,10 +120,28 @@ def create_runner_app(
     runner_mode: str | None = None,
     trae_settings: TraeRuntimeSettings | None = None,
     trae_agent_factory: AgentFactory | None = None,
+    registration_client: RunnerRegistrationClient | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Session Core Runner", version="0.1.0")
     runs = RunRegistry()
     mode = runner_mode or os.getenv("SESSION_RUNNER_MODE", "deterministic")
+    selected_registration = registration_client or runner_registration_client_from_env(mode=mode)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if selected_registration is not None:
+            await selected_registration.register()
+            selected_registration.start()
+        try:
+            yield
+        finally:
+            if selected_registration is not None:
+                await selected_registration.stop()
+
+    app = FastAPI(
+        title="Session Core Runner",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
 
     def create_trae_execution(state: RunState) -> TraeExecutionAdapter:
         def on_waiting(interaction: dict[str, Any], batch: ToolBatch, next_step: int) -> None:

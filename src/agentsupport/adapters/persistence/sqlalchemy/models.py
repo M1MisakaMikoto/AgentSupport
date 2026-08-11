@@ -197,6 +197,21 @@ class RunnerEndpointRow(Base):
     heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class RunnerRegistrationRow(Base):
+    __tablename__ = "runner_registrations"
+    runner_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="READY")
+    load: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    labels: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class RunCommandRow(Base):
     __tablename__ = "run_commands"
     __table_args__ = (UniqueConstraint("run_id", "idempotency_key"),)

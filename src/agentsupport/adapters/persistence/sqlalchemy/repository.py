@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
 from agent_runner_contracts.events import EventEnvelope
+from agent_runner_contracts.registration import RunnerRegistration
 
 from ....application.ports.persistence import RepositoryConflict, StaleClaim
 from ....domain import (
@@ -53,6 +54,7 @@ from .models import (
     ProjectRow,
     RunCommandRow,
     RunnerEndpointRow,
+    RunnerRegistrationRow,
     RuntimeOperationRow,
     RuntimeSlotRow,
     SessionRow,
@@ -1701,6 +1703,115 @@ class PostgresRepository:
             ).scalar_one_or_none()
             if lease:
                 lease.expires_at = expired_at
+
+    def save_runner_registration(
+        self, registration: RunnerRegistration, token_hash: str
+    ) -> None:
+        with self.transaction() as db:
+            existing = db.get(RunnerRegistrationRow, str(registration.runner_id))
+            if existing is not None:
+                raise RepositoryConflict("runner is already registered")
+            db.add(
+                RunnerRegistrationRow(
+                    runner_id=str(registration.runner_id),
+                    provider=registration.provider,
+                    endpoint=registration.endpoint,
+                    version=registration.version,
+                    capabilities=list(registration.capabilities),
+                    status=registration.status,
+                    load=registration.load,
+                    token_hash=token_hash,
+                    labels=dict(registration.metadata),
+                    last_heartbeat_at=registration.last_heartbeat_at,
+                    created_at=registration.created_at,
+                )
+            )
+
+    def get_runner_registration(self, runner_id: UUID) -> RunnerRegistration | None:
+        with self.transaction() as db:
+            row = db.get(RunnerRegistrationRow, str(runner_id))
+            if row is None:
+                return None
+            return self._runner_registration_from_row(row)
+
+    def get_runner_registration_hash(self, runner_id: UUID) -> str | None:
+        with self.transaction() as db:
+            row = db.get(RunnerRegistrationRow, str(runner_id))
+            return row.token_hash if row is not None else None
+
+    def update_runner_registration(
+        self,
+        runner_id: UUID,
+        *,
+        status: str,
+        load: int,
+        capabilities: list[str] | None,
+        heartbeat_at,
+    ) -> RunnerRegistration | None:
+        with self.transaction() as db:
+            row = db.get(RunnerRegistrationRow, str(runner_id))
+            if row is None:
+                return None
+            row.status = status
+            row.load = load
+            if capabilities is not None:
+                row.capabilities = list(capabilities)
+            row.last_heartbeat_at = heartbeat_at
+            return self._runner_registration_from_row(row)
+
+    def delete_runner_registration(self, runner_id: UUID) -> bool:
+        with self.transaction() as db:
+            row = db.get(RunnerRegistrationRow, str(runner_id))
+            if row is None:
+                return False
+            db.delete(row)
+            return True
+
+    def list_ready_runner_registrations(self) -> list[RunnerRegistration]:
+        with self.transaction() as db:
+            rows = db.execute(
+                select(RunnerRegistrationRow).where(
+                    RunnerRegistrationRow.status == "READY"
+                )
+            ).scalars()
+            return [self._runner_registration_from_row(row) for row in rows]
+
+    def expire_runner_registrations(
+        self, *, now, timeout_seconds: float
+    ) -> list[str]:
+        cutoff = now - timedelta(seconds=timeout_seconds)
+        with self.transaction() as db:
+            stale = (
+                db.execute(
+                    select(RunnerRegistrationRow.runner_id).where(
+                        RunnerRegistrationRow.last_heartbeat_at < cutoff
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if stale:
+                db.execute(
+                    delete(RunnerRegistrationRow).where(
+                        RunnerRegistrationRow.runner_id.in_(list(stale))
+                    )
+                )
+            return list(stale)
+
+    @staticmethod
+    def _runner_registration_from_row(row: RunnerRegistrationRow) -> RunnerRegistration:
+        return RunnerRegistration(
+            runner_id=UUID(row.runner_id),
+            provider=row.provider,
+            endpoint=row.endpoint,
+            version=row.version,
+            capabilities=list(row.capabilities),
+            status=row.status,
+            load=row.load,
+            last_heartbeat_at=_as_utc(row.last_heartbeat_at),
+            created_at=_as_utc(row.created_at),
+            metadata=dict(row.labels),
+        )
 
     def pause_expired_waiting(
         self,

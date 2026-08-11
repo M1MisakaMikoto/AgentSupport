@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     retention_published_outbox_days: int = 7
     retention_terminal_jobs_days: int = 30
     retention_terminal_events_days: int = 90
+    # Runner self-registration. A non-empty runner_token enables the internal
+    # /runners/* endpoints; heartbeats older than the timeout are expired by
+    # the inline health worker or the distributed reconciler.
+    runner_token: str = ""
+    runner_heartbeat_timeout_seconds: float = 30.0
 
     @model_validator(mode="after")
     def _validate_auth_mode(self) -> "Settings":

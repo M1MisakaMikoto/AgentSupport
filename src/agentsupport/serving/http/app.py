@@ -11,7 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from ...application.service import AgentSupportService
 from ...bootstrap.container import build_agentsupport_service
 from .errors import install_error_handlers
-from .routes import events_router, interactions_router, operations_router, resources_router
+from .routes import (
+    events_router,
+    interactions_router,
+    operations_router,
+    registrations_router,
+    resources_router,
+)
 
 
 def create_app(service: AgentSupportService | None = None) -> FastAPI:
@@ -28,6 +34,7 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
                 await asyncio.sleep(selected_service.config.pause_worker_interval_seconds)
                 await selected_service.pause_expired_waiting()
                 selected_service.prune_retained_state()
+                selected_service.prune_stale_runners()
 
         async def health_worker() -> None:
             while True:
@@ -62,6 +69,7 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
     app.include_router(resources_router)
     app.include_router(events_router)
     app.include_router(interactions_router)
+    app.include_router(registrations_router)
     app.mount(
         "/debug",
         StaticFiles(directory=Path(__file__).parent / "static" / "debug", html=True),
