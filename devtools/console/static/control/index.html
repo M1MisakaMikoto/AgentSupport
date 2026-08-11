@@ -43,22 +43,6 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
             总览
           </button>
-          <button class="side-item" data-view="demo-orgs" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4"/></svg>
-            组织管理
-          </button>
-          <button class="side-item" data-view="demo-users" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 21v-2a6 6 0 0 1 12 0v2M16 8a3.5 3.5 0 0 1 0 7M21 21v-2a6 6 0 0 0-4-5.6"/></svg>
-            用户管理
-          </button>
-          <button class="side-item" data-view="demo-projects" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
-            项目管理
-          </button>
-          <button class="side-item" data-view="demo-presets" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
-            预设管理
-          </button>
         </div>
         <div class="side-group">
           <div class="side-label">Agent</div>
@@ -101,15 +85,14 @@
           <div class="page-head">
             <div>
               <h1>总览</h1>
-              <p>组织、用户、项目与预设的运行概览，以及最近的 Agent 任务。</p>
+              <p>Workspace / Session / Conversation 执行资源概览，以及最近的 Agent 任务。</p>
             </div>
             <button class="btn primary" type="button" onclick="App.gotoView('demo-agent')">进入 Agent 工作台</button>
           </div>
           <div class="grid stats-grid">
-            <div class="stat"><div class="label">组织</div><div class="value" id="stat-orgs">-</div><div class="hint">资源归属顶层单元</div></div>
-            <div class="stat"><div class="label">用户</div><div class="value" id="stat-users">-</div><div class="hint">隶属各组织</div></div>
-            <div class="stat"><div class="label">项目</div><div class="value" id="stat-projects">-</div><div class="hint">业务容器 / 工作区</div></div>
-            <div class="stat"><div class="label">预设</div><div class="value" id="stat-presets">-</div><div class="hint">可复用配置包</div></div>
+            <div class="stat"><div class="label">Workspace</div><div class="value" id="stat-workspaces">-</div><div class="hint">执行工作区</div></div>
+            <div class="stat"><div class="label">Session</div><div class="value" id="stat-sessions">-</div><div class="hint">会话（含标签）</div></div>
+            <div class="stat"><div class="label">Conversation</div><div class="value" id="stat-conversations">-</div><div class="hint">任务对话</div></div>
             <div class="stat"><div class="label">活跃 Agent</div><div class="value accent" id="stat-active">-</div><div class="hint">当前运行实例</div></div>
           </div>
           <div class="grid" style="grid-template-columns: 1fr 1fr;">
@@ -120,98 +103,42 @@
               </div>
               <div id="recent-empty" class="empty" hidden>暂无任务，去 Agent 工作台创建第一个任务。</div>
               <table id="recent-table" hidden>
-                <thead><tr><th>任务</th><th>项目</th><th>状态</th><th>时间</th></tr></thead>
+                <thead><tr><th>任务</th><th>租户</th><th>状态</th><th>时间</th></tr></thead>
                 <tbody id="recent-runs"></tbody>
               </table>
             </div>
             <div class="card">
               <div class="card-head">
-                <h2>预设概览</h2>
-                <span class="sub">PRESETS</span>
+                <h2>资源模型</h2>
+                <span class="sub">V0.2</span>
               </div>
-              <div id="preset-overview" class="preset-overview"></div>
               <div style="margin-top:14px; padding-top:12px; border-top:1px dashed var(--border);">
                 <div class="label" style="color:var(--faint); font-size:11.5px; margin-bottom:6px;">资源模型</div>
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                  <span class="chip gray">组织</span><span class="chip gray">用户</span><span class="chip gray">项目</span><span class="chip gray">会话</span><span class="chip gray">对话</span>
+                  <span class="chip gray">Workspace</span><span class="chip gray">Session</span><span class="chip gray">Conversation</span>
                 </div>
+                <div class="label" style="color:var(--faint); font-size:11.5px; margin:12px 0 6px;">标签（上游透传）</div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <span class="chip gray">tenant_id</span><span class="chip gray">user_id</span><span class="chip gray">project_id</span><span class="chip gray">metadata</span>
+                </div>
+                <p style="margin-top:12px; color:var(--faint); font-size:12.5px;">
+                  平台只管理执行资源；租户 / 用户 / 项目由上游系统管理，平台以标签透传并进入事件与审计。
+                </p>
               </div>
             </div>
           </div>
-        </section>
-
-        <!-- ============ DEMO: organizations ============ -->
-        <section class="view" id="view-demo-orgs">
-          <div class="page-head">
-            <div>
-              <h1>组织管理</h1>
-              <p>组织（租户）是资源归属的顶层单元，用户、预设与项目均挂载在组织之下。</p>
-            </div>
-            <button class="btn primary" type="button" id="new-org-btn">新建组织</button>
-          </div>
-          <div class="card">
-            <div id="org-empty" class="empty" hidden>还没有组织，点击右上角“新建组织”创建第一个。</div>
-            <table id="org-table" hidden>
-              <thead><tr><th>组织</th><th>标识</th><th>用户数</th><th>项目数</th><th>创建时间</th><th></th></tr></thead>
-              <tbody id="org-rows"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- ============ DEMO: users ============ -->
-        <section class="view" id="view-demo-users">
-          <div class="page-head">
-            <div>
-              <h1>用户管理</h1>
-              <p>用户隶属于组织，拥有自己的预设集合，并可创建与管理项目。</p>
-            </div>
-            <button class="btn primary" type="button" id="new-user-btn">新建用户</button>
-          </div>
-          <div class="card">
-            <div id="user-empty" class="empty" hidden>还没有用户。</div>
-            <table id="user-table" hidden>
-              <thead><tr><th>用户</th><th>组织</th><th>项目数</th><th>预设数</th><th>创建时间</th><th></th></tr></thead>
-              <tbody id="user-rows"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- ============ DEMO: projects ============ -->
-        <section class="view" id="view-demo-projects">
-          <div class="page-head">
-            <div>
-              <h1>项目管理</h1>
-              <p>项目是业务容器，一个项目对应一个工作区；会话直接属于项目，并可导入预设配置。</p>
-            </div>
-            <button class="btn primary" type="button" id="new-project-btn">新建项目</button>
-          </div>
-          <div id="project-empty" class="empty card" hidden>还没有项目，点击右上角“新建项目”创建第一个。</div>
-          <div class="card-grid" id="project-grid"></div>
-        </section>
-
-        <!-- ============ DEMO: presets ============ -->
-        <section class="view" id="view-demo-presets">
-          <div class="page-head">
-            <div>
-              <h1>预设管理</h1>
-              <p>预设是用户级可复用配置包：Skill、工具策略、资源与权限。项目导入后为快照语义。</p>
-            </div>
-            <button class="btn primary" type="button" id="new-preset-btn">新建预设</button>
-          </div>
-          <div id="preset-empty" class="empty card" hidden>还没有预设。</div>
-          <div class="card-grid" id="preset-grid"></div>
         </section>
 
         <!-- ============ DEMO: agent workspace ============ -->
         <section class="view" id="view-demo-agent">
           <div id="agent-empty-state" class="empty card" hidden>
-            <p>还没有可用的项目。请先到 <a href="javascript:App.gotoView('demo-projects')">项目管理</a> 创建项目，再回到这里运行 Agent。</p>
+            <p>还没有可用的工作区。点击「新建会话」先创建 Workspace 与 Session，再运行 Agent。</p>
           </div>
           <div id="agent-layout-wrap" hidden>
             <div class="agent-toolbar card">
               <div class="field" style="margin:0; min-width:220px;">
-                <label>项目</label>
-                <select id="agent-project-select"></select>
+                <label>Workspace</label>
+                <select id="agent-workspace-select"></select>
               </div>
               <div class="field" style="margin:0; min-width:200px;">
                 <label>会话</label>

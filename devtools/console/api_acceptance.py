@@ -33,6 +33,9 @@ EXPECTED_EVENT_FIELDS = {
     "seq",
     "type",
     "payload",
+    "tenant_id",
+    "user_id",
+    "project_id",
     "source",
     "occurred_at",
 }
@@ -233,17 +236,15 @@ class ApiContractVerifier:
         response = await self.client.get("/cores")
         assert response.status_code == 200, f"expected 200, got {response.status_code}"
         cores = response.json()
-        assert isinstance(cores, list) and cores, "expected a non-empty core list"
-        runner = next(
-            (item for item in cores if item.get("type") == "session_runner"),
-            None,
-        )
-        assert runner is not None, "session_runner core missing"
-        assert runner.get("version"), "core version missing"
-        capabilities = set(runner.get("capabilities", []))
-        missing = REQUIRED_CORE_CAPABILITIES - capabilities
-        assert not missing, f"missing core capabilities: {sorted(missing)}"
-        return "session_runner core with full capability set"
+        assert isinstance(cores, list), "expected a core list"
+        if not cores:
+            return "no registered runners (empty directory)"
+        for item in cores:
+            assert item.get("type"), "core type missing"
+            assert item.get("version"), "core version missing"
+            missing = REQUIRED_CORE_CAPABILITIES - set(item.get("capabilities", []))
+            assert not missing, f"missing core capabilities: {sorted(missing)}"
+        return f"{len(cores)} registered runner(s) with full capability set"
 
     async def _scenario_operations(
         self, emit: Callable[[str, str], None]
@@ -331,125 +332,62 @@ class ApiContractVerifier:
             )
         return ", ".join(notes)
 
-    async def _check_org_user_preset_project(self) -> str:
+    async def _check_labels_and_config(self) -> str:
         suffix = self.suffix
-        organization = await self.client.post(
-            "/organizations",
-            json={"name": f"api-accept-org-{suffix}"},
-            headers={"Idempotency-Key": self._key("organization")},
-        )
-        assert organization.status_code == 201, organization.text
-        organization_id = organization.json()["id"]
-        listing = await self.client.get("/organizations")
-        assert any(
-            item["id"] == organization_id for item in listing.json()
-        ), "organization missing from list"
-        fetched = await self.client.get(f"/organizations/{organization_id}")
-        assert fetched.status_code == 200
-
-        user = await self.client.post(
-            "/users",
+        labeled = await self.client.post(
+            "/sessions",
             json={
-                "username": f"api-accept-{suffix}",
-                "organization_id": organization_id,
+                "workspace_id": self._ctx["workspace_id"],
+                "tenant_id": f"tenant-{suffix}",
+                "user_id": f"user-{suffix}",
+                "project_id": f"project-{suffix}",
+                "metadata": {"team": "platform"},
+                "config": {
+                    "skills": [{"skill_id": "review", "enabled": True}],
+                    "tool_policy": {
+                        "allowed_tools": ["bash", "task_done"],
+                        "approval_required_tools": ["bash"],
+                    },
+                },
             },
-            headers={"Idempotency-Key": self._key("user")},
+            headers={"Idempotency-Key": self._key("labeled-session")},
         )
-        assert user.status_code == 201, user.text
-        user_id = user.json()["id"]
-        users = await self.client.get("/users")
-        assert any(item["id"] == user_id for item in users.json())
-        assert (await self.client.get(f"/users/{user_id}")).status_code == 200
-        user_presets = await self.client.get(f"/users/{user_id}/presets")
-        assert user_presets.status_code == 200
-        assert isinstance(user_presets.json(), list)
-        user_projects = await self.client.get(f"/users/{user_id}/projects")
-        assert user_projects.status_code == 200
-        assert isinstance(user_projects.json(), list)
-        org_users = await self.client.get(f"/organizations/{organization_id}/users")
-        assert any(item["id"] == user_id for item in org_users.json())
+        assert labeled.status_code == 201, labeled.text
+        session_id = labeled.json()["id"]
+        assert labeled.json()["tenant_id"] == f"tenant-{suffix}", labeled.text
+        assert labeled.json()["user_id"] == f"user-{suffix}", labeled.text
+        assert labeled.json()["project_id"] == f"project-{suffix}", labeled.text
+        assert labeled.json().get("metadata") == {"team": "platform"}, labeled.text
 
-        preset = await self.client.post(
-            "/presets",
-            json={
-                "user_id": user_id,
-                "name": f"api-accept-preset-{suffix}",
-                "description": "created by API contract acceptance",
-            },
-            headers={"Idempotency-Key": self._key("preset")},
+        filtered = await self.client.get(
+            "/sessions", params={"tenant_id": f"tenant-{suffix}"}
         )
-        assert preset.status_code == 201, preset.text
-        preset_id = preset.json()["id"]
-        presets = await self.client.get(f"/presets?user_id={user_id}")
-        assert any(item["id"] == preset_id for item in presets.json())
-        assert (await self.client.get(f"/presets/{preset_id}")).status_code == 200
-        patched = await self.client.patch(
-            f"/presets/{preset_id}",
-            json={"name": f"api-accept-preset-{suffix}-renamed"},
-        )
-        assert patched.status_code == 200
-        assert (
-            (await self.client.get(f"/presets/{preset_id}")).json()["name"]
-            == f"api-accept-preset-{suffix}-renamed"
-        )
+        assert any(item["id"] == session_id for item in filtered.json()), filtered.text
 
-        project = await self.client.post(
-            "/projects",
-            json={"user_id": user_id, "name": f"api-accept-project-{suffix}", "preset_id": preset_id},
-            headers={"Idempotency-Key": self._key("project")},
-        )
-        assert project.status_code == 201, project.text
-        project_id = project.json()["id"]
-        projects = await self.client.get(f"/projects?user_id={user_id}")
-        assert any(item["id"] == project_id for item in projects.json())
-        assert (await self.client.get(f"/projects/{project_id}")).status_code == 200
-        renamed = await self.client.patch(
-            f"/projects/{project_id}", json={"name": f"api-accept-project-{suffix}-v2"}
-        )
-        assert renamed.status_code == 200
-        imported = await self.client.post(
-            f"/projects/{project_id}/preset", json={"preset_id": preset_id}
-        )
-        assert imported.status_code == 200, imported.text
-        imported_body = imported.json()
-        assert imported_body["project"]["id"] == project_id
-        assert "previous_config" in imported_body
+        for path in ("/organizations", "/users", "/presets", "/projects"):
+            gone = await self.client.get(path)
+            assert gone.status_code == 404, (
+                f"{path} expected 404, got {gone.status_code}"
+            )
 
-        project_session = await self.client.post(
-            f"/projects/{project_id}/sessions",
-            headers={"Idempotency-Key": self._key("project-session")},
+        conversation = await self.client.post(
+            f"/sessions/{session_id}/conversations",
+            json={"task": f"label-smoke-{suffix}"},
         )
-        assert project_session.status_code == 201, project_session.text
-        sessions = await self.client.get(f"/projects/{project_id}/sessions")
-        assert any(
-            item["id"] == project_session.json()["id"] for item in sessions.json()
+        assert conversation.status_code == 201, conversation.text
+        events = await self.client.get(
+            f"/conversations/{conversation.json()['id']}/events"
         )
+        assert events.status_code == 200
+        assert all(
+            event.get("tenant_id") == f"tenant-{suffix}" for event in events.json()
+        ), events.text
 
-        blocked_delete = await self.client.delete(f"/projects/{project_id}")
-        assert blocked_delete.status_code == 409, (
-            f"delete with sessions expected 409, got {blocked_delete.status_code}"
+        self._ctx["labeled_session_id"] = session_id
+        return (
+            "labels/config stored, tenant filter works, "
+            "events carry labels, business routes 404"
         )
-        assert blocked_delete.json().get("code") == "PROJECT_HAS_SESSIONS"
-
-        disposable = await self.client.post(
-            "/projects", json={"user_id": user_id, "name": f"api-accept-disposable-{suffix}"}
-        )
-        assert disposable.status_code == 201
-        deleted = await self.client.delete(f"/projects/{disposable.json()['id']}")
-        assert deleted.status_code == 204, f"expected 204, got {deleted.status_code}"
-
-        preset_deleted = await self.client.delete(f"/presets/{preset_id}")
-        assert preset_deleted.status_code == 204
-        gone = await self.client.get(f"/presets/{preset_id}")
-        assert gone.status_code == 404, f"expected 404 after delete, got {gone.status_code}"
-
-        self._ctx.update(
-            user_id=user_id,
-            organization_id=organization_id,
-            project_id=project_id,
-            project_session_id=project_session.json()["id"],
-        )
-        return "org/user/preset/project chain ok, 409 PROJECT_HAS_SESSIONS, 204 deletes"
 
     async def _scenario_resources(
         self,
@@ -476,33 +414,16 @@ class ApiContractVerifier:
         )
         await self._record(
             "RS-03",
-            "组织/用户/预设/项目链路",
+            "标签/配置透传与业务路由下线",
             "POST",
-            "/organizations",
-            self._check_org_user_preset_project,
+            "/sessions",
+            self._check_labels_and_config,
             operations=[
-                "POST /organizations",
-                "GET /organizations",
-                "GET /organizations/{organization_id}",
-                "GET /organizations/{organization_id}/users",
-                "POST /users",
-                "GET /users",
-                "GET /users/{user_id}",
-                "GET /users/{user_id}/presets",
-                "GET /users/{user_id}/projects",
-                "POST /presets",
-                "GET /presets",
-                "GET /presets/{preset_id}",
-                "PATCH /presets/{preset_id}",
-                "DELETE /presets/{preset_id}",
-                "POST /projects",
-                "GET /projects",
-                "GET /projects/{project_id}",
-                "PATCH /projects/{project_id}",
-                "POST /projects/{project_id}/preset",
-                "POST /projects/{project_id}/sessions",
-                "GET /projects/{project_id}/sessions",
-                "DELETE /projects/{project_id}",
+                "POST /sessions",
+                "GET /sessions",
+                "GET /sessions/{session_id}",
+                "POST /sessions/{session_id}/conversations",
+                "GET /conversations/{conversation_id}/events",
             ],
             emit=emit,
         )

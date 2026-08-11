@@ -461,10 +461,6 @@ async def test_console_serves_two_section_ui_and_all_assets():
         assert response.status_code == 200, name
     for marker in (
         'id="view-demo-overview"',
-        'id="view-demo-orgs"',
-        'id="view-demo-users"',
-        'id="view-demo-projects"',
-        'id="view-demo-presets"',
         'id="view-demo-agent"',
         'id="view-deploy-status"',
         'id="view-deploy-actions"',
@@ -486,7 +482,7 @@ def _fake_agentsupport_app() -> FastAPI:
     from uuid import UUID as _UUID
     from uuid import uuid4 as _uuid4
 
-    from fastapi import HTTPException, Query, Request, Response
+    from fastapi import HTTPException, Query, Request
     from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
     instance = "fake-instance-1"
@@ -554,6 +550,7 @@ def _fake_agentsupport_app() -> FastAPI:
 
     def append_event(conversation_id: str, event_type: str, payload: dict) -> None:
         conversation = state["conversations"][conversation_id]
+        session = state["sessions"].get(conversation["session_id"], {})
         seq = conversation["run"]["last_seq"] + 1
         state["events"][conversation_id].append(
             {
@@ -563,6 +560,9 @@ def _fake_agentsupport_app() -> FastAPI:
                 "seq": seq,
                 "type": event_type,
                 "payload": payload,
+                "tenant_id": session.get("tenant_id"),
+                "user_id": session.get("user_id"),
+                "project_id": session.get("project_id"),
                 "source": "runner",
                 "occurred_at": now,
             }
@@ -637,7 +637,11 @@ def _fake_agentsupport_app() -> FastAPI:
         item = {
             "id": str(_uuid4()),
             "workspace_id": body["workspace_id"],
+            "tenant_id": body.get("tenant_id"),
+            "user_id": body.get("user_id"),
             "project_id": body.get("project_id"),
+            "metadata": body.get("metadata") or {},
+            "config": body.get("config"),
             "lease_epoch": 0,
             "active_container_id": None,
             "active_run_id": None,
@@ -652,6 +656,21 @@ def _fake_agentsupport_app() -> FastAPI:
         if session_id not in state["sessions"]:
             return error("SESSION_NOT_FOUND", "session not found", 404)
         return state["sessions"][session_id]
+
+    @app.get("/sessions")
+    async def list_sessions(
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+        project_id: str | None = None,
+    ):
+        items = list(state["sessions"].values())
+        if tenant_id is not None:
+            items = [item for item in items if item.get("tenant_id") == tenant_id]
+        if user_id is not None:
+            items = [item for item in items if item.get("user_id") == user_id]
+        if project_id is not None:
+            items = [item for item in items if item.get("project_id") == project_id]
+        return items
 
     @app.get("/sessions/{session_id}/conversations")
     async def list_session_conversations(session_id):
@@ -674,245 +693,6 @@ def _fake_agentsupport_app() -> FastAPI:
         ]
         return sorted(events, key=lambda event: event["occurred_at"])
 
-    @app.post("/organizations", status_code=201)
-    async def create_organization(request: Request):
-        body = await request.json()
-        return idempotent_created(
-            "organization",
-            request.headers.get("Idempotency-Key"),
-            body,
-            lambda: _create_organization(body),
-        )
-
-    def _create_organization(body: dict) -> dict:
-        item = {"id": str(_uuid4()), "name": body["name"], "created_at": now}
-        state["orgs"][item["id"]] = item
-        return item
-
-    @app.get("/organizations")
-    async def list_organizations():
-        return list(state["orgs"].values())
-
-    @app.get("/organizations/{organization_id}")
-    async def get_organization(organization_id):
-        organization_id = str(organization_id)
-        if organization_id not in state["orgs"]:
-            return error("ORGANIZATION_NOT_FOUND", "organization not found", 404)
-        return state["orgs"][organization_id]
-
-    @app.get("/organizations/{organization_id}/users")
-    async def list_organization_users(organization_id):
-        organization_id = str(organization_id)
-        return [
-            item
-            for item in state["users"].values()
-            if item["organization_id"] == organization_id
-        ]
-
-    @app.post("/users", status_code=201)
-    async def create_user(request: Request):
-        body = await request.json()
-        return idempotent_created(
-            "user",
-            request.headers.get("Idempotency-Key"),
-            body,
-            lambda: _create_user(body),
-        )
-
-    def _create_user(body: dict) -> dict:
-        item = {
-            "id": str(_uuid4()),
-            "username": body["username"],
-            "organization_id": body.get("organization_id") or "default-org",
-            "created_at": now,
-        }
-        state["users"][item["id"]] = item
-        return item
-
-    @app.get("/users")
-    async def list_users():
-        return list(state["users"].values())
-
-    @app.get("/users/{user_id}")
-    async def get_user(user_id):
-        user_id = str(user_id)
-        if user_id not in state["users"]:
-            return error("USER_NOT_FOUND", "user not found", 404)
-        return state["users"][user_id]
-
-    @app.get("/users/{user_id}/presets")
-    async def list_user_presets(user_id):
-        user_id = str(user_id)
-        return [
-            item
-            for item in state["presets"].values()
-            if item["user_id"] == user_id
-        ]
-
-    @app.get("/users/{user_id}/projects")
-    async def list_user_projects(user_id):
-        user_id = str(user_id)
-        return [
-            item
-            for item in state["projects"].values()
-            if item["user_id"] == user_id
-        ]
-
-    @app.post("/presets", status_code=201)
-    async def create_preset(request: Request):
-        body = await request.json()
-        return idempotent_created(
-            "preset",
-            request.headers.get("Idempotency-Key"),
-            body,
-            lambda: _create_preset(body),
-        )
-
-    def _create_preset(body: dict) -> dict:
-        item = {
-            "id": str(_uuid4()),
-            "user_id": body["user_id"],
-            "name": body["name"],
-            "description": body.get("description", ""),
-            "definition": body.get("definition"),
-            "created_at": now,
-        }
-        state["presets"][item["id"]] = item
-        return item
-
-    @app.get("/presets")
-    async def list_presets(user_id=None):
-        items = list(state["presets"].values())
-        if user_id is not None:
-            items = [item for item in items if item["user_id"] == str(user_id)]
-        return items
-
-    @app.get("/presets/{preset_id}")
-    async def get_preset(preset_id):
-        preset_id = str(preset_id)
-        if preset_id not in state["presets"]:
-            return error("PRESET_NOT_FOUND", "preset not found", 404)
-        return state["presets"][preset_id]
-
-    @app.patch("/presets/{preset_id}")
-    async def update_preset(preset_id, request: Request):
-        preset_id = str(preset_id)
-        if preset_id not in state["presets"]:
-            return error("PRESET_NOT_FOUND", "preset not found", 404)
-        body = await request.json()
-        state["presets"][preset_id].update(body)
-        return state["presets"][preset_id]
-
-    @app.delete("/presets/{preset_id}", status_code=204)
-    async def delete_preset(preset_id):
-        preset_id = str(preset_id)
-        if preset_id not in state["presets"]:
-            return error("PRESET_NOT_FOUND", "preset not found", 404)
-        state["presets"].pop(preset_id, None)
-        return Response(status_code=204)
-
-    @app.post("/projects", status_code=201)
-    async def create_project(request: Request):
-        body = await request.json()
-        return idempotent_created(
-            "project",
-            request.headers.get("Idempotency-Key"),
-            body,
-            lambda: _create_project(body),
-        )
-
-    def _create_project(body: dict) -> dict:
-        item = {
-            "id": str(_uuid4()),
-            "user_id": body["user_id"],
-            "name": body["name"],
-            "preset_id": body.get("preset_id"),
-            "config": body.get("config", {}),
-            "workspace_id": str(_uuid4()),
-            "created_at": now,
-        }
-        state["projects"][item["id"]] = item
-        state["workspaces"][item["workspace_id"]] = {
-            "id": item["workspace_id"],
-            "name": body["name"],
-            "root_path": f"/workspace/{item['workspace_id']}",
-            "created_at": now,
-        }
-        return item
-
-    @app.get("/projects")
-    async def list_projects(user_id=None):
-        items = list(state["projects"].values())
-        if user_id is not None:
-            items = [item for item in items if item["user_id"] == str(user_id)]
-        return items
-
-    @app.get("/projects/{project_id}")
-    async def get_project(project_id):
-        project_id = str(project_id)
-        if project_id not in state["projects"]:
-            return error("PROJECT_NOT_FOUND", "project not found", 404)
-        return state["projects"][project_id]
-
-    @app.patch("/projects/{project_id}")
-    async def update_project(project_id, request: Request):
-        project_id = str(project_id)
-        if project_id not in state["projects"]:
-            return error("PROJECT_NOT_FOUND", "project not found", 404)
-        body = await request.json()
-        state["projects"][project_id].update(body)
-        return state["projects"][project_id]
-
-    @app.post("/projects/{project_id}/preset")
-    async def import_preset(project_id, request: Request):
-        project_id = str(project_id)
-        if project_id not in state["projects"]:
-            return error("PROJECT_NOT_FOUND", "project not found", 404)
-        body = await request.json()
-        project = state["projects"][project_id]
-        previous_config = dict(project.get("config") or {})
-        project["preset_id"] = body["preset_id"]
-        return {"project": project, "previous_config": previous_config}
-
-    @app.post("/projects/{project_id}/sessions", status_code=201)
-    async def create_project_session(project_id, request: Request):
-        project_id = str(project_id)
-        if project_id not in state["projects"]:
-            return error("PROJECT_NOT_FOUND", "project not found", 404)
-        project = state["projects"][project_id]
-        return idempotent_created(
-            "project-session",
-            request.headers.get("Idempotency-Key"),
-            {},
-            lambda: _create_session(
-                {"workspace_id": project["workspace_id"], "project_id": project_id}
-            ),
-        )
-
-    @app.get("/projects/{project_id}/sessions")
-    async def list_project_sessions(project_id):
-        project_id = str(project_id)
-        return [
-            item
-            for item in state["sessions"].values()
-            if item.get("project_id") == project_id
-        ]
-
-    @app.delete("/projects/{project_id}", status_code=204)
-    async def delete_project(project_id):
-        project_id = str(project_id)
-        if project_id not in state["projects"]:
-            return error("PROJECT_NOT_FOUND", "project not found", 404)
-        if any(
-            item.get("project_id") == project_id for item in state["sessions"].values()
-        ):
-            return error(
-                "PROJECT_HAS_SESSIONS",
-                "project still has sessions and cannot be deleted",
-                409,
-            )
-        state["projects"].pop(project_id, None)
-        return Response(status_code=204)
 
     @app.post("/sessions/{session_id}/conversations", status_code=201)
     async def create_conversation(session_id, request: Request):
