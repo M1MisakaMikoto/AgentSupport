@@ -55,6 +55,7 @@ class ConversationCreate(BaseModel):
     task: str = Field(min_length=1)
     parent_conversation_id: UUID | None = None
     workspace_id: UUID | None = None
+    skills: list[ConfigSkillInput] | None = None
 
 
 class InteractionRequest(BaseModel):

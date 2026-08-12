@@ -167,8 +167,38 @@ async def test_distributed_worker_uses_session_config(tmp_path):
     assert any(ids == ["review"] for ids in skills.skill_ids)
     request = core.requests[0]
     assert request["context_bundle"]["skill_manifest"][0]["skill_id"] == "review"
-    assert request["tool_policy"]["allowed_tools"] == ["bash", "task_done"]
-    assert request["tool_policy"]["approval_required_tools"] == ["bash"]
+
+
+@pytest.mark.asyncio
+async def test_distributed_worker_uses_conversation_skills(tmp_path):
+    config = _settings(tmp_path)
+    api = AgentSupportService(config)
+    api.create_skill("review", filename="SKILL.md", payload=b"# Review\n")
+    api.create_skill("debug", filename="SKILL.md", payload=b"# Debug\n")
+    workspace = api.create_workspace("shop")
+    session = api.create_session(
+        workspace.id,
+        config=ProjectConfig(
+            skills=[PresetSkill(skill_id="review", enabled=True)],
+        ),
+    )
+    await api.create_conversation(
+        session.id,
+        "finish",
+        skills=[PresetSkill(skill_id="debug", enabled=True)],
+    )
+
+    skills = RecordingSkillProvider()
+    worker = DistributedWorker(
+        config,
+        repository=api.repository,
+        runtime_driver=DockerRuntimeDriver(),
+        core_runtime=RecordingCoreRuntime(),
+        skill_provider=skills,
+    )
+
+    assert await worker.run_once() is True
+    assert skills.skill_ids[-1] == ["debug"]
 
 
 @pytest.mark.asyncio

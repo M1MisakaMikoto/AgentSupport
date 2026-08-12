@@ -10,7 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, Request
 from pydantic import BaseModel
 
-from ....domain import ProjectConfig
+from ....domain import PresetSkill, ProjectConfig
 from ..dependencies import agentsupport_service
 from ..schemas import (
     ConversationCreate,
@@ -134,6 +134,11 @@ async def create_conversation(
         parent_conversation_id=body.parent_conversation_id,
         idempotency_key=idempotency_key,
         workspace_id=body.workspace_id,
+        skills=(
+            [PresetSkill(skill_id=item.skill_id, enabled=item.enabled) for item in body.skills]
+            if body.skills is not None
+            else None
+        ),
         auto_created=auto_created,
     )
     return _created(conversation, auto_created)

@@ -51,6 +51,7 @@ class ConversationRow(Base):
     session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     parent_conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     task: Mapped[str] = mapped_column(Text, nullable=False)
+    skills: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     execution_state: Mapped[str] = mapped_column(String(32), nullable=False)
     run_id: Mapped[str] = mapped_column(String(36), nullable=False)
     last_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -255,6 +256,12 @@ def create_schema(database_url: str) -> None:
             connection.execute(
                 text("ALTER TABLE conversations ADD COLUMN checkpoint_id VARCHAR(36)")
             )
+    conversation_columns = {
+        column["name"] for column in inspect(engine).get_columns("conversations")
+    }
+    if "skills" not in conversation_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE conversations ADD COLUMN skills JSON"))
     if "created_at" not in {
         column["name"] for column in inspect(engine).get_columns("idempotency_keys")
     }:

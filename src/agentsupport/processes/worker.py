@@ -193,11 +193,16 @@ class DistributedWorker:
                 error={"code": "RESOURCE_NOT_FOUND"},
             )
             return
-        skills = (
-            session.config.enabled_skill_ids()
-            if session.config is not None and not session.config.is_empty()
-            else self.enabled_skills
-        )
+        if conversation.skills is not None:
+            skills = [
+                skill.skill_id for skill in conversation.skills if skill.enabled
+            ]
+        else:
+            skills = (
+                session.config.enabled_skill_ids()
+                if session.config is not None and not session.config.is_empty()
+                else self.enabled_skills
+            )
         session_tool_policy = (
             session.config.tool_policy_dict()
             if session.config is not None and not session.config.is_empty()

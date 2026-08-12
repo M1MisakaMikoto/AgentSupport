@@ -310,13 +310,21 @@ GET /sessions?workspace_id=<uuid>&tenant_id=t-1&project_id=p-2
 | `task` | string | 是 | 任务描述，不能为空 |
 | `parent_conversation_id` | UUID | 否 | 从同一 Session 的已有对话派生 |
 | `workspace_id` | UUID | 否 | 仅当 Session 不存在且 auto-create 开启时用于决定新 Session 的 Workspace |
+| `skills` | object[] | 否 | 本次对话激活的 skill 列表（`skill_id` + `enabled`）；缺省继承 Session 配置；显式传空数组表示本次不启用任何 skill |
 
 ```http
 POST /sessions/3cb62872-d517-40e6-92ec-d50045e40b26/conversations
 Idempotency-Key: a1b2c3d4-...
 
-{ "task": "分析项目并修复测试失败", "parent_conversation_id": null }
+{
+  "task": "分析项目并修复测试失败",
+  "parent_conversation_id": null,
+  "skills": [{"skill_id": "review", "enabled": true}]
+}
 ```
+
+`skills` 在创建时预检（缺失返回 `404 SKILL_NOT_FOUND`）；运行时会话内可动态选择，
+例如同一 Session 的不同对话启用不同 skill。
 
 **成功响应 `201`**：
 
@@ -348,6 +356,7 @@ Idempotency-Key: a1b2c3d4-...
 | --- | --- | --- |
 | `404` | `SESSION_NOT_FOUND` | Session 不存在（auto-create 关闭，或未提供 `workspace_id`） |
 | `404` | `PARENT_NOT_FOUND` | 父对话不存在或不属于当前 Session |
+| `404` | `SKILL_NOT_FOUND` | `skills` 中引用了不存在的 skill |
 | `409` | `IDEMPOTENCY_CONFLICT` | 相同 Key 用于不同请求 |
 | `429` | `RESOURCE_EXHAUSTED` | 等待队列或执行容量已满 |
 

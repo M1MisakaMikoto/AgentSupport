@@ -33,6 +33,7 @@ from ..domain import (
     ContextBundle,
     Conversation,
     ExecutionState,
+    PresetSkill,
     ProjectConfig,
     Session,
     Workspace,
@@ -192,6 +193,13 @@ class AgentSupportService:
         if session.config and not session.config.is_empty():
             return session.config.enabled_skill_ids()
         return self.enabled_skills
+
+    def _skills_for_conversation(
+        self, conversation: Conversation, session: Session
+    ) -> list[str]:
+        if conversation.skills is not None:
+            return [skill.skill_id for skill in conversation.skills if skill.enabled]
+        return self._skills_for_session(session)
 
     def _tool_policy_for_session(self, session: Session) -> dict[str, Any]:
         if session.config and not session.config.is_empty():
@@ -403,6 +411,14 @@ class AgentSupportService:
         if not removed:
             raise ServiceError("SKILL_NOT_FOUND", "skill does not exist", 404)
 
+    def _validate_skill_ids(self, skill_ids: list[str]) -> None:
+        if not skill_ids:
+            return
+        try:
+            self.skill_provider.resolve(skill_ids)
+        except (FileNotFoundError, ValueError) as exc:
+            raise ServiceError("SKILL_NOT_FOUND", str(exc), 404) from exc
+
     def create_session(
         self,
         workspace_id: UUID,
@@ -418,12 +434,7 @@ class AgentSupportService:
         auto_created: dict[str, Any] | None = None,
     ) -> Session:
         if config is not None and config.skills:
-            try:
-                self.skill_provider.resolve(
-                    [skill.skill_id for skill in config.skills]
-                )
-            except (FileNotFoundError, ValueError) as exc:
-                raise ServiceError("SKILL_NOT_FOUND", str(exc), 404) from exc
+            self._validate_skill_ids([skill.skill_id for skill in config.skills])
         workspace = self._resolve_workspace(
             workspace_id, name=name, auto_created=auto_created
         )
@@ -602,8 +613,11 @@ class AgentSupportService:
         idempotency_key: str | None = None,
         *,
         workspace_id: UUID | None = None,
+        skills: list[PresetSkill] | None = None,
         auto_created: dict[str, Any] | None = None,
     ) -> Conversation:
+        if skills is not None:
+            self._validate_skill_ids([skill.skill_id for skill in skills])
         session = None if self.distributed else self.sessions.get(session_id)
         if not session and self.repository:
             session = self.repository.get_session(session_id)
@@ -637,7 +651,10 @@ class AgentSupportService:
         if existing:
             return self.conversations[existing]
         conversation = Conversation(
-            session_id=session_id, task=task, parent_conversation_id=parent_conversation_id
+            session_id=session_id,
+            task=task,
+            parent_conversation_id=parent_conversation_id,
+            skills=skills,
         )
         if self.distributed:
             assert self.repository is not None
@@ -775,7 +792,9 @@ class AgentSupportService:
                     event.model_dump(mode="json")
                     for event in self.events_store.list(conversation.id)
                 ],
-                "skill_manifest": self.skill_provider.manifest(self._skills_for_session(session)),
+                "skill_manifest": self.skill_provider.manifest(
+                    self._skills_for_conversation(conversation, session)
+                ),
                 "tool_policy": tool_policy,
                 "mcp_refs": [],
             },

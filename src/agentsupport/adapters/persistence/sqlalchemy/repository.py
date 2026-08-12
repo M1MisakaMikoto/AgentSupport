@@ -21,6 +21,7 @@ from ....domain import (
     ContextBundle,
     Conversation,
     ExecutionState,
+    PresetSkill,
     ProjectConfig,
     RunProjection,
     Session,
@@ -457,6 +458,11 @@ class PostgresRepository:
                     else None
                 ),
                 task=conversation.task,
+                skills=(
+                    [skill.model_dump(mode="json") for skill in conversation.skills]
+                    if conversation.skills is not None
+                    else None
+                ),
                 execution_state=conversation.run.state.value,
                 run_id=str(conversation.run.run_id),
                 last_seq=conversation.run.last_seq,
@@ -485,6 +491,11 @@ class PostgresRepository:
                 UUID(row.parent_conversation_id) if row.parent_conversation_id else None
             ),
             task=row.task,
+            skills=(
+                [PresetSkill.model_validate(item) for item in row.skills]
+                if row.skills is not None
+                else None
+            ),
             created_at=row.created_at,
             run=RunProjection(
                 run_id=UUID(row.run_id),
