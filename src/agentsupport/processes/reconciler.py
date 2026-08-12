@@ -7,6 +7,8 @@ from ..adapters.persistence.sqlalchemy.repository import PostgresRepository
 from ..application.ports import RuntimeDriver
 from ..bootstrap.container import build_repository, build_runtime_driver
 from ..bootstrap.settings import Settings, settings
+from ..observability import logging as obs_logging
+from ..observability import metrics as obs_metrics
 
 
 class DistributedReconciler:
@@ -36,6 +38,8 @@ class DistributedReconciler:
                 timeout_seconds=self.config.runner_heartbeat_timeout_seconds,
             )
         )
+        if expired_runners:
+            obs_metrics.record_runner_heartbeat_expired()
         paused_endpoints = self.repository.pause_expired_waiting(
             self.config.waiting_input_timeout_seconds
         )
@@ -78,6 +82,11 @@ class DistributedReconciler:
 
 
 def main() -> None:
+    obs_logging.configure_logging(
+        log_format=settings.log_format,
+        level=settings.log_level,
+        service_name=settings.service_name,
+    )
     asyncio.run(DistributedReconciler().serve_forever())
 
 

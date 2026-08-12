@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import socket
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -41,6 +42,7 @@ from ..domain import (
     Session,
     Workspace,
 )
+from ..observability import metrics as obs_metrics
 from .ports import (
     CoreRuntime,
     EventNotifier,
@@ -899,6 +901,8 @@ class AgentSupportService:
         return conversation
 
     async def _run_core(self, conversation: Conversation, session: Session) -> None:
+        started = time.perf_counter()
+
         async def event_sink(event: EventEnvelope) -> None:
             self._apply_core_event(conversation, event)
 
@@ -965,6 +969,9 @@ class AgentSupportService:
                 {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
             )
         if conversation.run.state in TERMINAL_STATES:
+            obs_metrics.record_run(
+                conversation.run.state.value.lower(), time.perf_counter() - started
+            )
             await self._release_session(session, conversation)
 
     def _apply_core_event(self, conversation: Conversation, event: EventEnvelope) -> None:
@@ -1475,12 +1482,13 @@ class AgentSupportService:
         return ready[0] if ready else None
 
     def prune_stale_runners(self) -> int:
-        return len(
-            self.runner_registry.expire_stale(
-                at=datetime.now(UTC),
-                timeout_seconds=self.config.runner_heartbeat_timeout_seconds,
-            )
+        expired = self.runner_registry.expire_stale(
+            at=datetime.now(UTC),
+            timeout_seconds=self.config.runner_heartbeat_timeout_seconds,
         )
+        if expired:
+            obs_metrics.record_runner_heartbeat_expired()
+        return len(expired)
 
     async def supervise_active_sessions(self) -> int:
         """Mark sessions LOST only after repeated failed container health checks."""

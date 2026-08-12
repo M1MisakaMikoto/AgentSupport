@@ -10,6 +10,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import PlainTextResponse
 
 from agent_runner_contracts.checkpoint import (
     Checkpoint,
@@ -39,6 +40,8 @@ from ...adapters.trae import AgentFactory, TraeExecutionAdapter, TraeRuntimeSett
 from ...application import RunRegistry
 from ...domain import RunState
 from ...mcp_runtime import build_mcp_provider, build_mcp_server_configs
+from ...metrics import record_http, record_mcp_connection, render_metrics
+from ...observability import configure_logging, run_context, set_correlation_id
 from ...registration import (
     RunnerRegistrationClient,
     runner_registration_client_from_env,
@@ -126,6 +129,7 @@ def create_runner_app(
     trae_agent_factory: AgentFactory | None = None,
     registration_client: RunnerRegistrationClient | None = None,
 ) -> FastAPI:
+    configure_logging()
     runs = RunRegistry()
     mode = runner_mode or os.getenv("SESSION_RUNNER_MODE", "deterministic")
     selected_registration = registration_client or runner_registration_client_from_env(mode=mode)
@@ -146,6 +150,25 @@ def create_runner_app(
         version="0.2.0",
         lifespan=lifespan,
     )
+
+    @app.middleware("http")
+    async def observability_middleware(request, call_next):
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", None) or request.url.path
+        try:
+            response = await call_next(request)
+            status = response.status_code
+        except Exception:
+            status = 500
+            raise
+        finally:
+            record_http(request.method, route_path, status)
+        return response
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    async def metrics() -> str:
+        body, _content_type = render_metrics()
+        return body.decode("utf-8")
 
     def create_trae_execution(
         state: RunState,
@@ -211,6 +234,12 @@ def create_runner_app(
     @app.post("/runs")
     async def start_run(request: RunRequest):
         _validate_container_fence(request)
+        set_correlation_id(request.correlation_id)
+        run_context(
+            run_id=str(request.run_id),
+            session_id=str(request.session_id),
+            conversation_id=str(request.conversation_id),
+        ).__enter__()
         if request.run_id in runs:
             state = runs[request.run_id]
             _validate_duplicate_run(state, request)
@@ -234,9 +263,15 @@ def create_runner_app(
         elif raw_batch is not None:
             try:
                 dynamic_refs = [ref for ref in mcp_refs if isinstance(ref, dict)]
-                state.mcp_provider = (
-                    await build_mcp_provider(dynamic_refs) if dynamic_refs else None
-                )
+                if dynamic_refs:
+                    try:
+                        state.mcp_provider = await build_mcp_provider(dynamic_refs)
+                    except Exception:
+                        record_mcp_connection("failed")
+                        raise
+                    record_mcp_connection(
+                        "connected" if state.mcp_provider is not None else "no_tools"
+                    )
                 state.tool_executor = _tool_executor(
                     request, tool_handlers, state.mcp_provider or mcp_provider
                 )
@@ -508,11 +543,15 @@ def create_runner_app(
             resume_dynamic_refs = [
                 ref for ref in resume_mcp_refs if isinstance(ref, dict)
             ]
-            state.mcp_provider = (
-                await build_mcp_provider(resume_dynamic_refs)
-                if resume_dynamic_refs
-                else None
-            )
+            if resume_dynamic_refs:
+                try:
+                    state.mcp_provider = await build_mcp_provider(resume_dynamic_refs)
+                except Exception:
+                    record_mcp_connection("failed")
+                    raise
+                record_mcp_connection(
+                    "connected" if state.mcp_provider is not None else "no_tools"
+                )
             state.tool_executor = _tool_executor(
                 state.request, tool_handlers, state.mcp_provider or mcp_provider
             )

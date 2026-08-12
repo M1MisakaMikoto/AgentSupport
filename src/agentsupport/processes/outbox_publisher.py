@@ -9,6 +9,7 @@ from ..adapters.notification.notifier import EventNotifier, create_event_notifie
 from ..adapters.persistence.sqlalchemy.repository import PostgresRepository
 from ..bootstrap.container import build_repository
 from ..bootstrap.settings import Settings, settings
+from ..observability import logging as obs_logging
 
 
 class OutboxPublisher:
@@ -59,6 +60,11 @@ class OutboxPublisher:
 
 
 def main() -> None:
+    obs_logging.configure_logging(
+        log_format=settings.log_format,
+        level=settings.log_level,
+        service_name=settings.service_name,
+    )
     asyncio.run(OutboxPublisher().serve_forever())
 
 

@@ -19,6 +19,7 @@ Key capabilities include:
 
 - [AgentSupport API reference (Chinese)](docs/api/agentsupport-api.md)
 - [API full-test plan (Chinese)](docs/testing/api-full-test-plan.md)
+- [Observability](docs/observability.md)
 - [Directory architecture](docs/architecture/directory-structure.en.md)
 - [Architecture decision records](docs/adr/)
 - [简体中文 README](README.md)

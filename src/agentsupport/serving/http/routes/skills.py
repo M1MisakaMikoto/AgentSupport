@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, Request, UploadFile
 
 from ....application.service import ServiceError
+from ....observability import metrics as obs_metrics
 from ..dependencies import agentsupport_service
 
 router = APIRouter()
@@ -21,11 +22,13 @@ async def create_skill(
     payload = await file.read(MAX_UPLOAD_SIZE + 1)
     if len(payload) > MAX_UPLOAD_SIZE:
         raise ServiceError("SKILL_TOO_LARGE", "skill package exceeds upload size limit", 413)
-    return agentsupport_service(request).create_skill(
+    result = agentsupport_service(request).create_skill(
         skill_id,
         filename=file.filename or "SKILL.md",
         payload=payload,
     )
+    obs_metrics.record_skill_upload()
+    return result
 
 
 @router.get("/skills")

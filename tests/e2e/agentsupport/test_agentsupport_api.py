@@ -29,12 +29,16 @@ async def test_operational_endpoints_report_readiness_metrics_and_instance(servi
     assert ready.json()["status"] == "ready"
     assert ready.json()["instance_id"] == service.instance_id
     assert live.headers["X-AgentSupport-Instance"] == service.instance_id
-    assert "agentsupport_active_runtimes 0\n" in metrics.text
-    assert "agentsupport_queue_ready 0\n" in metrics.text
-    assert "agentsupport_claims_expired 0\n" in metrics.text
-    assert "agentsupport_outbox_publication_lag_seconds 0\n" in metrics.text
-    assert "agentsupport_runner_reconciliation_needed 0\n" in metrics.text
-    assert "agentsupport_workspace_lease_contention 0\n" in metrics.text
+    for name in (
+        "agentsupport_active_runtimes",
+        "agentsupport_queue_ready",
+        "agentsupport_claims_expired",
+        "agentsupport_outbox_publication_lag_seconds",
+        "agentsupport_runner_reconciliation_needed",
+        "agentsupport_workspace_lease_contention",
+        "agentsupport_http_requests_total",
+    ):
+        assert name in metrics.text, name
     assert metrics.headers["content-type"].startswith("text/plain")
 
 

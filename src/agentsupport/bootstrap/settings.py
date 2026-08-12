@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # the inline health worker or the distributed reconciler.
     runner_token: str = ""
     runner_heartbeat_timeout_seconds: float = 30.0
+    # Observability: structured logging, tracing and metrics.
+    log_format: str = "console"
+    log_level: str = "INFO"
+    service_name: str = "agentsupport"
+    otel_exporter_otlp_endpoint: str = ""
 
     @model_validator(mode="after")
     def _validate_auth_mode(self) -> "Settings":

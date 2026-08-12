@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
 
+from ....observability import metrics as obs_metrics
 from ..dependencies import agentsupport_service
 
 router = APIRouter()
@@ -20,8 +21,11 @@ async def ready(request: Request) -> dict[str, Any]:
 
 @router.get("/metrics", response_class=PlainTextResponse)
 async def metrics(request: Request) -> str:
-    values = agentsupport_service(request).metrics()
-    return "".join(f"agentsupport_{name} {value}\n" for name, value in sorted(values.items()))
+    service = agentsupport_service(request)
+    obs_metrics.publish_coordination(service.metrics())
+    obs_metrics.set_runners_registered(len(service.runner_snapshot()))
+    body, _content_type = obs_metrics.render_metrics()
+    return body.decode("utf-8")
 
 
 @router.get("/cores")

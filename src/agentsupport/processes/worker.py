@@ -4,7 +4,9 @@ import asyncio
 import contextlib
 import os
 import socket
+import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import UUID, uuid4
@@ -28,6 +30,10 @@ from ..bootstrap.container import (
 from ..bootstrap.settings import Settings, settings
 from ..domain import TERMINAL_STATES, Checkpoint, ExecutionState
 from ..domain.coordination import JobClaim, JobState, RunCommand, RunnerEndpoint
+from ..observability import context as obs_context
+from ..observability import logging as obs_logging
+from ..observability import metrics as obs_metrics
+from ..observability import tracing as obs_tracing
 
 
 def _instance_id(config: Settings) -> str:
@@ -174,6 +180,35 @@ class DistributedWorker:
         return True
 
     async def _execute_claim(self, claim: JobClaim) -> None:
+        started = time.perf_counter()
+        wait = max((datetime.now(UTC) - claim.job.available_at).total_seconds(), 0.0)
+        obs_metrics.record_queue_wait(wait)
+        with obs_context.run_context(
+            run_id=str(claim.job.run_id),
+            session_id=str(claim.job.session_id),
+            conversation_id=str(claim.job.conversation_id),
+        ), obs_tracing.start_span(
+            "worker.claim",
+            attributes={
+                "run_id": str(claim.job.run_id),
+                "session_id": str(claim.job.session_id),
+                "conversation_id": str(claim.job.conversation_id),
+            },
+        ):
+            try:
+                await self._execute_claim_inner(claim)
+            finally:
+                job = self.repository.get_execution_job(claim.job.run_id)
+                if job is not None and job.state in {
+                    JobState.COMPLETED,
+                    JobState.FAILED,
+                    JobState.CANCELLED,
+                }:
+                    obs_metrics.record_run(
+                        job.state.value.lower(), time.perf_counter() - started
+                    )
+
+    async def _execute_claim_inner(self, claim: JobClaim) -> None:
         runtime_id: str | None = None
         if claim.previous_state in {JobState.RUNNING, JobState.WAITING}:
             if await self._adopt(claim):
@@ -540,6 +575,15 @@ class DistributedWorker:
 
 
 def main() -> None:
+    obs_logging.configure_logging(
+        log_format=settings.log_format,
+        level=settings.log_level,
+        service_name=settings.service_name,
+    )
+    obs_tracing.init_tracing(
+        service_name=settings.service_name,
+        endpoint=settings.otel_exporter_otlp_endpoint,
+    )
     asyncio.run(DistributedWorker().serve_forever())
 
 

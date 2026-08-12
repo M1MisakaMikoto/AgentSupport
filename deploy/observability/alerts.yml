@@ -1,0 +1,38 @@
+groups:
+  - name: agentsupport
+    rules:
+      - alert: AgentSupportQueueDepthHigh
+        expr: agentsupport_queue_ready > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job queue depth is high ({{ $value }})"
+      - alert: AgentSupportOutboxLag
+        expr: agentsupport_outbox_publication_lag_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Event publication lag exceeds 60s ({{ $value }}s)"
+      - alert: AgentSupportNoReadyRunners
+        expr: agentsupport_runners_registered == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No ready Runners are registered"
+      - alert: AgentSupportClaimsExpired
+        expr: increase(agentsupport_runner_heartbeat_expired_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Runner heartbeats are expiring"
+      - alert: AgentSupportHttp5xx
+        expr: sum(rate(agentsupport_http_requests_total{status=~"5.."}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Control plane is returning 5xx responses"
