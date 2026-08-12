@@ -520,6 +520,9 @@ POST /mcp-servers
 | `422` | `MCP_SERVER_INVALID` | server_id 非法或 transport 缺少对应端点 |
 | `422` | `MCP_TRANSPORT_UNSUPPORTED` | transport 不是 `http` / `sse` |
 
+> `headers` 中以 `$ENV_VAR` 引用的环境变量需在 Runner 部署环境（容器环境变量 / Secret）中
+> 配置，缺失时该次运行会失败并给出明确错误。
+
 ### 8.2 GET /mcp-servers
 
 返回全部已注册 server（含 `enabled` 状态），按 `server_id` 排序。

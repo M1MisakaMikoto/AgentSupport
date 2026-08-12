@@ -146,6 +146,7 @@ services:
       TRAE_API_KEY: ${TRAE_API_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}
       TRAE_MODEL_BASE_URL: ${TRAE_MODEL_BASE_URL:-${ANTHROPIC_BASE_URL:-}}
       TRAE_MODEL: ${TRAE_MODEL:-claude-sonnet-4-20250514}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
     expose:
       - "8080"
     volumes:
