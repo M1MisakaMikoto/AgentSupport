@@ -23,6 +23,7 @@ def _settings(tmp_path):
         persistence_mode="postgres",
         execution_mode="distributed",
         workspace_root=tmp_path / "workspaces",
+        skills_root=tmp_path / "skills",
         core_runner_url="http://runner",
         max_active_sessions=2,
         job_lease_seconds=30,
@@ -134,6 +135,7 @@ async def test_worker_executes_and_releases_distributed_job(tmp_path):
 async def test_distributed_worker_uses_session_config(tmp_path):
     config = _settings(tmp_path)
     api = AgentSupportService(config)
+    api.create_skill("review", filename="SKILL.md", payload=b"# Review\n")
     workspace = api.create_workspace("shop")
     session = api.create_session(
         workspace.id,

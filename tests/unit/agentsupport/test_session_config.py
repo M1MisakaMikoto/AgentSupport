@@ -11,9 +11,15 @@ from agentsupport.services import AgentSupportService
 
 @pytest.fixture
 def service(tmp_path):
-    return AgentSupportService(
-        Settings(workspace_root=tmp_path / "workspaces", enabled_skills="debug")
+    service = AgentSupportService(
+        Settings(
+            workspace_root=tmp_path / "workspaces",
+            skills_root=tmp_path / "skills",
+            enabled_skills="debug",
+        )
     )
+    service.create_skill("review", filename="SKILL.md", payload=b"# Review\n")
+    return service
 
 
 def _config() -> ProjectConfig:

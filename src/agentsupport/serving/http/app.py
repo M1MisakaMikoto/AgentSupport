@@ -17,6 +17,7 @@ from .routes import (
     operations_router,
     registrations_router,
     resources_router,
+    skills_router,
 )
 
 
@@ -70,6 +71,7 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
     app.include_router(events_router)
     app.include_router(interactions_router)
     app.include_router(registrations_router)
+    app.include_router(skills_router)
     app.mount(
         "/debug",
         StaticFiles(directory=Path(__file__).parent / "static" / "debug", html=True),

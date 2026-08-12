@@ -376,6 +376,33 @@ class AgentSupportService:
         self._remember("workspace", idempotency_key, payload, workspace.id)
         return workspace
 
+    def list_skills(self) -> list[dict[str, Any]]:
+        return self.skill_provider.list_skills()
+
+    def get_skill(self, skill_id: str) -> dict[str, Any]:
+        try:
+            return self.skill_provider.describe_skill(skill_id)
+        except (FileNotFoundError, ValueError) as exc:
+            raise ServiceError("SKILL_NOT_FOUND", str(exc), 404) from exc
+
+    def create_skill(
+        self, skill_id: str, *, filename: str, payload: bytes
+    ) -> dict[str, Any]:
+        try:
+            if filename.lower().endswith(".zip"):
+                return self.skill_provider.install_zip(skill_id, payload)
+            return self.skill_provider.install_skill(skill_id, {"SKILL.md": payload})
+        except ValueError as exc:
+            raise ServiceError("SKILL_INVALID_PAYLOAD", str(exc), 422) from exc
+
+    def delete_skill(self, skill_id: str) -> None:
+        try:
+            removed = self.skill_provider.remove_skill(skill_id)
+        except ValueError as exc:
+            raise ServiceError("SKILL_INVALID_PAYLOAD", str(exc), 422) from exc
+        if not removed:
+            raise ServiceError("SKILL_NOT_FOUND", "skill does not exist", 404)
+
     def create_session(
         self,
         workspace_id: UUID,
@@ -390,6 +417,13 @@ class AgentSupportService:
         config: ProjectConfig | None = None,
         auto_created: dict[str, Any] | None = None,
     ) -> Session:
+        if config is not None and config.skills:
+            try:
+                self.skill_provider.resolve(
+                    [skill.skill_id for skill in config.skills]
+                )
+            except (FileNotFoundError, ValueError) as exc:
+                raise ServiceError("SKILL_NOT_FOUND", str(exc), 404) from exc
         workspace = self._resolve_workspace(
             workspace_id, name=name, auto_created=auto_created
         )

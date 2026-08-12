@@ -5,7 +5,7 @@
 - **AgentSupport API（公共）**：面向业务调用方的控制面 API，负责 Workspace / Session /
   Conversation 执行资源、事件与交互（第 4-9 章）。
 - **Session Runner（私有执行面）**：控制面与 Runner 之间的内部 API，负责运行、检查点、
-  恢复与 Runner 自注册（第 10 章），不应直接暴露给外部调用方。
+  恢复与 Runner 自注册（第 11 章），不应直接暴露给外部调用方。
 
 平台只管理执行资源；租户 / 用户 / 项目等业务实体由上游系统管理，平台以可选标签透传，
 不做存在性校验、不提供业务 CRUD。从 v0.1 迁移见[上游迁移指南](../migration/v0.1-to-v0.2.md)；
@@ -34,25 +34,29 @@ Compose 环境的 AgentSupport API 默认地址为 `http://localhost:8000`（经
 | `POST` | `/sessions/{session_id}/conversations` | [6.1](#61-post-sessionssession_idconversations) |
 | `GET` | `/sessions/{session_id}/conversations` | [6.2](#62-get-sessionssession_idconversations) |
 | `GET` | `/conversations/{conversation_id}` | [6.3](#63-get-conversationsconversation_id) |
-| `GET` | `/conversations/{conversation_id}/events` | [7.1](#71-get-conversationsconversation_idevents) |
-| `GET` | `/conversations/{conversation_id}/events/stream` | [7.2](#72-get-conversationsconversation_ideventsstream) |
-| `GET` | `/sessions/{session_id}/events` | [7.3](#73-get-sessionssession_idevents) |
-| `GET` | `/sessions/{session_id}/events/stream` | [7.4](#74-get-sessionssession_ideventsstream) |
-| `POST` | `/conversations/{conversation_id}/input` | [8.1](#81-post-conversationsconversation_idinput) |
-| `POST` | `/conversations/{conversation_id}/approval` | [8.2](#82-post-conversationsconversation_idapproval) |
-| `POST` | `/conversations/{conversation_id}/cancel` | [8.3](#83-post-conversationsconversation_idcancel) |
-| `GET` | `/live` | [9.1](#91-get-live) |
-| `GET` | `/ready` | [9.2](#92-get-ready) |
-| `GET` | `/metrics` | [9.3](#93-get-metrics) |
-| `GET` | `/cores` | [9.4](#94-get-cores) |
+| `POST` | `/skills` | [7.1](#71-post-skills) |
+| `GET` | `/skills` | [7.2](#72-get-skills) |
+| `GET` | `/skills/{skill_id}` | [7.3](#73-get-skillsskill_id) |
+| `DELETE` | `/skills/{skill_id}` | [7.4](#74-delete-skillsskill_id) |
+| `GET` | `/conversations/{conversation_id}/events` | [8.1](#81-get-conversationsconversation_idevents) |
+| `GET` | `/conversations/{conversation_id}/events/stream` | [8.2](#82-get-conversationsconversation_ideventsstream) |
+| `GET` | `/sessions/{session_id}/events` | [8.3](#83-get-sessionssession_idevents) |
+| `GET` | `/sessions/{session_id}/events/stream` | [8.4](#84-get-sessionssession_ideventsstream) |
+| `POST` | `/conversations/{conversation_id}/input` | [9.1](#91-post-conversationsconversation_idinput) |
+| `POST` | `/conversations/{conversation_id}/approval` | [9.2](#92-post-conversationsconversation_idapproval) |
+| `POST` | `/conversations/{conversation_id}/cancel` | [9.3](#93-post-conversationsconversation_idcancel) |
+| `GET` | `/live` | [10.1](#101-get-live) |
+| `GET` | `/ready` | [10.2](#102-get-ready) |
+| `GET` | `/metrics` | [10.3](#103-get-metrics) |
+| `GET` | `/cores` | [10.4](#104-get-cores) |
 
 ### 2.2 内部 API（Runner 注册协议，不在 OpenAPI 中）
 
 | 方法 | 路径 | 章节 |
 | --- | --- | --- |
-| `POST` | `/runners/register` | [10.1](#101-post-runnersregister) |
-| `POST` | `/runners/{runner_id}/heartbeat` | [10.2](#102-post-runnersrunner_idheartbeat) |
-| `DELETE` | `/runners/{runner_id}` | [10.3](#103-delete-runnersrunner_id) |
+| `POST` | `/runners/register` | [11.1](#111-post-runnersregister) |
+| `POST` | `/runners/{runner_id}/heartbeat` | [11.2](#112-post-runnersrunner_idheartbeat) |
+| `DELETE` | `/runners/{runner_id}` | [11.3](#113-delete-runnersrunner_id) |
 
 ## 3. 通用约定
 
@@ -98,7 +102,7 @@ X-Project-Id: p-2
 ### 3.5 鉴权
 
 公共 API 有意不提供 token / API Key 等鉴权（`AGENTSUPPORT_API_AUTH_MODE` 仅支持 `none`）。
-正式对公网开放前，请在网关注入身份头、限流与认证。Runner 内部通道的鉴权见第 10 章。
+正式对公网开放前，请在网关注入身份头、限流与认证。Runner 内部通道的鉴权见第 11 章。
 
 ### 3.6 auto-create（显式 ID 补建）
 
@@ -198,7 +202,7 @@ Idempotency-Key: 6f9c2d3a-4b5c-4d6e-8f70-9a1b2c3d4e5f
 | `user_id` | string | 否 | 上游用户标签（≤120 字符） |
 | `project_id` | string | 否 | 上游项目标签（≤120 字符） |
 | `metadata` | object | 否 | 任意键值透传 |
-| `config` | object | 否 | 执行配置，见[第 11 章](#11-会话执行配置) |
+| `config` | object | 否 | 执行配置，见[第 12 章](#12-会话执行配置) |
 
 ```http
 POST /sessions
@@ -369,9 +373,95 @@ Idempotency-Key: a1b2c3d4-...
 
 **错误**：`404 CONVERSATION_NOT_FOUND`（不存在）。
 
-## 7. 事件与 SSE API
+## 7. Skill API
 
-### 7.1 GET /conversations/{conversation_id}/events
+Skill 自服务接口：上游随时上传新 skill，平台存储到共享 skills 卷并只读挂载进 Runner。
+skill 是"目录 + `SKILL.md`"的本地包；会话执行配置里的 `config.skills` 引用
+`skill_id`，创建会话时平台会预检 skill 是否存在。
+
+### 7.1 POST /skills
+
+上传 skill。支持两种内容：
+
+- 单个 `SKILL.md` 文件（multipart 字段 `file`）；
+- zip 压缩包（包内须含根级 `SKILL.md`，可带附属文件；解包安全校验：拒绝绝对路径与
+  `..` 穿越、单文件 ≤2MiB、总解包 ≤10MiB、条目 ≤200）。
+
+同名 `skill_id` 上传视为新版本覆盖。
+
+**multipart 字段**：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `skill_id` | string | 是 | 1-120 字符，仅 `[A-Za-z0-9][A-Za-z0-9._-]*` |
+| `file` | file | 是 | `SKILL.md` 或 `.zip`；上传上限 2MiB |
+
+```http
+POST /skills
+Content-Type: multipart/form-data
+
+skill_id=review
+file=@SKILL.md
+```
+
+**成功响应 `201`**：
+
+```json
+{
+  "skill_id": "review",
+  "content_hash": "3a5f8c9b...",
+  "mount_path": "/opt/agent-skills/review"
+}
+```
+
+**错误**：
+
+| 状态码 | 错误码 | 说明 |
+| --- | --- | --- |
+| `413` | `SKILL_TOO_LARGE` | 上传超过 2MiB |
+| `422` | `SKILL_INVALID_PAYLOAD` | skill_id 非法、zip 缺少 `SKILL.md`、路径穿越或条目超限 |
+
+### 7.2 GET /skills
+
+返回全部可用 skill 清单（仅含 `SKILL.md` 的目录）。
+
+**成功响应 `200`**：清单数组，元素同 [7.1](#71-post-skills) 响应体，按 `skill_id` 排序。
+
+### 7.3 GET /skills/{skill_id}
+
+返回 skill 详情与文件清单。
+
+**路径参数**：`skill_id`（string）。
+
+**成功响应 `200`**：
+
+```json
+{
+  "skill_id": "review",
+  "content_hash": "3a5f8c9b...",
+  "mount_path": "/opt/agent-skills/review",
+  "files": [
+    { "path": "SKILL.md", "size": 128 },
+    { "path": "references/guide.md", "size": 512 }
+  ]
+}
+```
+
+**错误**：`404 SKILL_NOT_FOUND`（不存在）。
+
+### 7.4 DELETE /skills/{skill_id}
+
+下架 skill（删除目录；已引用它的会话不受影响，新会话将无法引用）。
+
+**路径参数**：`skill_id`（string）。
+
+**成功响应 `204`**（无内容）。
+
+**错误**：`404 SKILL_NOT_FOUND`。
+
+## 8. 事件与 SSE API
+
+### 8.1 GET /conversations/{conversation_id}/events
 
 按对话顺序号查询事件。
 
@@ -405,9 +495,9 @@ Idempotency-Key: a1b2c3d4-...
 
 **错误**：`404 CONVERSATION_NOT_FOUND`。
 
-### 7.2 GET /conversations/{conversation_id}/events/stream
+### 8.2 GET /conversations/{conversation_id}/events/stream
 
-订阅对话事件（SSE）。参数与 [7.1](#71-get-conversationsconversation_idevents) 相同。
+订阅对话事件（SSE）。参数与 [8.1](#81-get-conversationsconversation_idevents) 相同。
 
 每条消息以 `seq` 作为 SSE `id`，完整事件作为 `data`：
 
@@ -419,27 +509,27 @@ data: {"schema_version":"1","event_id":"...","run_id":"...","seq":2,"type":"mess
 
 断线重连时，将最后成功处理的 `seq` 作为新的 `after_seq`，平台先重放遗漏事件再继续等待。
 
-### 7.3 GET /sessions/{session_id}/events
+### 8.3 GET /sessions/{session_id}/events
 
 返回该 Session 下所有 Conversation 中满足 `seq > after_seq` 的事件，按 `occurred_at`
-聚合排序。参数同 [7.1](#71-get-conversationsconversation_idevents)。
+聚合排序。参数同 [8.1](#81-get-conversationsconversation_idevents)。
 
 注意：`seq` 是 Conversation 级游标，不是 Session 全局游标；需要严格可靠消费单个任务时，
 应优先使用 Conversation 事件接口。
 
 **错误**：`404 SESSION_NOT_FOUND`。
 
-### 7.4 GET /sessions/{session_id}/events/stream
+### 8.4 GET /sessions/{session_id}/events/stream
 
-订阅会话聚合事件（SSE）。参数同 [7.3](#73-get-sessionssession_idevents)，消息格式同
-[7.2](#72-get-conversationsconversation_ideventsstream)。断开重连同样从
+订阅会话聚合事件（SSE）。参数同 [8.3](#83-get-sessionssession_idevents)，消息格式同
+[8.2](#82-get-conversationsconversation_ideventsstream)。断开重连同样从
 `after_seq` 续传。
 
-## 8. 交互 API
+## 9. 交互 API
 
 交互 ID 来自事件或 Conversation 的 `run.pending_interaction`，调用方不应自行生成。
 
-### 8.1 POST /conversations/{conversation_id}/input
+### 9.1 POST /conversations/{conversation_id}/input
 
 提交用户输入。
 
@@ -471,7 +561,7 @@ POST /conversations/{conversation_id}/input
 | `409` | `CONFLICT` | `expected_seq` 不匹配，或交互 ID 不匹配 |
 | `409` | `INVALID_STATE` | Run 当前不在等待输入状态 |
 
-### 8.2 POST /conversations/{conversation_id}/approval
+### 9.2 POST /conversations/{conversation_id}/approval
 
 提交工具审批。
 
@@ -503,7 +593,7 @@ POST /conversations/{conversation_id}/approval
 | `409` | `CONFLICT` / `INVALID_STATE` | 游标不匹配或未处于等待审批状态 |
 | `422` | `INVALID_DECISION` | `decision` 不是 `APPROVE_ONCE` / `REJECT` |
 
-### 8.3 POST /conversations/{conversation_id}/cancel
+### 9.3 POST /conversations/{conversation_id}/cancel
 
 取消 Conversation 的 Run。
 
@@ -528,9 +618,9 @@ POST /conversations/{conversation_id}/cancel
 
 **错误**：`404 CONVERSATION_NOT_FOUND`；`409 CONFLICT`（游标不匹配）。
 
-## 9. 运维 API
+## 10. 运维 API
 
-### 9.1 GET /live
+### 10.1 GET /live
 
 存活检查，仅表示 HTTP 进程存活。
 
@@ -540,7 +630,7 @@ POST /conversations/{conversation_id}/cancel
 { "status": "ok" }
 ```
 
-### 9.2 GET /ready
+### 10.2 GET /ready
 
 就绪状态与当前配置，并检查持久化连接。
 
@@ -555,7 +645,7 @@ POST /conversations/{conversation_id}/cancel
 }
 ```
 
-### 9.3 GET /metrics
+### 10.3 GET /metrics
 
 Prometheus 文本指标（`Content-Type: text/plain`），指标名以 `agentsupport_` 开头，例如：
 
@@ -567,7 +657,7 @@ agentsupport_claims_expired 0
 agentsupport_outbox_pending 0
 ```
 
-### 9.4 GET /cores
+### 10.4 GET /cores
 
 动态列出已注册 Runner 的能力与版本；目录为空时返回 `[]`。
 
@@ -585,12 +675,12 @@ agentsupport_outbox_pending 0
 ]
 ```
 
-## 10. Runner 注册协议（内部）
+## 11. Runner 注册协议（内部）
 
 以下端点属于控制面与 Runner 之间的内部契约，不在公共 OpenAPI 中，调用方不应使用。
-鉴权见 [10.4](#104-token-与安全)。
+鉴权见 [11.4](#114-token-与安全)。
 
-### 10.1 POST /runners/register
+### 11.1 POST /runners/register
 
 Runner 启动时注册自身。
 
@@ -635,7 +725,7 @@ X-Runner-Token: <shared-bootstrap-token>
 | `409` | `RUNNER_ALREADY_REGISTERED` | 同一提供方 + 端点已注册 |
 | `503` | `RUNNER_REGISTRATION_DISABLED` | 控制面未配置 `AGENTSUPPORT_RUNNER_TOKEN` |
 
-### 10.2 POST /runners/{runner_id}/heartbeat
+### 11.2 POST /runners/{runner_id}/heartbeat
 
 Runner 周期性上报心跳，维持注册有效。
 
@@ -655,7 +745,7 @@ Runner 周期性上报心跳，维持注册有效。
 
 **错误**：`401 RUNNER_TOKEN_INVALID`；`404 RUNNER_NOT_FOUND`（已注销或不存在）。
 
-### 10.3 DELETE /runners/{runner_id}
+### 11.3 DELETE /runners/{runner_id}
 
 Runner 注销（如进程退出）。
 
@@ -667,7 +757,7 @@ Runner 注销（如进程退出）。
 
 **错误**：`401 RUNNER_TOKEN_INVALID`；`404 RUNNER_NOT_FOUND`。
 
-### 10.4 Token 与安全
+### 11.4 Token 与安全
 
 - 注册使用共享 bootstrap token：控制面 `AGENTSUPPORT_RUNNER_TOKEN`，Runner
   `SESSION_RUNNER_TOKEN`（同一值）。
@@ -678,7 +768,7 @@ Runner 注销（如进程退出）。
 - token 未配置时注册接口返回 `503`，栈回退到静态 `AGENTSUPPORT_CORE_RUNNER_URL`。
 - 跨网络部署必须经 TLS 入口传输 token。
 
-## 11. 会话执行配置
+## 12. 会话执行配置
 
 `config` 替代 v0.1 的 preset 导入，由调用方随 Session 请求传入；平台做结构校验后透传给
 Runner，模板由上游自行保存。
@@ -710,7 +800,7 @@ Runner，模板由上游自行保存。
 }
 ```
 
-## 12. 运行状态
+## 13. 运行状态
 
 Conversation 的 `run.state` 可能为：
 
@@ -730,7 +820,7 @@ Conversation 的 `run.state` 可能为：
 
 `COMPLETED`、`FAILED`、`CANCELLED` 和 `LOST` 为终态。
 
-## 13. 错误响应
+## 14. 错误响应
 
 平台业务错误采用统一结构：
 
@@ -762,6 +852,7 @@ Conversation 的 `run.state` 可能为：
 | `404` | `SESSION_NOT_FOUND` | Session 不存在 |
 | `404` | `CONVERSATION_NOT_FOUND` | Conversation 不存在 |
 | `404` | `PARENT_NOT_FOUND` | 父对话不存在或不属于当前 Session |
+| `404` | `SKILL_NOT_FOUND` | skill 不存在（详情/删除/会话预检） |
 | `404` | `RUNNER_NOT_FOUND` | Runner 未注册（内部） |
 | `409` | `IDEMPOTENCY_CONFLICT` | 幂等 Key 复用且请求不同 |
 | `409` | `CONFLICT` | `expected_seq` 不匹配等并发冲突 |
@@ -771,13 +862,15 @@ Conversation 的 `run.state` 可能为：
 | `409` | `EVENT_CONFLICT` | 事件序号冲突 |
 | `409` | `RUNNER_ALREADY_REGISTERED` | Runner 重复注册（内部） |
 | `422` | `INVALID_DECISION` | 审批决策非法 |
+| `422` | `SKILL_INVALID_PAYLOAD` | skill 包不合法（缺 SKILL.md / 路径穿越 / 条目超限） |
 | `429` | `RESOURCE_EXHAUSTED` | 队列或容量已满 |
 | `401` | `RUNNER_TOKEN_INVALID` | Runner token 无效（内部） |
+| `413` | `SKILL_TOO_LARGE` | skill 上传超过大小上限 |
 | `503` | `RUNNER_REGISTRATION_DISABLED` | 未配置 Runner token（内部） |
 
 FastAPI 自身的请求校验错误使用标准 `422` 格式，不一定包含上述统一字段。
 
-## 14. 版本边界
+## 15. 版本边界
 
 ### 已移除（v0.1 → v0.2）
 
