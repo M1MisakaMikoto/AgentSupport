@@ -890,6 +890,10 @@ Runner，模板由上游自行保存。
 }
 ```
 
+> `skills` 与 `resources.mcp_refs` 中的引用会在 Session / Conversation 创建时预检：
+> 不存在的 skill 或 MCP server 返回 `404`（`SKILL_NOT_FOUND` / `MCP_SERVER_NOT_FOUND`），
+> 停用的 MCP server 返回 `422 MCP_SERVER_DISABLED`。
+
 ## 14. 运行状态
 
 Conversation 的 `run.state` 可能为：

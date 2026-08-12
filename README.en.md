@@ -84,23 +84,37 @@ This is a contract enforced by `tests/contract/agentsupport_api/test_no_auth.py`
 rate limiting at the gateway before exposing the API publicly (the repository provides no
 formal authentication or tenant isolation).
 
-Resource creation endpoints have **no cross-API precondition requirements**: when a referenced
-resource does not exist, the platform creates it on demand by default, and creation responses
-append an `auto_created` field with the new entity IDs. For example, posting a conversation to a
-non-existent `/sessions/{session_id}/conversations` automatically creates a default Workspace and
-that Session. Streaming / run-state endpoints (SSE event streams, event polling, and
-input/approval/cancel) still require the resource to exist; read-only queries never auto-create
-and keep returning `404`.
+The platform manages execution resources (Workspace / Session / Conversation) only. Tenant / user /
+project entities are managed by the upstream system; the platform passes them through as optional
+`tenant_id` / `user_id` / `project_id` labels (no existence checks, carried into events and
+audit). Execution configuration travels with the Session request; preset entities no longer exist.
 
-Auto-completion is enabled by default and can be disabled or narrowed:
+**v0.2 auto-create semantics**: only an explicitly passed, missing `workspace_id` / `session_id` is
+created with that ID; fields the caller did not pass are never generated (no default Workspace /
+default user). Auto-created resources are surfaced via the `auto_created` field in `201` responses
+plus `workspace.created` / `session.created` events. Streaming / run-state endpoints still require
+the resource to exist; read-only queries never auto-create and keep returning `404`.
+
+Auto-completion is enabled by default and should be disabled in production:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AGENTSUPPORT_AUTO_CREATE_MISSING` | `true` | Master switch; `false` restores strict `404` behavior |
-| `AGENTSUPPORT_AUTO_CREATE_SCOPES` | `all` | `all` or comma-separated: `organization,user,preset,project,workspace,session` |
-| `AGENTSUPPORT_DEFAULT_WORKSPACE_ID` | empty | Stable ID used when auto-creating a Workspace |
-| `AGENTSUPPORT_DEFAULT_USER_ID` | empty | Stable ID used when auto-creating a User |
-| `AGENTSUPPORT_AUTO_RESOURCE_NAME` | `auto` | Default name for auto-created resources |
+| `AGENTSUPPORT_AUTO_CREATE_SCOPES` | `workspace,session` | Only execution resources take part in auto-create |
+
+Runner self-registration (internal contract) uses a shared token:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AGENTSUPPORT_RUNNER_TOKEN` | empty | Control-plane Runner registration token; empty disables registration |
+| `AGENTSUPPORT_RUNNER_HEARTBEAT_TIMEOUT_SECONDS` | `30` | Heartbeat timeout; stale Runners are cleaned up |
+| `SESSION_RUNNER_TOKEN` | empty | Same shared token on the Runner side |
+| `AGENTSUPPORT_CONTROL_PLANE_URL` | empty | Runner registration target URL |
+| `SESSION_RUNNER_ENDPOINT` | empty | Runner-advertised reachable URL |
+
+Upstream can self-service agent capabilities: the [Skill API](docs/api/agentsupport-api.md#7-skill-api)
+uploads/discover skills and the [MCP Server API](docs/api/agentsupport-api.md#8-mcp-server-api)
+registers MCP connection definitions; both are referenced per Session or per Conversation.
 
 The private Runner can be started separately in deterministic mode when working on its HTTP
 contract:
@@ -132,7 +146,7 @@ The console is organized as an AI-software-style platform with exactly two secti
 
 | Section | Pages | Capability |
 | --- | --- | --- |
-| Demo | Overview / Organizations / Users / Projects / Presets / Agent Workspace | Full management of organizations (tenants), users, projects and presets (CRUD, preset import with snapshot semantics); the Agent Workspace provides session selection, conversational task submission, an SSE event timeline, input/approval/cancel gates and derived sub-conversations |
+| Demo | Overview / Agent Workspace | Execution-resource overview (Workspace / Session / Conversation) and the label model; the Agent Workspace creates/selects Workspaces and Sessions (with `tenant_id` / `user_id` / `project_id` labels), submits tasks with optional `skills` / `mcp_refs`, and provides an SSE event timeline with input/approval/cancel gates. Business entities are managed upstream; the console no longer ships organization/user/project/preset management pages |
 | Deployment | Service Status / Deploy Actions / Acceptance / API Reference | Compose service topology and health endpoints (`/live` `/ready` `/metrics` `/cores`), deploy/start/stop and scaling, deployment regression plus API contract acceptance (structured assertions across all public operations, error paths, idempotency, optimistic concurrency, SSE resume and an OpenAPI operation-coverage report), and an interactive API reference generated from the runtime `/openapi.json` |
 
 API contract acceptance is a repeatable in-console check; release criteria still follow the
@@ -223,6 +237,7 @@ other repository files.
 | `AGENTSUPPORT_MAX_QUEUED_CONVERSATIONS` | Conversation queue limit |
 | `AGENTSUPPORT_AUTO_CREATE_MISSING` | Missing-precondition auto-completion switch (default on) |
 | `AGENTSUPPORT_API_AUTH_MODE` | API auth mode; only `none` is supported |
+| `AGENTSUPPORT_RUNNER_TOKEN` | Runner self-registration shared token (empty disables registration) |
 | `SESSION_RUNNER_MODE` | `deterministic` or `trae` Runner mode |
 | `TRAE_PROVIDER` | Model provider implementation |
 | `TRAE_MODEL`, `TRAE_MODEL_BASE_URL`, `TRAE_API_KEY` | Runner model configuration |

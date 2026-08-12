@@ -10,10 +10,9 @@
 
 | 入口 | 当前能力 | API 覆盖 |
 | --- | --- | --- |
-| 示范 · 管理页面 | 组织/用户/项目/预设的增查改删，预设导入与快照语义 | 资源类公共路径 |
-| 示范 · Agent 工作台 | 项目 → 会话 → 对话链路，SSE 事件轨道，input/approval/cancel | 主任务链 9/13 个路径 |
+| 示范 · 总览 / Agent 工作台 | 执行资源概览与标签模型；Workspace/Session 创建（带标签）、任务下发（可选 `skills` / `mcp_refs`）、SSE 事件轨道、input/approval/cancel | 主任务链（workspace/session/conversation + 标签） |
 | 部署 · 服务状态 | 健康端点 `/live` `/ready` `/metrics` `/cores` | 运维类路径 |
-| 部署 · API 契约验收 | 结构化断言运维、资源、事件、交互四类共 14 个用例，含错误路径、幂等、乐观并发、SSE 断线续传；按 OpenAPI 输出操作覆盖率 | 13 个公共路径全部逐项断言 |
+| 部署 · API 契约验收 | 结构化断言运维、资源、事件、交互四类用例，含错误路径、幂等、乐观并发、SSE 断线续传；按 OpenAPI 输出操作覆盖率 | 29 个公共路径登记；skills 与 mcp-servers 由仓库契约套件覆盖 |
 | 部署 · API 参考 | 由运行时 OpenAPI 渲染参数表、请求体、响应与 cURL | 全部公共路径 |
 
 “API 契约验收”在控制台内通过真实 HTTP 请求对每个用例给出通过/失败、耗时与说明，并展示 OpenAPI
@@ -25,17 +24,20 @@
 一次完整 API 验收必须同时满足：
 
 1. 运行时 OpenAPI 中每个公开 operation 都被测试清单登记，新增或删除接口时覆盖门禁失败。
-2. 13 个 AgentSupport 公共路径都有正常、校验失败和相关业务错误断言。
+2. 29 个 AgentSupport 公共路径都有正常、校验失败和相关业务错误断言。
 3. 所有公共 `POST` 都验证幂等重放和 Key 冲突；三个交互接口验证 `expected_seq` 冲突。
 4. 普通响应、统一错误响应、关联 ID、实例 ID、状态码和 Content-Type 都符合契约。
 5. SSE 验证历史重放、排他游标、顺序、去重和断线续传。
-6. 9 个 Session Runner 私有路径通过独立契约套件，不能由公共 API 的页面冒烟替代。
+6. 9 个 Session Runner 私有路径通过独立契约套件，不能由公共 API 的页面冒烟替代；
+   另有 3 个控制面内部 Runner 注册端点（`/runners/register`、heartbeat、注销）由独立契约测试覆盖。
 7. 内存模式和真实 Compose 分布式模式都通过；PostgreSQL 并发与进程重启场景通过。
 8. 公共 API 无 token 鉴权：OpenAPI 不含 `securitySchemes`，所有操作无 `security` 声明；
    请求不带任何 `Authorization` 头也能通过（`tests/contract/agentsupport_api/test_no_auth.py`）。
-9. 资源创建接口默认开启前置条件自动补全：缺失的 Workspace/Session/Project/User/Organization
-   按需创建并在响应中回传 `auto_created`；关闭开关（`AGENTSUPPORT_AUTO_CREATE_MISSING=false`）
-   后必须恢复严格 `404` 行为。
+9. auto-create 仅对调用方显式传入且不存在的 `workspace_id` / `session_id` 以其 ID 补建，
+   在响应中回传 `auto_created`；未传入的字段绝不自动生成；关闭开关
+   （`AGENTSUPPORT_AUTO_CREATE_MISSING=false`）后必须恢复严格 `404` 行为。
+10. Session / Conversation 引用 `skills` 与 `mcp_refs` 时在创建时预检：不存在的 skill 或
+    MCP server 返回 `404`，停用的 MCP server 返回 `422`。
 
 “全量”指当前公开契约和明确支持的失败行为，不要求通过不存在的资源查询、认证或租户 API。
 
@@ -64,10 +66,13 @@ RS-01 至 RS-03 都必须使用相同 `Idempotency-Key` 重放相同请求，确
 自动补全路径必须额外断言：
 
 - 缺失资源沿用调用方传入的 UUID；重复调用同一 UUID 收敛到同一实体，不产生重复资源。
-- 201 响应包含 `auto_created`（含 `workspace`、`session`、按需的 `project`/`user`），
-  未发生自动补全的响应不得包含该字段。
-- preset 缺失时回退部署默认配置并返回 `preset_fallback: "default"`。
+- 201 响应包含 `auto_created`（含 `workspace`、`session`），未发生自动补全的响应不得包含该字段。
 - 只读查询与流式/运行态接口（事件轮询、SSE、input/approval/cancel）不触发自动创建，保持 `404`。
+
+| RS-04 | `/skills` 与 `/skills/{skill_id}` | 上传（SKILL.md / zip）后可在 `/skills` 发现、`GET` 详情；同名覆盖为新版本 | 非法 skill_id、zip 缺 SKILL.md、路径穿越、大小超限 `413/422`；删除后 `404` |
+| RS-05 | `/mcp-servers` 与 `/mcp-servers/{server_id}` | 注册 http/sse server 后可在清单发现、`PATCH` 更新、`DELETE` 下架 | 非法 server_id / transport、缺端点 `422`；引用不存在 server `404 MCP_SERVER_NOT_FOUND`、停用 `422 MCP_SERVER_DISABLED` |
+
+Session 与 Conversation 的 `skills` / `mcp_refs` 引用必须断言继承 / 覆盖 / 空数组禁用三种语义。
 
 ### 3.3 事件接口
 
@@ -76,6 +81,7 @@ RS-01 至 RS-03 都必须使用相同 `Idempotency-Key` 重放相同请求，确
 | EV-01 | `GET /conversations/{id}/events` | 默认游标、`after_seq` 排他语义、升序、事件结构、资源不存在、负游标 `422` |
 | EV-02 | `GET /conversations/{id}/events/stream` | `text/event-stream`、SSE `id == seq`、历史重放、新事件到达、断线后续传、不重复、资源不存在 |
 | EV-03 | `GET /sessions/{id}/events` | 聚合多个 Conversation、时间排序、游标语义、空 Session、资源不存在、负游标 `422` |
+| EV-04 | `GET /sessions/{id}/events/stream` | `text/event-stream`、多 Conversation 聚合、断线从 `after_seq` 续传、资源不存在 |
 
 SSE 测试必须设置有限超时，并在收到目标事件后主动关闭连接，不能依赖永不结束的流自然退出。
 
@@ -130,7 +136,7 @@ Runner 套件独立覆盖以下 9 个路径：
 | 层级 | 建议位置 | 运行环境 | 目的 |
 | --- | --- | --- | --- |
 | OpenAPI 覆盖门禁 | `tests/contract/agentsupport_api/test_openapi_coverage.py` | 进程内 ASGI | operation 与用例清单一一对应 |
-| 公共 HTTP 契约 | `tests/contract/agentsupport_api/` | 进程内 ASGI、确定性 Runner | 13 个路径、错误体、Headers、幂等、SSE |
+| 公共 HTTP 契约 | `tests/contract/agentsupport_api/` | 进程内 ASGI、确定性 Runner | 29 个公共路径 + 3 个内部 Runner 注册路径、错误体、Headers、幂等、SSE |
 | Runner HTTP 契约 | `tests/contract/runner_api/` | 进程内 ASGI | 9 个私有路径和 fencing/checkpoint |
 | 服务集成 | `tests/e2e/agentsupport/` | 内存与 SQLite | 状态机、资源租约、故障映射 |
 | 分布式黑盒 | `tests/e2e/compose/test_public_api.py` | Compose、PostgreSQL、Redis、多 API/Worker | 真实网络、持久化、跨实例命令、重启与并发 |

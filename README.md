@@ -145,7 +145,7 @@ $env:SESSION_RUNNER_MODE="deterministic"
 
 | 板块 | 子页面 | 能力 |
 | --- | --- | --- |
-| 示范 | 总览 / 组织管理 / 用户管理 / 项目管理 / 预设管理 / Agent 工作台 | 组织（租户）、用户、项目、预设的完整管理（增查改删、预设导入与快照语义）；Agent 工作台提供会话选择、对话式任务下发、SSE 事件轨道、input/approval/cancel 人工关口与派生子任务 |
+| 示范 | 总览 / Agent 工作台 | 执行资源概览（Workspace / Session / Conversation）与标签模型；Agent 工作台提供 Workspace / Session 选择与新建（带 `tenant_id` / `user_id` / `project_id` 标签）、对话式任务下发（可选 `skills` 与 `mcp_refs`）、SSE 事件轨道、input/approval/cancel 人工关口；业务实体由上游管理，控制台不再提供组织/用户/项目/预设管理页 |
 | 部署 | 服务状态 / 部署操作 / 验收中心 / API 参考 | Compose 服务拓扑与健康端点（`/live` `/ready` `/metrics` `/cores`）、部署/启动/停止与扩缩容、部署回归验收与 API 契约验收（结构化断言全部公共接口、错误路径、幂等、乐观并发、SSE 断线续传，并输出 OpenAPI 操作覆盖率报告）、由运行时 `/openapi.json` 自动生成的交互式 API 参考 |
 
 API 契约验收是控制台内可重复的自动检查入口；仓库测试与发布标准仍以
