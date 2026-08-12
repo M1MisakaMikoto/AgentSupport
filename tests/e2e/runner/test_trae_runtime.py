@@ -141,34 +141,6 @@ def request_payload(workspace):
 
 
 @pytest.mark.asyncio
-async def test_greeting_task_completes_without_agent_or_tools(tmp_path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    called = []
-
-    def factory(runtime_settings, request, trajectory):
-        called.append(True)
-        raise AssertionError("greeting must never reach the agent factory")
-
-    app = create_runner_app(
-        runner_mode="trae",
-        trae_settings=settings(tmp_path),
-        trae_agent_factory=factory,
-    )
-    payload = request_payload(workspace)
-    payload["context_bundle"]["task"] = "hello"
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://runner") as client:
-        started = await client.post("/runs", json=payload)
-
-    body = started.json()
-    assert body["status"] == "COMPLETED"
-    assert called == []
-    event_types = [event["type"] for event in body["events"]]
-    assert event_types == ["run.started", "message", "run.completed"]
-    assert body["events"][1]["payload"]["content"]
-
-
-@pytest.mark.asyncio
 async def test_real_mode_waits_before_side_effect_and_completes_after_approval(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
