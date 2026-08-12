@@ -19,7 +19,6 @@ Workspace、Session 和 Conversation，而隔离的 Session Runner 负责执行�
 中文为默认文档语言：
 
 - [AgentSupport API 参考](docs/api/agentsupport-api.md)
-- [v0.2 API 契约草案](docs/api/agentsupport-api-v2-draft.md)
 - [上游迁移指南 v0.1 → v0.2](docs/migration/v0.1-to-v0.2.md)
 - [API 全量测试设计](docs/testing/api-full-test-plan.md)
 - [目录架构](docs/architecture/directory-structure.md)
