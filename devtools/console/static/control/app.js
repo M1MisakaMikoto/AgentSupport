@@ -200,9 +200,13 @@
     if (mod) {
       if (!mod.started) {
         mod.started = true;
-        Promise.resolve(mod.init?.()).catch(() => {});
+        Promise.resolve(mod.init?.()).catch((error) =>
+          console.error("view init failed:", error)
+        );
       }
-      Promise.resolve(mod.refresh?.()).catch(() => {});
+      Promise.resolve(mod.refresh?.()).catch((error) =>
+        console.error("view refresh failed:", error)
+      );
     }
   };
 
@@ -211,9 +215,13 @@
     const run = () => {
       if (!mod.started) {
         mod.started = true;
-        Promise.resolve(mod.init?.()).catch(() => {});
+        Promise.resolve(mod.init?.()).catch((error) =>
+          console.error("view init failed:", error)
+        );
       }
-      Promise.resolve(mod.refresh?.()).catch(() => {});
+      Promise.resolve(mod.refresh?.()).catch((error) =>
+        console.error("view refresh failed:", error)
+      );
     };
     if (document.getElementById(`view-${name}`)?.classList.contains("active")) {
       run();

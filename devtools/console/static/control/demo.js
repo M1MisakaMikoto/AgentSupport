@@ -352,7 +352,7 @@
     const run = currentRun();
     const state = run?.state || "IDLE";
     els["agent-run-state"].textContent = state;
-    els["agent-run-seq"].textContent = run?.last_seq ?? agent.events.length || 0;
+    els["agent-run-seq"].textContent = (run?.last_seq ?? agent.events.length) || 0;
     els["agent-run-id"].textContent = run?.run_id || "-";
     els["agent-run-chip"].textContent = state;
     els["agent-run-chip"].className = `chip ${terminalStates.has(state) ? "gray" : "ok"}`;
