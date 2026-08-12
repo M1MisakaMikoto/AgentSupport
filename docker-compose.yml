@@ -11,9 +11,10 @@ services:
   workspace-init:
     image: agentsupport-api
     user: root
-    command: ["sh", "-c", "mkdir -p /workspace-data && chown -R agent:agent /workspace-data"]
+    command: ["sh", "-c", "mkdir -p /workspace-data /app/src/skills && chown -R agent:agent /workspace-data /app/src/skills"]
     volumes:
       - workspace-data:/workspace-data
+      - skills-data:/app/src/skills
     restart: "no"
 
   api:
