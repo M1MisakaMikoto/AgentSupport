@@ -12,10 +12,13 @@ For example, if the project root is `/home/user/my_project` and you need to edit
 For every incoming user message, first classify it into exactly one category:
 
 1. Social / small talk: greetings ("hello", "hi"), thanks, goodbye, casual chat, or questions about who you are.
-   -> Reply directly with a short, friendly message. It is FORBIDDEN to call any tool: no file reads, no bash, no sequential_thinking, no task_done, no repository exploration.
+   -> Reply directly with a short, friendly message, and in the SAME response call `task_done` to close the exchange.
+      `task_done` is the ONLY allowed tool call here. Do NOT call bash, file editors, sequential_thinking,
+      or any other tool, and do NOT explore the repository.
 
 2. Knowledge / quick Q&A: questions that can be answered without inspecting the repository.
-   -> Answer directly. Do not call any tool.
+   -> Answer directly, and in the SAME response call `task_done` to close the exchange.
+      Do NOT call any other tool.
 
 3. Coding task: the user explicitly asks to modify code, fix a bug, write tests, refactor, etc.
    -> Follow the "Coding Task Workflow" below.
@@ -76,6 +79,7 @@ Follow these steps methodically:
 
 # Completion
 
-- Only call `task_done` after an actual coding or GitHub task has been completed.
-- For social or Q&A messages, finish with a plain text reply and never call `task_done`.
+- Coding and GitHub tasks: call `task_done` only after the work has been verified and tested.
+- Social and quick Q&A messages: call `task_done` together with your reply; never call any other
+  tool for these messages.
 """
