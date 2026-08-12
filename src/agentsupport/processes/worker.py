@@ -349,7 +349,7 @@ class DistributedWorker:
                     ],
                     "skill_manifest": self.skill_provider.manifest(skills),
                     "tool_policy": tool_policy,
-                    "mcp_refs": [],
+                    "mcp_refs": self._resolve_mcp_refs(conversation, session),
                 },
                 "workspace_ref": workspace_ref,
                 "tool_policy": tool_policy,
@@ -402,6 +402,38 @@ class DistributedWorker:
             return False
         await self._execute_claim(claim)
         return True
+
+    def _resolve_mcp_refs(
+        self, conversation, session
+    ) -> list[dict]:
+        refs = (
+            conversation.mcp_refs
+            if conversation.mcp_refs is not None
+            else (
+                session.config.resources.mcp_refs
+                if session.config is not None and session.config.resources.mcp_refs
+                else []
+            )
+        )
+        resolved: list[dict] = []
+        for ref in refs:
+            server_id = ref.get("server_id") if isinstance(ref, dict) else ref
+            if not isinstance(server_id, str) or not server_id:
+                raise RuntimeError(f"invalid mcp reference: {ref}")
+            server = self.repository.get_mcp_server(server_id)
+            if server is None:
+                raise RuntimeError(f"MCP server not found: {server_id}")
+            resolved.append(
+                {
+                    "server_id": server.server_id,
+                    "transport": server.transport,
+                    "http_url": server.http_url,
+                    "sse_url": server.sse_url,
+                    "headers": dict(server.headers),
+                    "description": server.description,
+                }
+            )
+        return resolved
 
     async def _apply_command(self, owned: OwnedRun, command: RunCommand) -> None:
         claim = owned.claim

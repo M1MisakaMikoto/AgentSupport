@@ -187,7 +187,11 @@ class TraeToolGatewayBridge:
         }
         descriptors = [
             configured.get(
-                name, ToolDescriptor(name=name, requires_approval=name in SIDE_EFFECT_TOOLS)
+                name,
+                ToolDescriptor(
+                    name=name,
+                    requires_approval=name in SIDE_EFFECT_TOOLS or name.startswith("mcp."),
+                ),
             )
             for name in tool_names
         ]
@@ -340,12 +344,14 @@ class TraeExecutionAdapter:
         *,
         settings: TraeRuntimeSettings | None = None,
         agent_factory: AgentFactory | None = None,
+        mcp_servers_config: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.request = request
         self.emit = emit
         self.on_waiting = on_waiting
         self.settings = settings or TraeRuntimeSettings.from_environment()
         self.agent_factory = agent_factory or _default_agent_factory
+        self.mcp_servers_config = dict(mcp_servers_config or {})
         self.workspace: Path | None = None
         self.trajectory: Path | None = None
         self.agent: Any = None
@@ -364,7 +370,7 @@ class TraeExecutionAdapter:
         }
 
     async def run(self) -> dict[str, Any]:
-        self._initialize_agent()
+        await self._initialize_agent()
         execution = await self.agent.run(
             self.request.context_bundle.get("task", ""),
             {"project_path": str(self.workspace)},
@@ -383,7 +389,7 @@ class TraeExecutionAdapter:
         return result
 
     async def resume(self, checkpoint: Any, decision: ApprovalDecision) -> dict[str, Any]:
-        self._initialize_agent()
+        await self._initialize_agent()
         if self.bridge is None:
             raise RuntimeError("Trae tool gateway is not initialized")
         current_policy = {
@@ -452,13 +458,19 @@ class TraeExecutionAdapter:
             "resumed": True,
         }
 
-    def _initialize_agent(self) -> None:
+    async def _initialize_agent(self) -> None:
         self.settings.validate()
         self.workspace = self.settings.workspace(self.request.workspace_ref)
         trajectory_dir = self.workspace / ".agentsupport" / "trajectories"
         trajectory_dir.mkdir(parents=True, exist_ok=True)
         self.trajectory = trajectory_dir / f"{self.request.run_id}.json"
         self.agent = self.agent_factory(self.settings, self.request, self.trajectory)
+        if self.mcp_servers_config:
+            self.agent.agent.mcp_servers_config = dict(self.mcp_servers_config)
+            self.agent.agent.allow_mcp_servers = list(self.mcp_servers_config)
+            await self.agent.agent.initialise_mcp()
+            # The base Agent.run would re-initialise MCP; discovery already ran.
+            self.agent.agent.allow_mcp_servers = []
         tool_names = [tool.name for tool in self.agent.agent.tools]
         original = self.agent.agent._tool_caller
         self.bridge = TraeToolGatewayBridge(
@@ -469,6 +481,9 @@ class TraeExecutionAdapter:
             self._waiting,
             self._next_step,
         )
+        mcp_names = {name for name in tool_names if name.startswith("mcp.")}
+        if mcp_names:
+            self.bridge.policy.allowed_tools.update(mcp_names)
         self.agent.agent._tool_caller = self.bridge
 
     def _next_step(self) -> int:

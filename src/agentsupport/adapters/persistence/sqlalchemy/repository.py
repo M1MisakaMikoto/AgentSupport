@@ -21,6 +21,7 @@ from ....domain import (
     ContextBundle,
     Conversation,
     ExecutionState,
+    McpServer,
     PresetSkill,
     ProjectConfig,
     RunProjection,
@@ -44,6 +45,7 @@ from .models import (
     ConversationRow,
     ExecutionJobRow,
     IdempotencyKeyRow,
+    McpServerRow,
     OutboxEventRow,
     RunCommandRow,
     RunnerEndpointRow,
@@ -463,6 +465,11 @@ class PostgresRepository:
                     if conversation.skills is not None
                     else None
                 ),
+                mcp_refs=(
+                    [dict(item) for item in conversation.mcp_refs]
+                    if conversation.mcp_refs is not None
+                    else None
+                ),
                 execution_state=conversation.run.state.value,
                 run_id=str(conversation.run.run_id),
                 last_seq=conversation.run.last_seq,
@@ -494,6 +501,11 @@ class PostgresRepository:
             skills=(
                 [PresetSkill.model_validate(item) for item in row.skills]
                 if row.skills is not None
+                else None
+            ),
+            mcp_refs=(
+                [dict(item) for item in row.mcp_refs]
+                if row.mcp_refs is not None
                 else None
             ),
             created_at=row.created_at,
@@ -1318,6 +1330,67 @@ class PostgresRepository:
             last_heartbeat_at=_as_utc(row.last_heartbeat_at),
             created_at=_as_utc(row.created_at),
             metadata=dict(row.labels),
+        )
+
+    def save_mcp_server(self, server: McpServer) -> None:
+        with self.transaction() as db:
+            row = db.get(McpServerRow, server.server_id)
+            if row is None:
+                db.add(
+                    McpServerRow(
+                        server_id=server.server_id,
+                        name=server.name,
+                        transport=server.transport,
+                        http_url=server.http_url,
+                        sse_url=server.sse_url,
+                        headers=dict(server.headers),
+                        description=server.description,
+                        enabled=server.enabled,
+                        created_at=server.created_at,
+                        updated_at=server.updated_at,
+                    )
+                )
+                return
+            row.name = server.name
+            row.transport = server.transport
+            row.http_url = server.http_url
+            row.sse_url = server.sse_url
+            row.headers = dict(server.headers)
+            row.description = server.description
+            row.enabled = server.enabled
+            row.updated_at = server.updated_at
+
+    def get_mcp_server(self, server_id: str) -> McpServer | None:
+        with self.transaction() as db:
+            row = db.get(McpServerRow, server_id)
+            return self._mcp_server_from_row(row) if row is not None else None
+
+    def list_mcp_servers(self) -> list[McpServer]:
+        with self.transaction() as db:
+            rows = db.execute(select(McpServerRow).order_by(McpServerRow.server_id)).scalars()
+            return [self._mcp_server_from_row(row) for row in rows]
+
+    def delete_mcp_server(self, server_id: str) -> bool:
+        with self.transaction() as db:
+            row = db.get(McpServerRow, server_id)
+            if row is None:
+                return False
+            db.delete(row)
+            return True
+
+    @staticmethod
+    def _mcp_server_from_row(row: McpServerRow) -> McpServer:
+        return McpServer(
+            server_id=row.server_id,
+            name=row.name,
+            transport=row.transport,
+            http_url=row.http_url,
+            sse_url=row.sse_url,
+            headers=dict(row.headers),
+            description=row.description,
+            enabled=row.enabled,
+            created_at=_as_utc(row.created_at),
+            updated_at=_as_utc(row.updated_at),
         )
 
     def pause_expired_waiting(

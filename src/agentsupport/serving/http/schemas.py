@@ -1,6 +1,6 @@
 """HTTP request schemas for the v0.2 public API (execution resources only)."""
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -56,6 +56,27 @@ class ConversationCreate(BaseModel):
     parent_conversation_id: UUID | None = None
     workspace_id: UUID | None = None
     skills: list[ConfigSkillInput] | None = None
+    mcp_refs: list[dict[str, Any]] | None = None
+
+
+class McpServerCreate(BaseModel):
+    server_id: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=120)
+    transport: Literal["http", "sse"]
+    http_url: str | None = None
+    sse_url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    description: str = ""
+    enabled: bool = True
+
+
+class McpServerUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    http_url: str | None = None
+    sse_url: str | None = None
+    headers: dict[str, str] | None = None
+    description: str | None = None
+    enabled: bool | None = None
 
 
 class InteractionRequest(BaseModel):
@@ -83,6 +104,8 @@ __all__ = [
     "ConfigToolPolicyInput",
     "ConversationCreate",
     "InteractionRequest",
+    "McpServerCreate",
+    "McpServerUpdate",
     "SessionConfigInput",
     "SessionCreate",
     "WorkspaceCreate",

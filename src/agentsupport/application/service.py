@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import secrets
 import socket
 from collections.abc import AsyncIterator
@@ -28,11 +29,13 @@ from agent_runner_contracts.registration import (
 from agent_runner_contracts.tools import ToolBatch
 
 from ..domain import (
+    SUPPORTED_TRANSPORTS,
     TERMINAL_STATES,
     Checkpoint,
     ContextBundle,
     Conversation,
     ExecutionState,
+    McpServer,
     PresetSkill,
     ProjectConfig,
     Session,
@@ -69,6 +72,9 @@ def _hash_request(payload: dict[str, Any]) -> str:
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+_MCP_SERVER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 @dataclass
@@ -116,6 +122,7 @@ class AgentSupportService:
         self._scheduler_lock = asyncio.Lock()
         self.repository = repository
         self.runner_registry = runner_registry or InMemoryRunnerRegistry()
+        self.mcp_servers: dict[str, McpServer] = {}
         if self.distributed and self.repository is None:
             raise ValueError("distributed execution requires PostgreSQL persistence")
         if self.repository and not self.distributed:
@@ -419,6 +426,141 @@ class AgentSupportService:
         except (FileNotFoundError, ValueError) as exc:
             raise ServiceError("SKILL_NOT_FOUND", str(exc), 404) from exc
 
+    def _mcp_server_id(self, ref: Any) -> str:
+        if isinstance(ref, str):
+            return ref
+        if isinstance(ref, dict):
+            server_id = ref.get("server_id")
+            if isinstance(server_id, str) and server_id:
+                return server_id
+        raise ServiceError("MCP_REF_INVALID", "mcp reference must carry server_id", 422)
+
+    def _validate_mcp_refs(self, refs: list[Any]) -> None:
+        for ref in refs:
+            server_id = self._mcp_server_id(ref)
+            server = self.get_mcp_server(server_id)
+            if not server.enabled:
+                raise ServiceError(
+                    "MCP_SERVER_DISABLED",
+                    f"mcp server is disabled: {server_id}",
+                    422,
+                )
+
+    def get_mcp_server(self, server_id: str) -> McpServer:
+        if self.repository:
+            server = self.repository.get_mcp_server(server_id)
+            if server:
+                self.mcp_servers[server.server_id] = server
+        else:
+            server = self.mcp_servers.get(server_id)
+        if not server:
+            raise ServiceError("MCP_SERVER_NOT_FOUND", "mcp server does not exist", 404)
+        return server
+
+    def list_mcp_servers(self) -> list[McpServer]:
+        if self.repository:
+            return self.repository.list_mcp_servers()
+        return sorted(self.mcp_servers.values(), key=lambda item: item.server_id)
+
+    def create_mcp_server(
+        self,
+        *,
+        server_id: str,
+        name: str,
+        transport: str,
+        http_url: str | None = None,
+        sse_url: str | None = None,
+        headers: dict[str, str] | None = None,
+        description: str = "",
+        enabled: bool = True,
+    ) -> McpServer:
+        if not _MCP_SERVER_ID.fullmatch(server_id):
+            raise ServiceError("MCP_SERVER_INVALID", "invalid mcp server id", 422)
+        if transport not in SUPPORTED_TRANSPORTS:
+            raise ServiceError(
+                "MCP_TRANSPORT_UNSUPPORTED",
+                f"unsupported transport: {transport}",
+                422,
+            )
+        if transport == "http" and not http_url:
+            raise ServiceError("MCP_SERVER_INVALID", "http transport requires http_url", 422)
+        if transport == "sse" and not sse_url:
+            raise ServiceError("MCP_SERVER_INVALID", "sse transport requires sse_url", 422)
+        server = McpServer(
+            server_id=server_id,
+            name=name,
+            transport=transport,
+            http_url=http_url,
+            sse_url=sse_url,
+            headers=dict(headers or {}),
+            description=description,
+            enabled=enabled,
+        )
+        if self.repository:
+            self.repository.save_mcp_server(server)
+        self.mcp_servers[server.server_id] = server
+        return server
+
+    def update_mcp_server(
+        self,
+        server_id: str,
+        *,
+        name: str | None = None,
+        http_url: str | None = None,
+        sse_url: str | None = None,
+        headers: dict[str, str] | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+    ) -> McpServer:
+        current = self.get_mcp_server(server_id)
+        updated = current.model_copy(
+            update={
+                "name": name if name is not None else current.name,
+                "http_url": http_url if http_url is not None else current.http_url,
+                "sse_url": sse_url if sse_url is not None else current.sse_url,
+                "headers": dict(headers) if headers is not None else dict(current.headers),
+                "description": description if description is not None else current.description,
+                "enabled": enabled if enabled is not None else current.enabled,
+            }
+        )
+        if self.repository:
+            self.repository.save_mcp_server(updated)
+        self.mcp_servers[updated.server_id] = updated
+        return updated
+
+    def delete_mcp_server(self, server_id: str) -> None:
+        if self.repository:
+            removed = self.repository.delete_mcp_server(server_id)
+        else:
+            removed = self.mcp_servers.pop(server_id, None) is not None
+        if not removed:
+            raise ServiceError("MCP_SERVER_NOT_FOUND", "mcp server does not exist", 404)
+
+    def _resolve_mcp_refs(
+        self, refs: list[Any] | None, session: Session
+    ) -> list[dict[str, Any]]:
+        if refs is None:
+            refs = (
+                session.config.resources.mcp_refs
+                if session.config is not None and session.config.resources.mcp_refs
+                else []
+            )
+        resolved: list[dict[str, Any]] = []
+        for ref in refs:
+            server_id = self._mcp_server_id(ref)
+            server = self.get_mcp_server(server_id)
+            resolved.append(
+                {
+                    "server_id": server.server_id,
+                    "transport": server.transport,
+                    "http_url": server.http_url,
+                    "sse_url": server.sse_url,
+                    "headers": dict(server.headers),
+                    "description": server.description,
+                }
+            )
+        return resolved
+
     def create_session(
         self,
         workspace_id: UUID,
@@ -435,6 +577,8 @@ class AgentSupportService:
     ) -> Session:
         if config is not None and config.skills:
             self._validate_skill_ids([skill.skill_id for skill in config.skills])
+        if config is not None and config.resources.mcp_refs:
+            self._validate_mcp_refs(config.resources.mcp_refs)
         workspace = self._resolve_workspace(
             workspace_id, name=name, auto_created=auto_created
         )
@@ -614,10 +758,13 @@ class AgentSupportService:
         *,
         workspace_id: UUID | None = None,
         skills: list[PresetSkill] | None = None,
+        mcp_refs: list[dict[str, Any]] | None = None,
         auto_created: dict[str, Any] | None = None,
     ) -> Conversation:
         if skills is not None:
             self._validate_skill_ids([skill.skill_id for skill in skills])
+        if mcp_refs is not None:
+            self._validate_mcp_refs(mcp_refs)
         session = None if self.distributed else self.sessions.get(session_id)
         if not session and self.repository:
             session = self.repository.get_session(session_id)
@@ -655,6 +802,7 @@ class AgentSupportService:
             task=task,
             parent_conversation_id=parent_conversation_id,
             skills=skills,
+            mcp_refs=mcp_refs,
         )
         if self.distributed:
             assert self.repository is not None
@@ -796,7 +944,7 @@ class AgentSupportService:
                     self._skills_for_conversation(conversation, session)
                 ),
                 "tool_policy": tool_policy,
-                "mcp_refs": [],
+                "mcp_refs": self._resolve_mcp_refs(conversation.mcp_refs, session),
             },
             "workspace_ref": workspace_ref,
             "tool_policy": tool_policy,

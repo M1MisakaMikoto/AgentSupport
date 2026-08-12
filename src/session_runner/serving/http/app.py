@@ -38,6 +38,7 @@ from ...adapters.mcp import ControlledMcpProvider
 from ...adapters.trae import AgentFactory, TraeExecutionAdapter, TraeRuntimeSettings
 from ...application import RunRegistry
 from ...domain import RunState
+from ...mcp_runtime import build_mcp_provider, build_mcp_server_configs
 from ...registration import (
     RunnerRegistrationClient,
     runner_registration_client_from_env,
@@ -84,7 +85,10 @@ def _tool_executor(
 ) -> ToolGatewayExecutor:
     raw_descriptors = request.tool_policy.get("tools", [{"name": "echo"}])
     descriptors = [ToolDescriptor.model_validate(item) for item in raw_descriptors]
-    mcp_refs = [str(item) for item in request.context_bundle.get("mcp_refs", [])]
+    mcp_refs = [
+        item.get("server_id") if isinstance(item, dict) else str(item)
+        for item in request.context_bundle.get("mcp_refs", [])
+    ]
     if mcp_provider:
         descriptors.extend(mcp_provider.descriptors(mcp_refs))
     allowed = set(request.tool_policy.get("allowed_tools", [item.name for item in descriptors]))
@@ -143,7 +147,10 @@ def create_runner_app(
         lifespan=lifespan,
     )
 
-    def create_trae_execution(state: RunState) -> TraeExecutionAdapter:
+    def create_trae_execution(
+        state: RunState,
+        mcp_servers_config: dict[str, dict[str, Any]] | None = None,
+    ) -> TraeExecutionAdapter:
         def on_waiting(interaction: dict[str, Any], batch: ToolBatch, next_step: int) -> None:
             state.pending_interaction = interaction
             state.tool_batch = batch
@@ -156,7 +163,14 @@ def create_runner_app(
             on_waiting,
             settings=trae_settings,
             agent_factory=trae_agent_factory,
+            mcp_servers_config=mcp_servers_config,
         )
+
+    async def close_mcp(state: RunState) -> None:
+        provider = state.mcp_provider
+        if provider is not None:
+            state.mcp_provider = None
+            await provider.close()
 
     async def drive_trae(
         state: RunState,
@@ -210,14 +224,22 @@ def create_runner_app(
         state.emit("run.started", {"conversation_id": str(request.conversation_id)})
         task = str(request.context_bundle.get("task", ""))
         raw_batch = request.context_bundle.get("tool_batch")
+        mcp_refs = request.context_bundle.get("mcp_refs") or []
+        mcp_servers_config = build_mcp_server_configs(mcp_refs)
         if mode == "trae":
             state.status = "RUNNING"
-            state.trae_execution = create_trae_execution(state)
+            state.trae_execution = create_trae_execution(state, mcp_servers_config)
             state.background = asyncio.create_task(drive_trae(state))
             await state.status_changed.wait()
         elif raw_batch is not None:
             try:
-                state.tool_executor = _tool_executor(request, tool_handlers, mcp_provider)
+                dynamic_refs = [ref for ref in mcp_refs if isinstance(ref, dict)]
+                state.mcp_provider = (
+                    await build_mcp_provider(dynamic_refs) if dynamic_refs else None
+                )
+                state.tool_executor = _tool_executor(
+                    request, tool_handlers, state.mcp_provider or mcp_provider
+                )
                 state.tool_batch = ToolBatch.model_validate(raw_batch)
                 state.tool_authorization = state.tool_executor.authorize(state.tool_batch)
                 state.emit(
@@ -236,9 +258,11 @@ def create_runner_app(
                     state.emit("interaction.requested", state.pending_interaction)
                 else:
                     await _execute_tool_batch(state)
+                    await close_mcp(state)
             except Exception as exc:  # noqa: BLE001 - tool errors become run failures
                 state.status = "FAILED"
                 state.emit("run.failed", {"code": "TOOL_GATEWAY_ERROR", "message": str(exc)})
+                await close_mcp(state)
         elif task.startswith("ask:"):
             state.status = "WAITING_INPUT"
             state.pending_interaction = {"interaction_id": uuid4().hex, "question": task[4:]}
@@ -274,6 +298,7 @@ def create_runner_app(
             "events": state.events[first_new_event:],
         }
         state.remember_command(request.command_id, result)
+        await close_mcp(state)
         return result
 
     @app.post("/runs/{run_id}/approval")
@@ -315,6 +340,7 @@ def create_runner_app(
             "events": state.events[first_new_event:],
         }
         state.remember_command(request.command_id, result)
+        await close_mcp(state)
         return result
 
     @app.post("/runs/{run_id}/checkpoint")
@@ -350,7 +376,7 @@ def create_runner_app(
             workspace_ref=state.request.workspace_ref,
             recent_events=[event.model_dump(mode="json") for event in state.events],
             skill_manifest=list(state.request.context_bundle.get("skill_manifest", [])),
-            mcp_refs=[str(item) for item in state.request.context_bundle.get("mcp_refs", [])],
+            mcp_refs=list(state.request.context_bundle.get("mcp_refs", [])),
             tool_policy=tool_policy,
         )
         context_hash = hashlib.sha256(
@@ -407,6 +433,7 @@ def create_runner_app(
             "events": state.events[first_new_event:],
         }
         state.remember_command(command_id, result)
+        await close_mcp(state)
         return result
 
     @app.post("/runs/{run_id}/resume")
@@ -437,6 +464,8 @@ def create_runner_app(
         cached = state.cached_command(request.command_id)
         if cached is not None:
             return cached
+        resume_mcp_refs = getattr(checkpoint.context_bundle, "mcp_refs", None) or []
+        resume_mcp_servers_config = build_mcp_server_configs(resume_mcp_refs)
         if mode == "trae" and checkpoint.pending_tool_calls:
             try:
                 decision = ApprovalDecision(str(request.value))
@@ -452,7 +481,9 @@ def create_runner_app(
                 except RuntimeError as exc:
                     raise HTTPException(409, str(exc)) from exc
             else:
-                state.trae_execution = create_trae_execution(state)
+                state.trae_execution = create_trae_execution(
+                    state, resume_mcp_servers_config
+                )
                 state.background = asyncio.create_task(
                     drive_trae(state, checkpoint=checkpoint, decision=decision)
                 )
@@ -463,6 +494,7 @@ def create_runner_app(
                 "events": state.events[first_new_event:],
             }
             state.remember_command(request.command_id, result)
+            await close_mcp(state)
             return result
         raw_batch = None
         if checkpoint.pending_interaction:
@@ -473,7 +505,17 @@ def create_runner_app(
             batch = ToolBatch.model_validate(raw_batch)
             if checkpoint.tool_batch_hash and batch.batch_hash != checkpoint.tool_batch_hash:
                 raise HTTPException(409, "tool batch hash mismatch")
-            state.tool_executor = _tool_executor(state.request, tool_handlers, mcp_provider)
+            resume_dynamic_refs = [
+                ref for ref in resume_mcp_refs if isinstance(ref, dict)
+            ]
+            state.mcp_provider = (
+                await build_mcp_provider(resume_dynamic_refs)
+                if resume_dynamic_refs
+                else None
+            )
+            state.tool_executor = _tool_executor(
+                state.request, tool_handlers, state.mcp_provider or mcp_provider
+            )
             state.tool_batch = batch
             state.tool_authorization = state.tool_executor.authorize(batch)
         state.emit("checkpoint.restored", {"checkpoint_id": str(checkpoint.checkpoint_id)})
@@ -494,6 +536,7 @@ def create_runner_app(
             "events": state.events[first_new_event:],
         }
         state.remember_command(request.command_id, result)
+        await close_mcp(state)
         return result
 
     @app.get("/runs/{run_id}/events")

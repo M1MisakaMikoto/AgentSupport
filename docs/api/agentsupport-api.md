@@ -5,7 +5,7 @@
 - **AgentSupport API（公共）**：面向业务调用方的控制面 API，负责 Workspace / Session /
   Conversation 执行资源、事件与交互（第 4-9 章）。
 - **Session Runner（私有执行面）**：控制面与 Runner 之间的内部 API，负责运行、检查点、
-  恢复与 Runner 自注册（第 11 章），不应直接暴露给外部调用方。
+  恢复与 Runner 自注册（第 12 章），不应直接暴露给外部调用方。
 
 平台只管理执行资源；租户 / 用户 / 项目等业务实体由上游系统管理，平台以可选标签透传，
 不做存在性校验、不提供业务 CRUD。从 v0.1 迁移见[上游迁移指南](../migration/v0.1-to-v0.2.md)；
@@ -38,25 +38,30 @@ Compose 环境的 AgentSupport API 默认地址为 `http://localhost:8000`（经
 | `GET` | `/skills` | [7.2](#72-get-skills) |
 | `GET` | `/skills/{skill_id}` | [7.3](#73-get-skillsskill_id) |
 | `DELETE` | `/skills/{skill_id}` | [7.4](#74-delete-skillsskill_id) |
-| `GET` | `/conversations/{conversation_id}/events` | [8.1](#81-get-conversationsconversation_idevents) |
-| `GET` | `/conversations/{conversation_id}/events/stream` | [8.2](#82-get-conversationsconversation_ideventsstream) |
-| `GET` | `/sessions/{session_id}/events` | [8.3](#83-get-sessionssession_idevents) |
-| `GET` | `/sessions/{session_id}/events/stream` | [8.4](#84-get-sessionssession_ideventsstream) |
-| `POST` | `/conversations/{conversation_id}/input` | [9.1](#91-post-conversationsconversation_idinput) |
-| `POST` | `/conversations/{conversation_id}/approval` | [9.2](#92-post-conversationsconversation_idapproval) |
-| `POST` | `/conversations/{conversation_id}/cancel` | [9.3](#93-post-conversationsconversation_idcancel) |
-| `GET` | `/live` | [10.1](#101-get-live) |
-| `GET` | `/ready` | [10.2](#102-get-ready) |
-| `GET` | `/metrics` | [10.3](#103-get-metrics) |
-| `GET` | `/cores` | [10.4](#104-get-cores) |
+| `POST` | `/mcp-servers` | [8.1](#81-post-mcp-servers) |
+| `GET` | `/mcp-servers` | [8.2](#82-get-mcp-servers) |
+| `GET` | `/mcp-servers/{server_id}` | [8.3](#83-get-mcp-serversserver_id) |
+| `PATCH` | `/mcp-servers/{server_id}` | [8.4](#84-patch-mcp-serversserver_id) |
+| `DELETE` | `/mcp-servers/{server_id}` | [8.5](#85-delete-mcp-serversserver_id) |
+| `GET` | `/conversations/{conversation_id}/events` | [9.1](#91-get-conversationsconversation_idevents) |
+| `GET` | `/conversations/{conversation_id}/events/stream` | [9.2](#92-get-conversationsconversation_ideventsstream) |
+| `GET` | `/sessions/{session_id}/events` | [9.3](#93-get-sessionssession_idevents) |
+| `GET` | `/sessions/{session_id}/events/stream` | [9.4](#94-get-sessionssession_ideventsstream) |
+| `POST` | `/conversations/{conversation_id}/input` | [10.1](#101-post-conversationsconversation_idinput) |
+| `POST` | `/conversations/{conversation_id}/approval` | [10.2](#102-post-conversationsconversation_idapproval) |
+| `POST` | `/conversations/{conversation_id}/cancel` | [10.3](#103-post-conversationsconversation_idcancel) |
+| `GET` | `/live` | [11.1](#111-get-live) |
+| `GET` | `/ready` | [11.2](#112-get-ready) |
+| `GET` | `/metrics` | [11.3](#113-get-metrics) |
+| `GET` | `/cores` | [11.4](#114-get-cores) |
 
 ### 2.2 内部 API（Runner 注册协议，不在 OpenAPI 中）
 
 | 方法 | 路径 | 章节 |
 | --- | --- | --- |
-| `POST` | `/runners/register` | [11.1](#111-post-runnersregister) |
-| `POST` | `/runners/{runner_id}/heartbeat` | [11.2](#112-post-runnersrunner_idheartbeat) |
-| `DELETE` | `/runners/{runner_id}` | [11.3](#113-delete-runnersrunner_id) |
+| `POST` | `/runners/register` | [12.1](#121-post-runnersregister) |
+| `POST` | `/runners/{runner_id}/heartbeat` | [12.2](#122-post-runnersrunner_idheartbeat) |
+| `DELETE` | `/runners/{runner_id}` | [12.3](#123-delete-runnersrunner_id) |
 
 ## 3. 通用约定
 
@@ -102,7 +107,7 @@ X-Project-Id: p-2
 ### 3.5 鉴权
 
 公共 API 有意不提供 token / API Key 等鉴权（`AGENTSUPPORT_API_AUTH_MODE` 仅支持 `none`）。
-正式对公网开放前，请在网关注入身份头、限流与认证。Runner 内部通道的鉴权见第 11 章。
+正式对公网开放前，请在网关注入身份头、限流与认证。Runner 内部通道的鉴权见第 12 章。
 
 ### 3.6 auto-create（显式 ID 补建）
 
@@ -202,7 +207,7 @@ Idempotency-Key: 6f9c2d3a-4b5c-4d6e-8f70-9a1b2c3d4e5f
 | `user_id` | string | 否 | 上游用户标签（≤120 字符） |
 | `project_id` | string | 否 | 上游项目标签（≤120 字符） |
 | `metadata` | object | 否 | 任意键值透传 |
-| `config` | object | 否 | 执行配置，见[第 12 章](#12-会话执行配置) |
+| `config` | object | 否 | 执行配置，见[第 13 章](#13-会话执行配置) |
 
 ```http
 POST /sessions
@@ -311,6 +316,7 @@ GET /sessions?workspace_id=<uuid>&tenant_id=t-1&project_id=p-2
 | `parent_conversation_id` | UUID | 否 | 从同一 Session 的已有对话派生 |
 | `workspace_id` | UUID | 否 | 仅当 Session 不存在且 auto-create 开启时用于决定新 Session 的 Workspace |
 | `skills` | object[] | 否 | 本次对话激活的 skill 列表（`skill_id` + `enabled`）；缺省继承 Session 配置；显式传空数组表示本次不启用任何 skill |
+| `mcp_refs` | object[] | 否 | 本次对话激活的 MCP server 引用（`{"server_id": "..."}`）；缺省继承 Session 配置；显式传空数组表示本次不启用任何 MCP |
 
 ```http
 POST /sessions/3cb62872-d517-40e6-92ec-d50045e40b26/conversations
@@ -357,6 +363,8 @@ Idempotency-Key: a1b2c3d4-...
 | `404` | `SESSION_NOT_FOUND` | Session 不存在（auto-create 关闭，或未提供 `workspace_id`） |
 | `404` | `PARENT_NOT_FOUND` | 父对话不存在或不属于当前 Session |
 | `404` | `SKILL_NOT_FOUND` | `skills` 中引用了不存在的 skill |
+| `404` | `MCP_SERVER_NOT_FOUND` | `mcp_refs` 中引用了不存在的 server |
+| `422` | `MCP_SERVER_DISABLED` | 引用的 MCP server 已停用 |
 | `409` | `IDEMPOTENCY_CONFLICT` | 相同 Key 用于不同请求 |
 | `429` | `RESOURCE_EXHAUSTED` | 等待队列或执行容量已满 |
 
@@ -468,9 +476,79 @@ file=@SKILL.md
 
 **错误**：`404 SKILL_NOT_FOUND`。
 
-## 8. 事件与 SSE API
+## 8. MCP Server API
 
-### 8.1 GET /conversations/{conversation_id}/events
+MCP server 是**上游自行运行的外部服务**；平台只注册"连接定义"并授权，不托管 server 生命周期。
+注册后可在 Session 配置 `resources.mcp_refs` 或 Conversation 请求的 `mcp_refs` 中引用
+（缺省继承 / 显式覆盖 / 空数组禁用），创建时预检。
+
+### 8.1 POST /mcp-servers
+
+注册 MCP server 定义。同名 `server_id` 重复注册视为覆盖（新版本）。
+
+**请求体**：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `server_id` | string | 是 | 1-120 字符，仅 `[A-Za-z0-9][A-Za-z0-9._-]*` |
+| `name` | string | 是 | 名称，1-120 字符 |
+| `transport` | string | 是 | `http`（streamable http）或 `sse` |
+| `http_url` | string | 条件必填 | `transport=http` 时的 MCP 端点 |
+| `sse_url` | string | 条件必填 | `transport=sse` 时的 SSE 端点 |
+| `headers` | object | 否 | 请求头；值支持字面量或 `$ENV_VAR` 环境变量引用（secret 不落库、不回显） |
+| `description` | string | 否 | 描述 |
+| `enabled` | boolean | 否 | 是否可用，默认 `true` |
+
+```http
+POST /mcp-servers
+
+{
+  "server_id": "gitlab",
+  "name": "GitLab MCP",
+  "transport": "http",
+  "http_url": "http://mcp-gitlab:8000/mcp",
+  "headers": { "Authorization": "$GITLAB_TOKEN" }
+}
+```
+
+**成功响应 `201`**：完整定义（`headers` 保留环境变量名，不回显值）。
+
+**错误**：
+
+| 状态码 | 错误码 | 说明 |
+| --- | --- | --- |
+| `422` | `MCP_SERVER_INVALID` | server_id 非法或 transport 缺少对应端点 |
+| `422` | `MCP_TRANSPORT_UNSUPPORTED` | transport 不是 `http` / `sse` |
+
+### 8.2 GET /mcp-servers
+
+返回全部已注册 server（含 `enabled` 状态），按 `server_id` 排序。
+
+### 8.3 GET /mcp-servers/{server_id}
+
+返回单个 server 定义。
+
+**错误**：`404 MCP_SERVER_NOT_FOUND`。
+
+### 8.4 PATCH /mcp-servers/{server_id}
+
+部分更新 `name` / `http_url` / `sse_url` / `headers` / `description` / `enabled`。
+
+**成功响应 `200`**：更新后的定义。
+
+**错误**：`404 MCP_SERVER_NOT_FOUND`。
+
+### 8.5 DELETE /mcp-servers/{server_id}
+
+下架 server。已引用它的会话不受影响；新引用将 `404`。
+
+**成功响应 `204`**。
+
+**错误**：`404 MCP_SERVER_NOT_FOUND`。
+
+## 9. 事件与 SSE API
+
+### 9.1 GET /conversations/{conversation_id}/events
 
 按对话顺序号查询事件。
 
@@ -504,9 +582,9 @@ file=@SKILL.md
 
 **错误**：`404 CONVERSATION_NOT_FOUND`。
 
-### 8.2 GET /conversations/{conversation_id}/events/stream
+### 9.2 GET /conversations/{conversation_id}/events/stream
 
-订阅对话事件（SSE）。参数与 [8.1](#81-get-conversationsconversation_idevents) 相同。
+订阅对话事件（SSE）。参数与 [9.1](#91-get-conversationsconversation_idevents) 相同。
 
 每条消息以 `seq` 作为 SSE `id`，完整事件作为 `data`：
 
@@ -518,27 +596,27 @@ data: {"schema_version":"1","event_id":"...","run_id":"...","seq":2,"type":"mess
 
 断线重连时，将最后成功处理的 `seq` 作为新的 `after_seq`，平台先重放遗漏事件再继续等待。
 
-### 8.3 GET /sessions/{session_id}/events
+### 9.3 GET /sessions/{session_id}/events
 
 返回该 Session 下所有 Conversation 中满足 `seq > after_seq` 的事件，按 `occurred_at`
-聚合排序。参数同 [8.1](#81-get-conversationsconversation_idevents)。
+聚合排序。参数同 [9.1](#91-get-conversationsconversation_idevents)。
 
 注意：`seq` 是 Conversation 级游标，不是 Session 全局游标；需要严格可靠消费单个任务时，
 应优先使用 Conversation 事件接口。
 
 **错误**：`404 SESSION_NOT_FOUND`。
 
-### 8.4 GET /sessions/{session_id}/events/stream
+### 9.4 GET /sessions/{session_id}/events/stream
 
-订阅会话聚合事件（SSE）。参数同 [8.3](#83-get-sessionssession_idevents)，消息格式同
-[8.2](#82-get-conversationsconversation_ideventsstream)。断开重连同样从
+订阅会话聚合事件（SSE）。参数同 [9.3](#93-get-sessionssession_idevents)，消息格式同
+[9.2](#92-get-conversationsconversation_ideventsstream)。断开重连同样从
 `after_seq` 续传。
 
-## 9. 交互 API
+## 10. 交互 API
 
 交互 ID 来自事件或 Conversation 的 `run.pending_interaction`，调用方不应自行生成。
 
-### 9.1 POST /conversations/{conversation_id}/input
+### 10.1 POST /conversations/{conversation_id}/input
 
 提交用户输入。
 
@@ -570,7 +648,7 @@ POST /conversations/{conversation_id}/input
 | `409` | `CONFLICT` | `expected_seq` 不匹配，或交互 ID 不匹配 |
 | `409` | `INVALID_STATE` | Run 当前不在等待输入状态 |
 
-### 9.2 POST /conversations/{conversation_id}/approval
+### 10.2 POST /conversations/{conversation_id}/approval
 
 提交工具审批。
 
@@ -602,7 +680,7 @@ POST /conversations/{conversation_id}/approval
 | `409` | `CONFLICT` / `INVALID_STATE` | 游标不匹配或未处于等待审批状态 |
 | `422` | `INVALID_DECISION` | `decision` 不是 `APPROVE_ONCE` / `REJECT` |
 
-### 9.3 POST /conversations/{conversation_id}/cancel
+### 10.3 POST /conversations/{conversation_id}/cancel
 
 取消 Conversation 的 Run。
 
@@ -627,9 +705,9 @@ POST /conversations/{conversation_id}/cancel
 
 **错误**：`404 CONVERSATION_NOT_FOUND`；`409 CONFLICT`（游标不匹配）。
 
-## 10. 运维 API
+## 11. 运维 API
 
-### 10.1 GET /live
+### 11.1 GET /live
 
 存活检查，仅表示 HTTP 进程存活。
 
@@ -639,7 +717,7 @@ POST /conversations/{conversation_id}/cancel
 { "status": "ok" }
 ```
 
-### 10.2 GET /ready
+### 11.2 GET /ready
 
 就绪状态与当前配置，并检查持久化连接。
 
@@ -654,7 +732,7 @@ POST /conversations/{conversation_id}/cancel
 }
 ```
 
-### 10.3 GET /metrics
+### 11.3 GET /metrics
 
 Prometheus 文本指标（`Content-Type: text/plain`），指标名以 `agentsupport_` 开头，例如：
 
@@ -666,7 +744,7 @@ agentsupport_claims_expired 0
 agentsupport_outbox_pending 0
 ```
 
-### 10.4 GET /cores
+### 11.4 GET /cores
 
 动态列出已注册 Runner 的能力与版本；目录为空时返回 `[]`。
 
@@ -684,12 +762,12 @@ agentsupport_outbox_pending 0
 ]
 ```
 
-## 11. Runner 注册协议（内部）
+## 12. Runner 注册协议（内部）
 
 以下端点属于控制面与 Runner 之间的内部契约，不在公共 OpenAPI 中，调用方不应使用。
-鉴权见 [11.4](#114-token-与安全)。
+鉴权见 [12.4](#124-token-与安全)。
 
-### 11.1 POST /runners/register
+### 12.1 POST /runners/register
 
 Runner 启动时注册自身。
 
@@ -734,7 +812,7 @@ X-Runner-Token: <shared-bootstrap-token>
 | `409` | `RUNNER_ALREADY_REGISTERED` | 同一提供方 + 端点已注册 |
 | `503` | `RUNNER_REGISTRATION_DISABLED` | 控制面未配置 `AGENTSUPPORT_RUNNER_TOKEN` |
 
-### 11.2 POST /runners/{runner_id}/heartbeat
+### 12.2 POST /runners/{runner_id}/heartbeat
 
 Runner 周期性上报心跳，维持注册有效。
 
@@ -754,7 +832,7 @@ Runner 周期性上报心跳，维持注册有效。
 
 **错误**：`401 RUNNER_TOKEN_INVALID`；`404 RUNNER_NOT_FOUND`（已注销或不存在）。
 
-### 11.3 DELETE /runners/{runner_id}
+### 12.3 DELETE /runners/{runner_id}
 
 Runner 注销（如进程退出）。
 
@@ -766,7 +844,7 @@ Runner 注销（如进程退出）。
 
 **错误**：`401 RUNNER_TOKEN_INVALID`；`404 RUNNER_NOT_FOUND`。
 
-### 11.4 Token 与安全
+### 12.4 Token 与安全
 
 - 注册使用共享 bootstrap token：控制面 `AGENTSUPPORT_RUNNER_TOKEN`，Runner
   `SESSION_RUNNER_TOKEN`（同一值）。
@@ -777,7 +855,7 @@ Runner 注销（如进程退出）。
 - token 未配置时注册接口返回 `503`，栈回退到静态 `AGENTSUPPORT_CORE_RUNNER_URL`。
 - 跨网络部署必须经 TLS 入口传输 token。
 
-## 12. 会话执行配置
+## 13. 会话执行配置
 
 `config` 替代 v0.1 的 preset 导入，由调用方随 Session 请求传入；平台做结构校验后透传给
 Runner，模板由上游自行保存。
@@ -809,7 +887,7 @@ Runner，模板由上游自行保存。
 }
 ```
 
-## 13. 运行状态
+## 14. 运行状态
 
 Conversation 的 `run.state` 可能为：
 
@@ -829,7 +907,7 @@ Conversation 的 `run.state` 可能为：
 
 `COMPLETED`、`FAILED`、`CANCELLED` 和 `LOST` 为终态。
 
-## 14. 错误响应
+## 15. 错误响应
 
 平台业务错误采用统一结构：
 
@@ -862,6 +940,7 @@ Conversation 的 `run.state` 可能为：
 | `404` | `CONVERSATION_NOT_FOUND` | Conversation 不存在 |
 | `404` | `PARENT_NOT_FOUND` | 父对话不存在或不属于当前 Session |
 | `404` | `SKILL_NOT_FOUND` | skill 不存在（详情/删除/会话预检） |
+| `404` | `MCP_SERVER_NOT_FOUND` | MCP server 不存在（详情/更新/删除/预检） |
 | `404` | `RUNNER_NOT_FOUND` | Runner 未注册（内部） |
 | `409` | `IDEMPOTENCY_CONFLICT` | 幂等 Key 复用且请求不同 |
 | `409` | `CONFLICT` | `expected_seq` 不匹配等并发冲突 |
@@ -872,6 +951,10 @@ Conversation 的 `run.state` 可能为：
 | `409` | `RUNNER_ALREADY_REGISTERED` | Runner 重复注册（内部） |
 | `422` | `INVALID_DECISION` | 审批决策非法 |
 | `422` | `SKILL_INVALID_PAYLOAD` | skill 包不合法（缺 SKILL.md / 路径穿越 / 条目超限） |
+| `422` | `MCP_SERVER_INVALID` | MCP server 定义不合法 |
+| `422` | `MCP_TRANSPORT_UNSUPPORTED` | MCP transport 不支持 |
+| `422` | `MCP_SERVER_DISABLED` | 引用的 MCP server 已停用 |
+| `422` | `MCP_REF_INVALID` | `mcp_refs` 引用缺少 `server_id` |
 | `429` | `RESOURCE_EXHAUSTED` | 队列或容量已满 |
 | `401` | `RUNNER_TOKEN_INVALID` | Runner token 无效（内部） |
 | `413` | `SKILL_TOO_LARGE` | skill 上传超过大小上限 |
@@ -879,7 +962,7 @@ Conversation 的 `run.state` 可能为：
 
 FastAPI 自身的请求校验错误使用标准 `422` 格式，不一定包含上述统一字段。
 
-## 15. 版本边界
+## 16. 版本边界
 
 ### 已移除（v0.1 → v0.2）
 

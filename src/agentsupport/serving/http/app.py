@@ -14,6 +14,7 @@ from .errors import install_error_handlers
 from .routes import (
     events_router,
     interactions_router,
+    mcp_servers_router,
     operations_router,
     registrations_router,
     resources_router,
@@ -70,6 +71,7 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
     app.include_router(resources_router)
     app.include_router(events_router)
     app.include_router(interactions_router)
+    app.include_router(mcp_servers_router)
     app.include_router(registrations_router)
     app.include_router(skills_router)
     app.mount(

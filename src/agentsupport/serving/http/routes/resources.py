@@ -139,6 +139,7 @@ async def create_conversation(
             if body.skills is not None
             else None
         ),
+        mcp_refs=body.mcp_refs,
         auto_created=auto_created,
     )
     return _created(conversation, auto_created)

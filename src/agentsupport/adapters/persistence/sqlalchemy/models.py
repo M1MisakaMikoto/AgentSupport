@@ -7,6 +7,7 @@ from uuid import uuid4
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     DateTime,
     Integer,
     String,
@@ -52,6 +53,7 @@ class ConversationRow(Base):
     parent_conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     task: Mapped[str] = mapped_column(Text, nullable=False)
     skills: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    mcp_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     execution_state: Mapped[str] = mapped_column(String(32), nullable=False)
     run_id: Mapped[str] = mapped_column(String(36), nullable=False)
     last_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -75,6 +77,20 @@ class ConversationEventRow(Base):
     source: Mapped[str] = mapped_column(String(80), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     runner_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class McpServerRow(Base):
+    __tablename__ = "mcp_servers"
+    server_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    transport: Mapped[str] = mapped_column(String(16), nullable=False)
+    http_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sse_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    headers: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ConversationCheckpointRow(Base):
@@ -262,6 +278,9 @@ def create_schema(database_url: str) -> None:
     if "skills" not in conversation_columns:
         with engine.begin() as connection:
             connection.execute(text("ALTER TABLE conversations ADD COLUMN skills JSON"))
+    if "mcp_refs" not in conversation_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE conversations ADD COLUMN mcp_refs JSON"))
     if "created_at" not in {
         column["name"] for column in inspect(engine).get_columns("idempotency_keys")
     }:

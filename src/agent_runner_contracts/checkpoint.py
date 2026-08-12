@@ -16,7 +16,7 @@ class ContextBundle(BaseModel):
     recent_events: list[dict[str, Any]] = Field(default_factory=list)
     skill_manifest: list[dict[str, Any]] = Field(default_factory=list)
     tool_policy: dict[str, Any] = Field(default_factory=dict)
-    mcp_refs: list[str] = Field(default_factory=list)
+    mcp_refs: list[Any] = Field(default_factory=list)
 
 
 class Checkpoint(BaseModel):

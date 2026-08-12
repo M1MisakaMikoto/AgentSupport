@@ -21,6 +21,7 @@ class RunState:
         self.tool_batch: ToolBatch | None = None
         self.tool_authorization: Any = None
         self.trae_execution: Any = None
+        self.mcp_provider: Any = None
         self.background: asyncio.Task[None] | None = None
         self.status_changed = asyncio.Event()
         self.command_results: dict[str, dict[str, Any]] = {}

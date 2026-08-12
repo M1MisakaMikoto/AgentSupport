@@ -18,6 +18,7 @@ from .execution import (
     RunProjection,
     utc_now,
 )
+from .mcp import SUPPORTED_TRANSPORTS, McpServer
 from .organization import Organization
 from .project import (
     Preset,
@@ -36,6 +37,7 @@ from .session import Session
 from .workspace import Workspace
 
 __all__ = [
+    "SUPPORTED_TRANSPORTS",
     "TERMINAL_STATES",
     "Checkpoint",
     "CommandState",
@@ -45,6 +47,7 @@ __all__ = [
     "ExecutionState",
     "JobClaim",
     "JobState",
+    "McpServer",
     "Organization",
     "OutboxNotification",
     "Preset",
