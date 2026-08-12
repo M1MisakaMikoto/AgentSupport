@@ -38,6 +38,7 @@ from ...adapters.mcp import ControlledMcpProvider
 from ...adapters.trae import AgentFactory, TraeExecutionAdapter, TraeRuntimeSettings
 from ...application import RunRegistry
 from ...domain import RunState
+from ...intent import classify_social, greeting_reply
 from ...registration import (
     RunnerRegistrationClient,
     runner_registration_client_from_env,
@@ -212,9 +213,18 @@ def create_runner_app(
         raw_batch = request.context_bundle.get("tool_batch")
         if mode == "trae":
             state.status = "RUNNING"
-            state.trae_execution = create_trae_execution(state)
-            state.background = asyncio.create_task(drive_trae(state))
-            await state.status_changed.wait()
+            if classify_social(task):
+                state.pending_interaction = None
+                state.emit("message", {"content": greeting_reply()})
+                state.emit(
+                    "run.completed",
+                    {"result": {"status": "completed", "intent": "greeting"}},
+                )
+                state.status = "COMPLETED"
+            else:
+                state.trae_execution = create_trae_execution(state)
+                state.background = asyncio.create_task(drive_trae(state))
+                await state.status_changed.wait()
         elif raw_batch is not None:
             try:
                 state.tool_executor = _tool_executor(request, tool_handlers, mcp_provider)
