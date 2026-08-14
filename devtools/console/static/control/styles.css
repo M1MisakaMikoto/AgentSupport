@@ -307,6 +307,20 @@ td .mono { font-size: 12px; color: var(--muted); }
 .composer-hints { display: flex; gap: 6px; flex-wrap: wrap; }
 .hint-chip { border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; font-size: 11px; color: var(--muted); cursor: pointer; background: var(--panel); }
 .hint-chip:hover { border-color: var(--accent); color: var(--accent); }
+.composer-config { display: grid; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.config-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.config-label { color: var(--faint); font-size: 11px; font-weight: 600; min-width: 40px; }
+.config-chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 120px; }
+.config-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
+  font-size: 11px; color: var(--muted); cursor: pointer; background: var(--panel);
+}
+.config-chip:hover:not(.disabled) { border-color: var(--accent); color: var(--accent); }
+.config-chip.checked { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.config-chip.disabled { opacity: 0.5; cursor: not-allowed; }
+.config-chip input { margin: 0; accent-color: var(--accent); }
+.config-empty { color: var(--faint); font-size: 11px; }
 .send-btn {
   width: 34px; height: 34px; border-radius: 10px; border: 0;
   background: var(--accent); color: #fff; cursor: pointer; display: grid; place-items: center;
@@ -318,6 +332,17 @@ td .mono { font-size: 12px; color: var(--muted); }
 .run-cell { background: var(--bg); border-radius: 10px; padding: 9px 11px; }
 .run-cell .label { color: var(--faint); font-size: 11px; }
 .run-cell .value { font-size: 13px; font-weight: 700; margin-top: 2px; }
+.run-error {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--error);
+  border-radius: 8px;
+  background: var(--error-soft);
+  color: var(--error);
+  font: 12px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+}
+.tl-detail { margin-top: 4px; color: var(--error); font-size: 11px; font-family: var(--mono); overflow-wrap: anywhere; }
 .timeline { flex: 1; overflow: auto; padding-right: 4px; }
 .event { display: grid; grid-template-columns: 30px 10px 1fr; gap: 8px; padding: 9px 2px; }
 .event .seq { font-family: var(--mono); color: var(--faint); font-size: 11px; padding-top: 2px; }

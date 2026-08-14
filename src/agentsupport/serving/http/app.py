@@ -17,6 +17,7 @@ from ...observability import metrics as obs_metrics
 from ...observability import tracing as obs_tracing
 from .errors import install_error_handlers
 from .routes import (
+    diagnostics_router,
     events_router,
     interactions_router,
     mcp_servers_router,
@@ -96,6 +97,7 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
     install_error_handlers(app)
     app.include_router(operations_router)
     app.include_router(resources_router)
+    app.include_router(diagnostics_router)
     app.include_router(events_router)
     app.include_router(interactions_router)
     app.include_router(mcp_servers_router)

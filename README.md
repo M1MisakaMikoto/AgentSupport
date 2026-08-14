@@ -146,7 +146,7 @@ $env:SESSION_RUNNER_MODE="deterministic"
 
 | 板块 | 子页面 | 能力 |
 | --- | --- | --- |
-| 示范 | 总览 / Agent 工作台 | 执行资源概览（Workspace / Session / Conversation）与标签模型；Agent 工作台提供 Workspace / Session 选择与新建（带 `tenant_id` / `user_id` / `project_id` 标签）、对话式任务下发（可选 `skills` 与 `mcp_refs`）、SSE 事件轨道、input/approval/cancel 人工关口；业务实体由上游管理，控制台不再提供组织/用户/项目/预设管理页 |
+| 示范 | 总览 / Agent 工作台 | 执行资源概览（Workspace / Session / Conversation）与标签模型；Agent 工作台与任务调试页提供 Workspace / Session 选择与新建（带 `tenant_id` / `user_id` / `project_id` 标签）、对话式任务下发（可勾选 Skill 与 MCP Server 引用，随 Conversation 动态启用）、SSE 事件轨道、input/approval/cancel 人工关口，以及模型连通性自检（从 Runner 侧探测模型 API 的 TLS 证书）；业务实体由上游管理，控制台不再提供组织/用户/项目/预设管理页 |
 | 部署 | 服务状态 / 部署操作 / 验收中心 / API 参考 | Compose 服务拓扑与健康端点（`/live` `/ready` `/metrics` `/cores`）、部署/启动/停止与扩缩容、部署回归验收与 API 契约验收（结构化断言全部公共接口、错误路径、幂等、乐观并发、SSE 断线续传，并输出 OpenAPI 操作覆盖率报告）、由运行时 `/openapi.json` 自动生成的交互式 API 参考 |
 
 API 契约验收是控制台内可重复的自动检查入口；仓库测试与发布标准仍以
@@ -164,6 +164,15 @@ $env:AGENTSUPPORT_DEV_DOCKER_CONTEXT=""
 
 对于位于 Windows 驱动器上的仓库，建议使用控制台进行 WSL2 构建；它会将 Docker 构建输入暂存到
 WSL 文件系统，避免 DrvFS 元数据限制。
+
+## 示例 Skill
+
+仓库根目录的 `skills/` 提供两个可直接上传使用的示例 Skill（`review` 与 `docs-writing`）。
+本地开发默认 `AGENTSUPPORT_SKILLS_ROOT=skills`，启动后即可在控制台勾选；Docker Compose
+使用独立的 `skills-data` 命名卷，需要先通过 `POST /skills`（multipart，`SKILL.md` 或 zip）
+上传一次，之后控制台与任务调试页的勾选列表会显示可用 Skill。启用的 Skill 会随运行请求
+把 `SKILL.md` 内容注入 Trae agent 的 system prompt（超出约 20K 字符截断），并只读挂载
+`skills-data` 到 Runner，供 agent 按指引执行或读取附属文件。
 
 ## Docker Compose
 
@@ -186,6 +195,11 @@ $env:TRAE_MODEL="claude-sonnet-4-20250514"
 $env:TRAE_API_KEY="<api-key>"
 docker compose up -d --build
 ```
+
+如果公司网络对模型域名做 SNI 级 TLS 审计（症状：Runner 报
+`TLS: CERTIFICATE_VERIFY_FAILED ... key too weak`，控制台自检显示 1024 位伪证书），
+可以把 `TRAE_MODEL_BASE_URL` 指向模型 CDN 的真实 CNAME、用 `TRAE_MODEL_HOST` 保留原始
+Host 头，并给 Runner 配置 `HTTPS_PROXY` 出网（详见 `.env.example` 注释）。
 
 API 暴露在 `http://localhost:8000`，PostgreSQL 位于 `localhost:5432`。检查或停止栈：
 

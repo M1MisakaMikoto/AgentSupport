@@ -147,7 +147,7 @@ The console is organized as an AI-software-style platform with exactly two secti
 
 | Section | Pages | Capability |
 | --- | --- | --- |
-| Demo | Overview / Agent Workspace | Execution-resource overview (Workspace / Session / Conversation) and the label model; the Agent Workspace creates/selects Workspaces and Sessions (with `tenant_id` / `user_id` / `project_id` labels), submits tasks with optional `skills` / `mcp_refs`, and provides an SSE event timeline with input/approval/cancel gates. Business entities are managed upstream; the console no longer ships organization/user/project/preset management pages |
+| Demo | Overview / Agent Workspace | Execution-resource overview (Workspace / Session / Conversation) and the label model; the Agent Workspace and the task-debug page create/select Workspaces and Sessions (with `tenant_id` / `user_id` / `project_id` labels), submit tasks with selectable Skill and MCP Server references activated per conversation, provide an SSE event timeline with input/approval/cancel gates, and offer a model-connectivity self-check that probes the model API's TLS certificate from the Runner. Business entities are managed upstream; the console no longer ships organization/user/project/preset management pages |
 | Deployment | Service Status / Deploy Actions / Acceptance / API Reference | Compose service topology and health endpoints (`/live` `/ready` `/metrics` `/cores`), deploy/start/stop and scaling, deployment regression plus API contract acceptance (structured assertions across all public operations, error paths, idempotency, optimistic concurrency, SSE resume and an OpenAPI operation-coverage report), and an interactive API reference generated from the runtime `/openapi.json` |
 
 API contract acceptance is a repeatable in-console check; release criteria still follow the
@@ -165,6 +165,17 @@ $env:AGENTSUPPORT_DEV_DOCKER_CONTEXT=""
 
 For repositories on a Windows drive, prefer the console for WSL2 builds; it stages Docker build
 inputs in the WSL filesystem to avoid DrvFS metadata limitations.
+
+## Example Skills
+
+The `skills/` directory at the repository root ships two uploadable example skills (`review` and
+`docs-writing`). Local development uses the default `AGENTSUPPORT_SKILLS_ROOT=skills`, so the
+console discovers them immediately; Docker Compose uses a dedicated `skills-data` named volume,
+so upload them once via `POST /skills` (multipart, a `SKILL.md` file or zip) before they appear in
+the selection lists of the console and the task-debug page. Enabled skills are delivered with each
+run request: their `SKILL.md` content is injected into the Trae agent's system prompt (truncated
+beyond roughly 20K characters per skill) and `skills-data` is mounted read-only into the Runner
+for auxiliary files.
 
 ## Docker Compose
 

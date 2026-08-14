@@ -474,6 +474,7 @@ class PostgresRepository:
                 run_id=str(conversation.run.run_id),
                 last_seq=conversation.run.last_seq,
                 pending_interaction=conversation.run.pending_interaction,
+                error=conversation.run.error,
                 result_summary=conversation.run.result_summary,
                 checkpoint_id=(
                     str(conversation.run.checkpoint_id) if conversation.run.checkpoint_id else None
@@ -514,6 +515,7 @@ class PostgresRepository:
                 state=ExecutionState(row.execution_state),
                 last_seq=row.last_seq,
                 pending_interaction=row.pending_interaction,
+                error=row.error,
                 result_summary=row.result_summary,
                 checkpoint_id=UUID(row.checkpoint_id) if row.checkpoint_id else None,
             ),
@@ -566,6 +568,7 @@ class PostgresRepository:
             row.execution_state = conversation.run.state.value
             row.last_seq = event.seq
             row.pending_interaction = conversation.run.pending_interaction
+            row.error = conversation.run.error
             row.result_summary = conversation.run.result_summary
             row.checkpoint_id = (
                 str(conversation.run.checkpoint_id) if conversation.run.checkpoint_id else None
@@ -695,6 +698,7 @@ class PostgresRepository:
             row.execution_state = conversation.run.state.value
             row.last_seq = event.seq
             row.pending_interaction = conversation.run.pending_interaction
+            row.error = conversation.run.error
             row.result_summary = conversation.run.result_summary
             row.checkpoint_id = str(conversation.run.checkpoint_id)
 
@@ -1929,6 +1933,7 @@ class PostgresRepository:
             elif event_type == "run.failed":
                 conversation.execution_state = ExecutionState.FAILED.value
                 conversation.pending_interaction = None
+                conversation.error = payload
             elif event_type == "run.cancelled":
                 conversation.execution_state = ExecutionState.CANCELLED.value
                 conversation.pending_interaction = None

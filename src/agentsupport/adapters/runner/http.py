@@ -53,6 +53,12 @@ class TraeCoreRunnerRuntime:
             ready.raise_for_status()
             return {"live": live.json(), "ready": ready.json()}
 
+    async def model_connectivity(self) -> dict[str, Any]:
+        async with self._client() as client:
+            response = await client.get("/diagnostics/model-connectivity")
+            response.raise_for_status()
+            return response.json()
+
     async def run(self, request: dict[str, Any], event_sink: EventSink) -> dict[str, Any]:
         run_id = UUID(str(request["run_id"]))
         runner_url = request.get("runner_url")

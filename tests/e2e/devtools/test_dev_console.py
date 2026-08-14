@@ -2,6 +2,7 @@ import asyncio
 import re
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
@@ -420,6 +421,9 @@ async def test_one_stop_console_serves_task_ui_and_proxies_api_and_sse():
     assert "API 参考" in task_ui.text
     assert 'data-view="demo-overview"' in task_ui.text
     assert 'data-view="deploy-api"' in task_ui.text
+    assert 'id="agent-skills-list"' in task_ui.text
+    assert 'id="agent-mcp-list"' in task_ui.text
+    assert 'id="agent-run-error"' in task_ui.text
     assert 'apiBase: "/agentsupport"' in task_script.text
     assert live_response.json() == {"status": "ok"}
     assert echo_response.json() == {
@@ -429,6 +433,44 @@ async def test_one_stop_console_serves_task_ui_and_proxies_api_and_sse():
     }
     assert event_response.headers["content-type"].startswith("text/event-stream")
     assert 'data: {"type":"ready"}' in event_response.text
+
+
+@pytest.mark.asyncio
+async def test_console_proxy_ends_sse_gracefully_when_upstream_disconnects():
+    class BrokenSSETransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            class BrokenStream(httpx.AsyncByteStream):
+                async def __aiter__(self):
+                    yield b"id: 1\ndata: {\"type\":\"partial\"}\n\n"
+                    raise httpx.RemoteProtocolError(
+                        "peer closed connection without sending complete message body",
+                        request=request,
+                    )
+
+                async def aclose(self):
+                    return None
+
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=BrokenStream(),
+            )
+
+    controller = DevConsoleController(
+        command_runner=FakeCommandRunner(),
+        agentsupport_url="http://agentsupport.test",
+        agentsupport_transport=BrokenSSETransport(),
+    )
+    app = create_dev_console_app(controller, token="proxy-token")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://console"
+    ) as client:
+        response = await client.get("/agentsupport/events")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert 'data: {"type":"partial"}' in response.text
 
 
 def test_windows_launcher_starts_loopback_console_without_starting_stack():

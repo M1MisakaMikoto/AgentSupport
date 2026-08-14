@@ -383,6 +383,7 @@ class DistributedWorker:
                         for event in self.repository.list_events(conversation.id)
                     ],
                     "skill_manifest": self.skill_provider.manifest(skills),
+                    "skills": self.skill_provider.skill_prompt_entries(skills),
                     "tool_policy": tool_policy,
                     "mcp_refs": self._resolve_mcp_refs(conversation, session),
                 },

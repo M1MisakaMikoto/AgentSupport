@@ -303,8 +303,12 @@ def default_session_container_env() -> dict[str, str]:
         "ANTHROPIC_AUTH_TOKEN",
         "TRAE_MODEL_BASE_URL",
         "ANTHROPIC_BASE_URL",
+        "TRAE_MODEL_HOST",
         "TRAE_MODEL",
         "TRAE_MAX_STEPS",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
     )
     environment = {key: value for key in keys if (value := os.getenv(key))}
     # Match the Compose runner defaults while keeping credentials process-only.

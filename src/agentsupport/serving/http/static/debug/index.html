@@ -50,8 +50,34 @@
           <label for="task-text">任务</label>
           <textarea id="task-text" name="task" rows="8" required></textarea>
 
+          <div class="config-block">
+            <div class="config-heading">
+              <span class="field-label">Skills</span>
+              <button id="skills-refresh" class="text-button" type="button">刷新</button>
+            </div>
+            <div id="skills-empty" class="config-empty">暂无可用 Skill（可通过 POST /skills 上传）。</div>
+            <div id="skills-list" class="config-list"></div>
+
+            <div class="config-heading">
+              <span class="field-label">MCP Servers</span>
+              <button id="mcp-refresh" class="text-button" type="button">刷新</button>
+            </div>
+            <div id="mcp-empty" class="config-empty">暂无可用 MCP Server（可通过 POST /mcp-servers 注册）。</div>
+            <div id="mcp-list" class="config-list"></div>
+            <p class="hint-text">未勾选时沿用 Session 默认配置；同一会话的每次对话可动态启用 / 停用。</p>
+          </div>
+
           <button id="start-button" class="button primary full-width" type="submit">创建并运行</button>
         </form>
+
+        <div class="diagnostics-block">
+          <div class="config-heading">
+            <span class="field-label">模型连通性自检</span>
+            <button id="diag-model-button" class="button secondary" type="button">运行自检</button>
+          </div>
+          <p class="hint-text">从 Session Runner 侧探测模型 API（TRAE_MODEL_BASE_URL）的 TLS 握手与证书，用于排查 run.failed 中的连接类错误。</p>
+          <pre id="diag-model-result" class="diag-result">尚未运行</pre>
+        </div>
 
         <div class="continue-block">
           <div class="section-heading compact">
@@ -112,6 +138,7 @@
             <strong id="run-id" class="mono-value">-</strong>
           </div>
         </div>
+        <div id="run-error" class="run-error" hidden></div>
 
         <div id="event-empty" class="empty-state">
           <span class="empty-seq">000</span>

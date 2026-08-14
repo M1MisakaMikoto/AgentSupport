@@ -38,6 +38,7 @@ from agent_runner_contracts.tools import (
 from ...adapters.mcp import ControlledMcpProvider
 from ...adapters.trae import AgentFactory, TraeExecutionAdapter, TraeRuntimeSettings
 from ...application import RunRegistry
+from ...diagnostics import run_model_connectivity
 from ...domain import RunState
 from ...mcp_runtime import build_mcp_provider, build_mcp_server_configs
 from ...metrics import record_http, record_mcp_connection, render_metrics
@@ -231,6 +232,11 @@ def create_runner_app(
     async def ready() -> dict[str, str]:
         return {"status": "ready", "mode": mode}
 
+    @app.get("/diagnostics/model-connectivity")
+    def model_connectivity() -> dict[str, Any]:
+        # Blocking TLS probe; FastAPI runs sync routes in a worker thread.
+        return run_model_connectivity()
+
     @app.post("/runs")
     async def start_run(request: RunRequest):
         _validate_container_fence(request)
@@ -411,6 +417,7 @@ def create_runner_app(
             workspace_ref=state.request.workspace_ref,
             recent_events=[event.model_dump(mode="json") for event in state.events],
             skill_manifest=list(state.request.context_bundle.get("skill_manifest", [])),
+            skills=list(state.request.context_bundle.get("skills", [])),
             mcp_refs=list(state.request.context_bundle.get("mcp_refs", [])),
             tool_policy=tool_policy,
         )

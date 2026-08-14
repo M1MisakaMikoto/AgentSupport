@@ -914,6 +914,13 @@ def create_dev_console_app(
                 try:
                     async for chunk in upstream.aiter_raw():
                         yield chunk
+                except httpx.RemoteProtocolError:
+                    # The upstream SSE connection can end without a complete
+                    # chunked body (for example when its event producer
+                    # terminates or a proxy closes the connection). Treat that
+                    # as a normal end-of-stream instead of letting the protocol
+                    # error bubble up as an ASGI exception.
+                    return
                 finally:
                     await upstream.aclose()
                     await client.aclose()

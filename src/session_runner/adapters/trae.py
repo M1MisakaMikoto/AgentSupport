@@ -124,6 +124,38 @@ def _resolve_system_prompt(settings: TraeRuntimeSettings, request: Any) -> str |
     return None
 
 
+def _context_skills(bundle: Any) -> list[dict[str, Any]]:
+    """Extract enabled skills from a request context bundle (dict or model)."""
+
+    if isinstance(bundle, dict):
+        entries = bundle.get("skills") or bundle.get("skill_manifest") or []
+        return entries
+    entries = getattr(bundle, "skills", None) or getattr(bundle, "skill_manifest", None) or []
+    return entries
+
+
+def _skill_prompt_section(bundle: Any) -> str | None:
+    """Build the system-prompt section that makes enabled skills actionable."""
+
+    entries = _context_skills(bundle)
+    if not entries:
+        return None
+    lines = [
+        "# 启用的 Skills",
+        "本次任务启用了以下 Skill，请严格按其 SKILL.md 的指引执行；每项以 `---` 分隔：",
+    ]
+    for entry in entries:
+        skill_id = str(entry.get("skill_id", "unknown"))
+        mount_path = entry.get("mount_path")
+        content = str(entry.get("content") or "").strip()
+        lines.append(f"## Skill: {skill_id}")
+        if mount_path:
+            lines.append(f"路径: {mount_path}（如需读取附属文件可查看该目录）")
+        lines.append(content or "（SKILL.md 内容未随请求携带）")
+        lines.append("---")
+    return "\n\n".join(lines)
+
+
 def _default_agent_factory(settings: TraeRuntimeSettings, request: Any, trajectory: Path) -> Any:
     _ensure_vendored_trae_path()
     from trae_agent.agent.agent import Agent
@@ -465,6 +497,12 @@ class TraeExecutionAdapter:
         trajectory_dir.mkdir(parents=True, exist_ok=True)
         self.trajectory = trajectory_dir / f"{self.request.run_id}.json"
         self.agent = self.agent_factory(self.settings, self.request, self.trajectory)
+        skill_section = _skill_prompt_section(self.request.context_bundle)
+        trae_agent = getattr(self.agent, "agent", None)
+        if skill_section and trae_agent is not None:
+            getter = getattr(trae_agent, "get_system_prompt", None)
+            current = getter() if callable(getter) else getattr(trae_agent, "_system_prompt", None)
+            trae_agent._system_prompt = f"{current or ''}\n\n{skill_section}".strip()
         if self.mcp_servers_config:
             self.agent.agent.mcp_servers_config = dict(self.mcp_servers_config)
             self.agent.agent.allow_mcp_servers = list(self.mcp_servers_config)

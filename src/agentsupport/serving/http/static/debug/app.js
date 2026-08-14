@@ -8,6 +8,10 @@ const state = {
   stream: null,
   reconnectTimer: null,
   busy: false,
+  skills: [],
+  mcpServers: [],
+  selectedSkills: new Set(),
+  selectedMcp: new Set(),
 };
 
 const elements = Object.fromEntries(
@@ -16,7 +20,11 @@ const elements = Object.fromEntries(
     "run-form", "workspace-name", "task-text", "start-button", "clear-button",
     "workspace-id", "session-id", "conversation-id", "event-count", "refresh-button",
     "cancel-button", "run-state", "last-seq", "run-id", "event-empty", "event-list",
+    "run-error",
     "busy-indicator", "busy-text",
+    "skills-refresh", "skills-empty", "skills-list",
+    "mcp-refresh", "mcp-empty", "mcp-list",
+    "diag-model-button", "diag-model-result",
     "interaction-empty", "interaction-content", "interaction-kind", "interaction-id",
     "approval-view", "batch-hash", "tool-calls", "reject-button", "approve-button",
     "input-form", "interaction-value", "raw-output", "copy-button", "toast",
@@ -78,6 +86,89 @@ function persist() {
   }));
 }
 
+async function loadConfig() {
+  const [skills, mcpServers] = await Promise.all([
+    request("/skills").catch(() => []),
+    request("/mcp-servers").catch(() => []),
+  ]);
+  state.skills = Array.isArray(skills) ? skills : [];
+  state.mcpServers = Array.isArray(mcpServers) ? mcpServers : [];
+  renderConfig();
+}
+
+function renderConfigList(container, empty, items, selected, valueOf, labelOf, isDisabled) {
+  container.replaceChildren();
+  empty.hidden = items.length > 0;
+  for (const item of items) {
+    const value = valueOf(item);
+    const disabled = isDisabled ? isDisabled(item) : false;
+    if (disabled) {
+      selected.delete(value);
+    }
+    const label = document.createElement("label");
+    label.className = "config-item" + (disabled ? " muted" : "");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.value = value;
+    check.checked = selected.has(value);
+    check.disabled = disabled;
+    check.addEventListener("change", () => {
+      if (check.checked) selected.add(value);
+      else selected.delete(value);
+    });
+    const name = document.createElement("span");
+    name.className = "config-name";
+    name.textContent = labelOf(item);
+    label.append(check, name);
+    container.append(label);
+  }
+}
+
+function renderConfig() {
+  renderConfigList(
+    elements["skills-list"],
+    elements["skills-empty"],
+    state.skills,
+    state.selectedSkills,
+    (skill) => skill.skill_id,
+    (skill) => skill.skill_id
+  );
+  renderConfigList(
+    elements["mcp-list"],
+    elements["mcp-empty"],
+    state.mcpServers,
+    state.selectedMcp,
+    (server) => server.server_id,
+    (server) => (server.enabled === false ? `${server.name || server.server_id}（已停用）` : server.name || server.server_id),
+    (server) => server.enabled === false
+  );
+}
+
+function conversationBody(task, parentConversationId) {
+  const body = { task };
+  if (parentConversationId) body.parent_conversation_id = parentConversationId;
+  if (state.selectedSkills.size) {
+    body.skills = [...state.selectedSkills].map((skill_id) => ({ skill_id, enabled: true }));
+  }
+  if (state.selectedMcp.size) {
+    body.mcp_refs = [...state.selectedMcp].map((server_id) => ({ server_id }));
+  }
+  return body;
+}
+
+async function runModelDiagnostics() {
+  elements["diag-model-button"].disabled = true;
+  elements["diag-model-result"].textContent = "正在从 Runner 侧探测…";
+  try {
+    const report = await request("/diagnostics/model-connectivity");
+    elements["diag-model-result"].textContent = JSON.stringify(report, null, 2);
+  } catch (error) {
+    elements["diag-model-result"].textContent = JSON.stringify({ error: error.message }, null, 2);
+  } finally {
+    elements["diag-model-button"].disabled = false;
+  }
+}
+
 function setBusy(busy, message) {
   state.busy = busy;
   elements["busy-indicator"].hidden = !busy;
@@ -100,6 +191,14 @@ function updateResources() {
   elements["run-state"].className = `state-value ${runState.toLowerCase()}`;
   elements["run-id"].textContent = run?.run_id || "-";
   elements["cancel-button"].disabled = !state.conversation || terminalStates.has(runState) || state.busy;
+  const runError = run?.error;
+  const errorElement = elements["run-error"];
+  if (runState === "FAILED" && runError) {
+    errorElement.hidden = false;
+    errorElement.textContent = `${runError.code || "RUN_ERROR"}: ${runError.message || JSON.stringify(runError)}`;
+  } else {
+    errorElement.hidden = true;
+  }
 }
 
 function eventClass(type) {
@@ -310,7 +409,7 @@ async function startRun(event) {
     state.conversation = await request(`/sessions/${state.session.id}/conversations`, {
       method: "POST",
       headers: { "Idempotency-Key": makeKey("conversation") },
-      body: JSON.stringify({ task: elements["task-text"].value.trim() }),
+      body: JSON.stringify(conversationBody(elements["task-text"].value.trim())),
     });
     persist();
     updateResources();
@@ -340,10 +439,7 @@ async function continueRun(event) {
     state.conversation = await request(`/sessions/${state.session.id}/conversations`, {
       method: "POST",
       headers: { "Idempotency-Key": makeKey("continue") },
-      body: JSON.stringify({
-        task: content,
-        parent_conversation_id: state.conversation.id,
-      }),
+      body: JSON.stringify(conversationBody(content, state.conversation.id)),
     });
     elements["continue-text"].value = "";
     persist();
@@ -472,6 +568,7 @@ function restore() {
   elements["control-console-link"].href = window.location.pathname.startsWith("/tasks")
     ? "/"
     : "http://127.0.0.1:8010/";
+  loadConfig();
   const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
   elements["workspace-name"].value = `manual-${stamp}`;
   elements["task-text"].value = defaultTask();
@@ -487,6 +584,9 @@ function restore() {
 elements["connect-button"].addEventListener("click", checkConnection);
 elements["run-form"].addEventListener("submit", startRun);
 elements["continue-form"].addEventListener("submit", continueRun);
+elements["skills-refresh"].addEventListener("click", loadConfig);
+elements["mcp-refresh"].addEventListener("click", loadConfig);
+elements["diag-model-button"].addEventListener("click", runModelDiagnostics);
 elements["refresh-button"].addEventListener("click", () => {
   refreshEvents(true)
     .then(() => {

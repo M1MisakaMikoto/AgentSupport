@@ -54,6 +54,7 @@ Compose 环境的 AgentSupport API 默认地址为 `http://localhost:8000`（经
 | `GET` | `/ready` | [11.2](#112-get-ready) |
 | `GET` | `/metrics` | [11.3](#113-get-metrics) |
 | `GET` | `/cores` | [11.4](#114-get-cores) |
+| `GET` | `/diagnostics/model-connectivity` | [11.5](#115-get-diagnosticsmodel-connectivity) |
 
 ### 2.2 内部 API（Runner 注册协议，不在 OpenAPI 中）
 
@@ -765,6 +766,47 @@ agentsupport_outbox_pending 0
 ]
 ```
 
+### 11.5 GET /diagnostics/model-connectivity
+
+控制面把请求转发到私有 Session Runner，由 Runner 侧对模型 API
+（`TRAE_MODEL_BASE_URL` / `ANTHROPIC_BASE_URL`）执行真实 TLS 握手并返回证书信息，
+用于排查 `run.failed` 中的连接类错误（DNS 劫持、TLS 审计/中间人证书、弱密钥等）。
+探测过程不发送 API Key。
+
+**成功响应 `200`**：
+
+```json
+{
+  "configured": true,
+  "base_url": "https://api.deepseek.com/anthropic",
+  "provider": "deepseek_anthropic",
+  "model": "deepseek-v4-pro",
+  "tls": {
+    "host": "api.deepseek.com",
+    "port": 443,
+    "tls_version": "TLSv1.2",
+    "verified": false,
+    "error": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: EE certificate key too weak",
+    "hint": "证书密钥过弱（通常低于 2048 位）被 OpenSSL 拒绝；这通常是网络层的 DNS 劫持或 TLS 审计/中间人证书，而非模型服务本身的问题。",
+    "certificate": {
+      "subject": "CN=api.deepseek.com",
+      "issuer": "CN=VeriSign Class 1 Extended Validation CA,OU=Terms of use at https://www.verisign.com/rpa",
+      "key_bits": 1024,
+      "key_type": "RSA",
+      "serial": "13371995828842998877",
+      "not_before": "2026-06-20T00:00:00+00:00",
+      "not_after": "2026-09-17T23:59:59+00:00",
+      "signature_algorithm": "sha256WithRSAEncryption"
+    }
+  }
+}
+```
+
+**错误**：
+
+- `503 DIAGNOSTICS_UNAVAILABLE`：未配置 core runner（内联模式）。
+- `502 RUNNER_UNAVAILABLE`：Session Runner 不可达。
+
 ## 12. Runner 注册协议（内部）
 
 以下端点属于控制面与 Runner 之间的内部契约，不在公共 OpenAPI 中，调用方不应使用。
@@ -894,6 +936,11 @@ Runner，模板由上游自行保存。
 > 不存在的 skill 或 MCP server 返回 `404`（`SKILL_NOT_FOUND` / `MCP_SERVER_NOT_FOUND`），
 > 停用的 MCP server 返回 `422 MCP_SERVER_DISABLED`。
 
+Skill 启用后，控制面会把对应 `SKILL.md` 的内容（单技能上限约 20K 字符，超出截断）
+随运行请求传给 Session Runner，Runner 将其注入 Trae agent 的 system prompt，
+并在声明中给出只读挂载路径（Compose 栈挂载 `skills-data`），使 agent 能按指引执行
+或读取附属文件。
+
 ## 14. 运行状态
 
 Conversation 的 `run.state` 可能为：
@@ -965,7 +1012,9 @@ Conversation 的 `run.state` 可能为：
 | `429` | `RESOURCE_EXHAUSTED` | 队列或容量已满 |
 | `401` | `RUNNER_TOKEN_INVALID` | Runner token 无效（内部） |
 | `413` | `SKILL_TOO_LARGE` | skill 上传超过大小上限 |
+| `502` | `RUNNER_UNAVAILABLE` | Session Runner 不可达（模型自检转发失败） |
 | `503` | `RUNNER_REGISTRATION_DISABLED` | 未配置 Runner token（内部） |
+| `503` | `DIAGNOSTICS_UNAVAILABLE` | 未配置 core runner，无法执行模型自检 |
 
 FastAPI 自身的请求校验错误使用标准 `422` 格式，不一定包含上述统一字段。
 

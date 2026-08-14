@@ -17,6 +17,13 @@
     busy: false,
   };
 
+  const config = {
+    skills: [],
+    mcpServers: [],
+    selectedSkills: new Set(),
+    selectedMcp: new Set(),
+  };
+
   const els = app.els([
     "stat-workspaces", "stat-sessions", "stat-conversations", "stat-active",
     "recent-refresh", "recent-empty", "recent-table", "recent-runs",
@@ -24,7 +31,10 @@
     "agent-session-select", "agent-new-session-btn", "agent-refresh-btn",
     "agent-conv-count", "agent-conv-empty", "agent-conv-list",
     "agent-chat-scroll", "agent-chat-empty", "agent-task-input", "agent-send-btn",
+    "agent-skills-list", "agent-skills-refresh",
+    "agent-mcp-list", "agent-mcp-refresh",
     "agent-run-chip", "agent-run-state", "agent-run-seq", "agent-run-id",
+    "agent-run-error",
     "agent-event-empty", "agent-timeline", "agent-cancel-btn",
     "agent-interaction-empty", "agent-interaction", "agent-approval-view",
     "agent-batch-hash", "agent-tool-calls", "agent-reject-btn", "agent-approve-btn",
@@ -43,6 +53,71 @@
   store.workspaces = [];
   store.sessions = [];
   store.loadedAt = 0;
+
+  async function loadConfig() {
+    const [skills, mcpServers] = await Promise.all([
+      api("/skills").catch(() => []),
+      api("/mcp-servers").catch(() => []),
+    ]);
+    config.skills = Array.isArray(skills) ? skills : [];
+    config.mcpServers = Array.isArray(mcpServers) ? mcpServers : [];
+    renderConfig();
+  }
+
+  function renderConfigChips(container, items, selected, valueOf, labelOf, isDisabled) {
+    container.replaceChildren();
+    if (!items.length) {
+      const empty = document.createElement("span");
+      empty.className = "config-empty";
+      empty.textContent = "暂无";
+      container.append(empty);
+      return;
+    }
+    for (const item of items) {
+      const value = valueOf(item);
+      const disabled = isDisabled ? isDisabled(item) : false;
+      if (disabled) selected.delete(value);
+      const label = document.createElement("label");
+      label.className =
+        "config-chip" +
+        (selected.has(value) ? " checked" : "") +
+        (disabled ? " disabled" : "");
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = selected.has(value);
+      check.disabled = disabled;
+      check.addEventListener("change", () => {
+        if (check.checked) selected.add(value);
+        else selected.delete(value);
+        label.classList.toggle("checked", check.checked);
+      });
+      const text = document.createElement("span");
+      text.textContent = labelOf(item);
+      label.append(check, text);
+      container.append(label);
+    }
+  }
+
+  function renderConfig() {
+    renderConfigChips(
+      els["agent-skills-list"],
+      config.skills,
+      config.selectedSkills,
+      (skill) => skill.skill_id,
+      (skill) => skill.skill_id
+    );
+    renderConfigChips(
+      els["agent-mcp-list"],
+      config.mcpServers,
+      config.selectedMcp,
+      (server) => server.server_id,
+      (server) =>
+        server.enabled === false
+          ? `${server.name || server.server_id}（已停用）`
+          : server.name || server.server_id,
+      (server) => server.enabled === false
+    );
+  }
 
   async function loadData(force = false) {
     if (!force && store.loadedAt && Date.now() - store.loadedAt < 10000) return;
@@ -357,6 +432,26 @@
     els["agent-run-chip"].textContent = state;
     els["agent-run-chip"].className = `chip ${terminalStates.has(state) ? "gray" : "ok"}`;
     els["agent-cancel-btn"].disabled = !run || terminalStates.has(state);
+    const runError = run?.error;
+    if (state === "FAILED" && runError) {
+      els["agent-run-error"].hidden = false;
+      els["agent-run-error"].textContent = `${runError.code || "RUN_ERROR"}: ${runError.message || JSON.stringify(runError)}`;
+    } else {
+      els["agent-run-error"].hidden = true;
+    }
+  }
+
+  function eventDetail(event) {
+    const payload = event.payload || {};
+    if (event.type === "run.failed" || event.type === "run.lost") {
+      const code = payload.code || event.type;
+      const message = payload.message || JSON.stringify(payload);
+      return `${code}: ${message}`;
+    }
+    if (event.type === "interaction.requested") {
+      return `kind: ${payload.kind || "input"}`;
+    }
+    return null;
   }
 
   function renderTimeline() {
@@ -366,9 +461,11 @@
       ...agent.events.slice(-40).map((event) => {
         const div = document.createElement("div");
         div.className = "tl-item";
+        const detail = eventDetail(event);
         div.innerHTML = `<span class="tl-dot"></span>
           <div><code>${app.escapeHtml(event.type)}</code>
-          <small>#${event.seq} · ${app.escapeHtml(event.source || "")}</small></div>`;
+          <small>#${event.seq} · ${app.escapeHtml(event.source || "")}</small>
+          ${detail ? `<div class="tl-detail">${app.escapeHtml(detail)}</div>` : ""}</div>`;
         return div;
       })
     );
@@ -407,10 +504,17 @@
     agent.busy = true;
     els["agent-send-btn"].disabled = true;
     try {
+      const body = { task };
+      if (config.selectedSkills.size) {
+        body.skills = [...config.selectedSkills].map((skill_id) => ({ skill_id, enabled: true }));
+      }
+      if (config.selectedMcp.size) {
+        body.mcp_refs = [...config.selectedMcp].map((server_id) => ({ server_id }));
+      }
       const conversation = await api(`/sessions/${agent.sessionId}/conversations`, {
         method: "POST",
         headers: { "Idempotency-Key": makeKey("conversation") },
-        body: { task },
+        body,
       });
       els["agent-task-input"].value = "";
       agent.conversations.push(conversation);
@@ -481,6 +585,8 @@
     els["agent-new-session-btn"].addEventListener("click", newSessionModal);
     els["agent-refresh-btn"].addEventListener("click", refreshAgent);
     els["agent-send-btn"].addEventListener("click", sendTask);
+    els["agent-skills-refresh"].addEventListener("click", loadConfig);
+    els["agent-mcp-refresh"].addEventListener("click", loadConfig);
     els["agent-cancel-btn"].addEventListener("click", cancelRun);
     els["agent-approve-btn"].addEventListener("click", () => submitApproval("APPROVE_ONCE"));
     els["agent-reject-btn"].addEventListener("click", () => submitApproval("REJECT"));
@@ -506,6 +612,7 @@
         els["agent-task-input"].focus();
       });
     });
+    loadConfig();
   }
 
   app.registerView("demo-overview", { init: () => {}, refresh: refreshOverview });

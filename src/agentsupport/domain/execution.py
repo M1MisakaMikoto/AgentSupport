@@ -39,6 +39,7 @@ class RunProjection(BaseModel):
     state: ExecutionState = ExecutionState.QUEUED
     last_seq: int = 0
     pending_interaction: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
     result_summary: dict[str, Any] | None = None
     checkpoint_id: UUID | None = None
 

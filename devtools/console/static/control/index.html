@@ -162,6 +162,18 @@
                 </div>
                 <div class="composer">
                   <textarea id="agent-task-input" placeholder="给 Agent 下达任务，例如：分析项目结构并输出说明文档……" rows="2"></textarea>
+                  <div class="composer-config">
+                    <div class="config-line">
+                      <span class="config-label">Skills</span>
+                      <div id="agent-skills-list" class="config-chips"><span class="config-empty">暂无</span></div>
+                      <button class="btn sm" type="button" id="agent-skills-refresh" title="刷新 Skill 列表">刷新</button>
+                    </div>
+                    <div class="config-line">
+                      <span class="config-label">MCP</span>
+                      <div id="agent-mcp-list" class="config-chips"><span class="config-empty">暂无</span></div>
+                      <button class="btn sm" type="button" id="agent-mcp-refresh" title="刷新 MCP 列表">刷新</button>
+                    </div>
+                  </div>
                   <div class="composer-row">
                     <div class="composer-hints">
                       <span class="hint-chip" data-hint="ask: 请说明当前任务进展">询问进展 (ask:)</span>
@@ -181,6 +193,7 @@
                   <div class="run-cell"><div class="label">序号</div><div class="value mono" id="agent-run-seq">0</div></div>
                   <div class="run-cell"><div class="label">运行 ID</div><div class="value mono" id="agent-run-id" style="font-size:11px;">-</div></div>
                 </div>
+                <div id="agent-run-error" class="run-error" hidden></div>
                 <div class="card-head"><h2>事件轨道</h2>
                   <button class="btn sm danger" type="button" id="agent-cancel-btn" disabled>取消运行</button>
                 </div>
@@ -522,7 +535,7 @@
     <div class="toast" id="toast"></div>
 
 <script src="/assets/app.js?v=2" defer></script>
-<script src="/assets/demo.js?v=2" defer></script>
+    <script src="/assets/demo.js?v=3" defer></script>
     <script src="/assets/api.js" defer></script>
     <script src="/assets/ops.js" defer></script>
     <script src="/assets/monitor.js" defer></script>

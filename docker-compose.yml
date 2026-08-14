@@ -145,12 +145,17 @@ services:
       TRAE_PROVIDER: ${TRAE_PROVIDER:-anthropic}
       TRAE_API_KEY: ${TRAE_API_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}
       TRAE_MODEL_BASE_URL: ${TRAE_MODEL_BASE_URL:-${ANTHROPIC_BASE_URL:-}}
+      TRAE_MODEL_HOST: ${TRAE_MODEL_HOST:-}
       TRAE_MODEL: ${TRAE_MODEL:-claude-sonnet-4-20250514}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
       GITLAB_TOKEN: ${GITLAB_TOKEN:-}
     expose:
       - "8080"
     volumes:
       - workspace-data:/workspace-data
+      - skills-data:/app/src/skills
     healthcheck:
       test:
         [

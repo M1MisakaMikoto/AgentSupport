@@ -4,6 +4,7 @@
 """Anthropic API client wrapper with tool integration."""
 
 import json
+import os
 from typing import override
 
 import anthropic
@@ -25,9 +26,17 @@ class AnthropicClient(BaseLLMClient):
     def __init__(self, model_config: ModelConfig):
         super().__init__(model_config)
 
-        self.client: anthropic.Anthropic = anthropic.Anthropic(
-            api_key=self.api_key, base_url=self.base_url
-        )
+        client_options: dict[str, str] = {
+            "api_key": self.api_key,
+            "base_url": self.base_url,
+        }
+        host_override = os.getenv("TRAE_MODEL_HOST", "").strip()
+        if host_override:
+            # Corporate TLS inspection often keys off the SNI hostname. When the
+            # provider must be reached through a CDN CNAME, the SNI uses the URL
+            # host while the origin still expects the original Host header.
+            client_options["default_headers"] = {"Host": host_override}
+        self.client: anthropic.Anthropic = anthropic.Anthropic(**client_options)
         self.message_history: list[anthropic.types.MessageParam] = []
         self.system_message: str | anthropic.NotGiven = anthropic.NOT_GIVEN
 

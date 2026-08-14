@@ -7,6 +7,7 @@ from session_runner.adapters.trae import (
     TraeExecutionAdapter,
     TraeRuntimeSettings,
     _resolve_system_prompt,
+    _skill_prompt_section,
 )
 
 
@@ -47,6 +48,36 @@ def test_context_bundle_prompt_used_when_no_file(tmp_path):
 def test_falls_back_to_builtin_when_no_override(tmp_path):
     settings = make_settings(tmp_path)
     assert _resolve_system_prompt(settings, _Request({})) is None
+
+
+def test_skill_prompt_section_builds_from_context_bundle():
+    section = _skill_prompt_section(
+        {
+            "skills": [
+                {
+                    "skill_id": "review",
+                    "mount_path": "/opt/agent-skills/review",
+                    "content": "# Review\n输出审查报告。",
+                }
+            ]
+        }
+    )
+    assert section is not None
+    assert "## Skill: review" in section
+    assert "/opt/agent-skills/review" in section
+    assert "输出审查报告" in section
+
+
+def test_skill_prompt_section_falls_back_to_manifest():
+    section = _skill_prompt_section(
+        {"skill_manifest": [{"skill_id": "review", "mount_path": "/opt/agent-skills/review"}]}
+    )
+    assert section is not None
+    assert "内容未随请求携带" in section
+
+
+def test_skill_prompt_section_none_without_skills():
+    assert _skill_prompt_section({"task": "hi"}) is None
 
 
 def test_blank_context_bundle_prompt_is_ignored(tmp_path):
@@ -107,3 +138,58 @@ async def test_run_passes_neutral_extra_args_without_issue(tmp_path):
     assert captured["extra_args"] == {"project_path": str(workspace)}
     assert "issue" not in captured["extra_args"]
     assert result["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_initialize_agent_injects_skills_into_system_prompt(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    class FakeTraeAgent:
+        def __init__(self):
+            self._system_prompt = None
+            self.tools = []
+            self._tool_caller = None
+
+        def get_system_prompt(self):
+            return self._system_prompt or "base prompt"
+
+    class FakeAgent:
+        def __init__(self):
+            self.agent = FakeTraeAgent()
+
+        async def run(self, task, extra_args):
+            return SimpleNamespace(success=True, final_result="ok", steps=[1])
+
+    def factory(settings, request, trajectory):
+        return FakeAgent()
+
+    request = SimpleNamespace(
+        run_id=uuid4(),
+        workspace_ref=str(workspace),
+        context_bundle={
+            "task": "review the code",
+            "skills": [
+                {
+                    "skill_id": "review",
+                    "mount_path": "/opt/agent-skills/review",
+                    "content": "# Review\n输出审查报告。",
+                }
+            ],
+        },
+        tool_policy={},
+    )
+    adapter = TraeExecutionAdapter(
+        request,
+        lambda event_type, payload=None: None,
+        lambda interaction, batch, next_step: None,
+        settings=make_settings(tmp_path),
+        agent_factory=factory,
+    )
+
+    await adapter._initialize_agent()
+
+    prompt = adapter.agent.agent._system_prompt
+    assert prompt.startswith("base prompt")
+    assert "## Skill: review" in prompt
+    assert "输出审查报告" in prompt

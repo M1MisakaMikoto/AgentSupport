@@ -58,6 +58,7 @@ class ConversationRow(Base):
     run_id: Mapped[str] = mapped_column(String(36), nullable=False)
     last_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pending_interaction: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     result_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     checkpoint_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

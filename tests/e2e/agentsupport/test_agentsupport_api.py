@@ -108,8 +108,17 @@ async def test_debug_acceptance_ui_is_served(service):
     assert 'id="continue-form"' in response.text
     assert 'id="continue-text"' in response.text
     assert 'id="parent-id"' in response.text
+    assert 'id="skills-list"' in response.text
+    assert 'id="mcp-list"' in response.text
+    assert 'id="diag-model-button"' in response.text
+    assert 'id="diag-model-result"' in response.text
+    assert 'id="run-error"' in response.text
     assert script.status_code == 200
     assert "EventSource" in script.text
+    assert 'request("/skills")' in script.text
+    assert 'request("/mcp-servers")' in script.text
+    assert 'request("/diagnostics/model-connectivity")' in script.text
+    assert "run?.error" in script.text
     assert "projectRunState" in script.text
     assert "continueRun" in script.text
 
@@ -237,6 +246,10 @@ async def test_container_start_failure_is_recorded_as_structured_run_failure(tmp
     conversation = await service.create_conversation(session.id, "must fail")
 
     assert conversation.run.state.value == "FAILED"
+    assert conversation.run.error == {
+        "code": "CONTAINER_START_TIMEOUT",
+        "message": "Session container did not start before the configured timeout",
+    }
     assert service.events(conversation.id)[-1].type == "run.failed"
     assert service.events(conversation.id)[-1].payload["code"] == "CONTAINER_START_TIMEOUT"
 

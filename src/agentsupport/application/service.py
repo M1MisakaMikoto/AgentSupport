@@ -850,10 +850,8 @@ class AgentSupportService:
             try:
                 acquired = await self._acquire_container(session)
             except TimeoutError:
-                conversation.run.state = ExecutionState.FAILED
-                self._append(
+                self._mark_run_failed(
                     conversation,
-                    "run.failed",
                     {
                         "code": "CONTAINER_START_TIMEOUT",
                         "message": "Session container did not start before the configured timeout",
@@ -868,10 +866,8 @@ class AgentSupportService:
                 )
                 return conversation
             except Exception as exc:  # noqa: BLE001 - startup errors become run events
-                conversation.run.state = ExecutionState.FAILED
-                self._append(
+                self._mark_run_failed(
                     conversation,
-                    "run.failed",
                     {"code": "CONTAINER_START_FAILED", "message": str(exc)},
                 )
                 self._remember_persisted(
@@ -928,6 +924,7 @@ class AgentSupportService:
         if used_registered or (runner_endpoint and not self.config.core_runner_url):
             workspace_ref = "/workspace"
         tool_policy = self._tool_policy_for_session(session)
+        conversation_skills = self._skills_for_conversation(conversation, session)
         request = {
             "run_id": str(conversation.run.run_id),
             "conversation_id": str(conversation.id),
@@ -944,9 +941,8 @@ class AgentSupportService:
                     event.model_dump(mode="json")
                     for event in self.events_store.list(conversation.id)
                 ],
-                "skill_manifest": self.skill_provider.manifest(
-                    self._skills_for_conversation(conversation, session)
-                ),
+                "skill_manifest": self.skill_provider.manifest(conversation_skills),
+                "skills": self.skill_provider.skill_prompt_entries(conversation_skills),
                 "tool_policy": tool_policy,
                 "mcp_refs": self._resolve_mcp_refs(conversation.mcp_refs, session),
             },
@@ -962,10 +958,8 @@ class AgentSupportService:
         try:
             await self.core_runtime.run(request, event_sink)
         except Exception as exc:  # noqa: BLE001 - runtime failures become AgentSupport events
-            conversation.run.state = ExecutionState.FAILED
-            self._append(
+            self._mark_run_failed(
                 conversation,
-                "run.failed",
                 {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
             )
         if conversation.run.state in TERMINAL_STATES:
@@ -973,6 +967,13 @@ class AgentSupportService:
                 conversation.run.state.value.lower(), time.perf_counter() - started
             )
             await self._release_session(session, conversation)
+
+    def _mark_run_failed(self, conversation: Conversation, payload: dict[str, Any]) -> None:
+        """Persist a structured run failure on the conversation projection."""
+
+        conversation.run.state = ExecutionState.FAILED
+        conversation.run.error = dict(payload)
+        self._append(conversation, "run.failed", payload)
 
     def _apply_core_event(self, conversation: Conversation, event: EventEnvelope) -> None:
         if event.type == "interaction.requested":
@@ -983,7 +984,7 @@ class AgentSupportService:
             conversation.run.state = ExecutionState.COMPLETED
             conversation.run.result_summary = event.payload.get("result", event.payload)
         elif event.type == "run.failed":
-            conversation.run.state = ExecutionState.FAILED
+            self._mark_run_failed(conversation, event.payload)
         elif event.type == "run.lost":
             conversation.run.state = ExecutionState.LOST
         elif event.type == "run.cancelled":
@@ -1197,10 +1198,8 @@ class AgentSupportService:
             except ServiceError:
                 raise
             except Exception as exc:  # noqa: BLE001 - runtime errors become run failures
-                conversation.run.state = ExecutionState.FAILED
-                self._append(
+                self._mark_run_failed(
                     conversation,
-                    "run.failed",
                     {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
                 )
         if conversation.run.state in TERMINAL_STATES:
@@ -1300,10 +1299,8 @@ class AgentSupportService:
             except ServiceError:
                 raise
             except Exception as exc:  # noqa: BLE001 - runtime errors become run failures
-                conversation.run.state = ExecutionState.FAILED
-                self._append(
+                self._mark_run_failed(
                     conversation,
-                    "run.failed",
                     {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
                 )
         if conversation.run.state in TERMINAL_STATES:
@@ -1698,10 +1695,8 @@ class AgentSupportService:
                 response = await self.core_runtime.cancel(conversation.run.run_id)
                 await self._forward_core_events(conversation, response)
             except Exception as exc:  # noqa: BLE001 - runtime errors become run failures
-                conversation.run.state = ExecutionState.FAILED
-                self._append(
+                self._mark_run_failed(
                     conversation,
-                    "run.failed",
                     {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
                 )
         if conversation.run.state not in TERMINAL_STATES:
