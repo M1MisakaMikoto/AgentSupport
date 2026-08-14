@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from pathlib import Path
 
@@ -124,6 +125,88 @@ async def test_stop_without_body_uses_default_docker_target(tmp_path):
     assert response.status_code == 202
     assert operation["status"] == "succeeded"
     assert runner.calls[-1]["command"] == ["docker", "compose", "stop"]
+
+
+@pytest.mark.asyncio
+async def test_start_with_wsl2_transport_runs_lan_forward_step(monkeypatch, tmp_path):
+    runner = FakeCommandRunner()
+    controller = DevConsoleController(command_runner=runner, docker_transport="wsl2")
+    monkeypatch.setattr(os, "name", "nt")
+
+    async def ready():
+        return {"status": "ready"}
+
+    monkeypatch.setattr(controller, "_wait_ready", ready)
+    app = create_dev_console_app(controller, token="lan-token", monitor_log_dir=tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        accepted = await client.post(
+            "/api/actions/start",
+            headers={"X-Dev-Console-Token": "lan-token"},
+            json={"api_replicas": 2, "worker_replicas": 3, "runner_mode": "deterministic"},
+        )
+        operation = await _wait_for_operation(client, accepted.json()["id"], "lan-token")
+
+    assert accepted.status_code == 202
+    assert operation["status"] == "succeeded"
+    assert operation["result"]["lan_forward"]["status"] == "ok"
+    commands = [call["command"] for call in runner.calls]
+    assert any(
+        command[0] == "powershell.exe"
+        and Path(command[-1]).name == "wsl-lan-forward.ps1"
+        for command in commands
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_with_local_transport_skips_lan_forward(monkeypatch, tmp_path):
+    runner = FakeCommandRunner()
+    controller = DevConsoleController(command_runner=runner, docker_transport="local")
+    monkeypatch.setattr(os, "name", "nt")
+
+    async def ready():
+        return {"status": "ready"}
+
+    monkeypatch.setattr(controller, "_wait_ready", ready)
+    app = create_dev_console_app(controller, token="local-token", monitor_log_dir=tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        accepted = await client.post(
+            "/api/actions/start",
+            headers={"X-Dev-Console-Token": "local-token"},
+            json={"api_replicas": 2, "worker_replicas": 3, "runner_mode": "deterministic"},
+        )
+        operation = await _wait_for_operation(client, accepted.json()["id"], "local-token")
+
+    assert operation["status"] == "succeeded"
+    assert operation["result"]["lan_forward"]["status"] == "skipped"
+    commands = [call["command"] for call in runner.calls]
+    assert not any(command[0] == "powershell.exe" for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_start_with_lan_forward_disabled_skips_step(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTSUPPORT_DEV_LAN_FORWARD", "off")
+    runner = FakeCommandRunner()
+    controller = DevConsoleController(command_runner=runner, docker_transport="wsl2")
+    monkeypatch.setattr(os, "name", "nt")
+
+    async def ready():
+        return {"status": "ready"}
+
+    monkeypatch.setattr(controller, "_wait_ready", ready)
+    app = create_dev_console_app(controller, token="off-token", monitor_log_dir=tmp_path)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        accepted = await client.post(
+            "/api/actions/start",
+            headers={"X-Dev-Console-Token": "off-token"},
+            json={"api_replicas": 2, "worker_replicas": 3, "runner_mode": "deterministic"},
+        )
+        operation = await _wait_for_operation(client, accepted.json()["id"], "off-token")
+
+    assert operation["status"] == "succeeded"
+    assert operation["result"]["lan_forward"]["status"] == "skipped"
+    assert operation["result"]["lan_forward"]["reason"] == "AGENTSUPPORT_DEV_LAN_FORWARD 已关闭"
+    commands = [call["command"] for call in runner.calls]
+    assert not any(command[0] == "powershell.exe" for command in commands)
 
 
 @pytest.mark.asyncio

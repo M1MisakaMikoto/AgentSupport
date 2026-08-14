@@ -159,6 +159,7 @@ API 契约验收是控制台内可重复的自动检查入口；仓库测试与�
 $env:AGENTSUPPORT_DEV_DOCKER_TRANSPORT="wsl2" # wsl2、local 或 context
 $env:AGENTSUPPORT_DEV_WSL_DISTRIBUTION="Ubuntu-24.04"
 $env:AGENTSUPPORT_DEV_DOCKER_CONTEXT=""
+$env:AGENTSUPPORT_DEV_LAN_FORWARD="auto"     # auto（默认）或 off；wsl2 部署成功后自动开放局域网访问
 .\start-console.ps1
 ```
 
@@ -210,6 +211,26 @@ docker compose down
 ```
 
 除非显式传入 `--volumes`，`docker compose down` 会保留命名数据卷。
+
+### 局域网访问（WSL2 部署）
+
+WSL2 使用 NAT，栈启动后只有 Windows 本机可通过 `http://localhost:8000/docs` 访问；
+局域网其他机器无法直接路由到 WSL 的 IP。控制台使用 wsl2 transport 执行
+“部署”或“启动”时，会在 API 就绪后自动运行仓库根目录的 `wsl-lan-forward.ps1`
+（首次会弹出 UAC 确认，建议勾选记住授权），在 Windows 上创建
+端口转发（局域网 IP:8000 → WSL IP:8000）和仅限本地子网的防火墙放行规则。
+之后同一局域网内的机器可打开：
+
+```text
+http://<Windows主机局域网IP>:8000/docs
+```
+
+WSL 每次重启后 IP 会变化，届时重新运行一次该脚本即可刷新映射。
+也可以通过控制台环境变量关闭自动开放（`AGENTSUPPORT_DEV_LAN_FORWARD=off`），
+或手动运行 `.\wsl-lan-forward.ps1`。
+注意：公共 API 默认无鉴权（`AGENTSUPPORT_API_AUTH_MODE=none`），
+防火墙规则已限定本地子网；如需更严格限制，可加 `-LanAddress` 指定监听地址，
+或手动收紧防火墙规则。
 
 ### 其他模型提供方
 

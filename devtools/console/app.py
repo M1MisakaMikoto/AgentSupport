@@ -69,6 +69,8 @@ WSL_BUILD_EXCLUDES = (
     "__pycache__",
     "*.pyc",
 )
+LAN_FORWARD_SCRIPT = "wsl-lan-forward.ps1"
+LAN_FORWARD_DISABLED = {"off", "0", "false", "no"}
 
 
 def _now() -> datetime:
@@ -488,13 +490,59 @@ class DevConsoleController:
             ),
         )
         ready = await self._step(operation, "等待 API 就绪", self._wait_ready())
+        lan_forward = await self._step(
+            operation, "开放局域网访问（Windows 端口转发）", self._lan_forward(operation, request)
+        )
+        if lan_forward["status"] != "ok":
+            detail = lan_forward.get("reason") or lan_forward.get("error") or lan_forward["status"]
+            operation.add_log("info", f"开放局域网访问未执行: {detail}")
         operation.result = {
             "ready": ready,
             "api_replicas": request.api_replicas,
             "worker_replicas": request.worker_replicas,
             "runner_mode": request.runner_mode,
             "connection": {**self.target_details(request), **connection},
+            "lan_forward": lan_forward,
         }
+
+    async def _lan_forward(
+        self, operation: ConsoleOperation, request: StackRequest
+    ) -> dict[str, Any]:
+        """Publish the WSL2-hosted API to the LAN via a Windows portproxy + firewall rule.
+
+        This is a convenience step: it runs only on a Windows host with the wsl2 Docker
+        transport and never fails the deployment (a declined UAC prompt or a missing
+        script only produces a warning).
+        """
+        if os.name != "nt":
+            return {"status": "skipped", "reason": "非 Windows 主机，无需端口转发"}
+        if self._target(request)["transport"] != "wsl2":
+            return {"status": "skipped", "reason": "Docker transport 不是 wsl2，端口已按所选 transport 暴露"}
+        if (
+            os.getenv("AGENTSUPPORT_DEV_LAN_FORWARD", "auto").strip().lower()
+            in LAN_FORWARD_DISABLED
+        ):
+            return {"status": "skipped", "reason": "AGENTSUPPORT_DEV_LAN_FORWARD 已关闭"}
+        script = self.project_root / LAN_FORWARD_SCRIPT
+        if not script.is_file():
+            return {"status": "skipped", "reason": f"{script.name} 不存在"}
+        command = [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+        ]
+        distribution = (request.wsl_distribution or self.wsl_distribution or "").strip()
+        if distribution:
+            command += ["-WslDistro", distribution]
+        try:
+            await self._command(operation, command)
+        except Exception as exc:  # noqa: BLE001 - LAN exposure must not fail the deployment
+            operation.add_log("warning", f"开放局域网访问未生效（不影响部署结果）: {exc}")
+            return {"status": "failed", "error": str(exc)}
+        return {"status": "ok"}
 
     async def _stop_stack(
         self, operation: ConsoleOperation, request: DockerTargetRequest
