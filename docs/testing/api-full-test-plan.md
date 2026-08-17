@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 示范 · 总览 / Agent 工作台 | 执行资源概览与标签模型；Workspace/Session 创建（带标签）、任务下发（可选 `skills` / `mcp_refs`）、SSE 事件轨道、input/approval/cancel | 主任务链（workspace/session/conversation + 标签） |
 | 部署 · 服务状态 | 健康端点 `/live` `/ready` `/metrics` `/cores` | 运维类路径 |
-| 部署 · API 契约验收 | 结构化断言运维、资源、事件、交互四类用例，含错误路径、幂等、乐观并发、SSE 断线续传；按 OpenAPI 输出操作覆盖率 | 29 个公共路径登记；skills 与 mcp-servers 由仓库契约套件覆盖 |
+| 部署 · API 契约验收 | 结构化断言运维、资源、事件、交互四类用例，含错误路径、幂等、乐观并发、SSE 断线续传；按 OpenAPI 输出操作覆盖率 | 30 个公共路径登记；skills 与 mcp-servers 由仓库契约套件覆盖 |
 | 部署 · API 参考 | 由运行时 OpenAPI 渲染参数表、请求体、响应与 cURL | 全部公共路径 |
 
 “API 契约验收”在控制台内通过真实 HTTP 请求对每个用例给出通过/失败、耗时与说明，并展示 OpenAPI
@@ -24,7 +24,7 @@
 一次完整 API 验收必须同时满足：
 
 1. 运行时 OpenAPI 中每个公开 operation 都被测试清单登记，新增或删除接口时覆盖门禁失败。
-2. 29 个 AgentSupport 公共路径都有正常、校验失败和相关业务错误断言。
+2. 30 个 AgentSupport 公共路径都有正常、校验失败和相关业务错误断言。
 3. 所有公共 `POST` 都验证幂等重放和 Key 冲突；三个交互接口验证 `expected_seq` 冲突。
 4. 普通响应、统一错误响应、关联 ID、实例 ID、状态码和 Content-Type 都符合契约。
 5. SSE 验证历史重放、排他游标、顺序、去重和断线续传。
@@ -112,8 +112,9 @@ IN-01 至 IN-03 都必须验证相同 Key 重放不产生第二个命令或事�
   `/live`、`/ready`、`/metrics`、`/cores` 与资源创建接口在无 `Authorization` 头时均可用；
   参数校验错误为 `422` 而非 `401/403`。
 - 自动补全矩阵：分别在 `AGENTSUPPORT_AUTO_CREATE_MISSING=true`（默认）与 `false` 两种配置下，
-  覆盖 `organization -> user -> preset/project -> workspace -> session -> conversation` 每条
-  缺失链路，断言 201+`auto_created` 或 404 与作用域收窄（`AGENTSUPPORT_AUTO_CREATE_SCOPES`）。
+  覆盖 `workspace` / `session` 两条缺失链路（仅限调用方显式传入且不存在的 ID），断言
+  201+`auto_created`（含 `workspace`、`session`）或严格 404，以及
+  `AGENTSUPPORT_AUTO_CREATE_SCOPES` 作用域收窄。
 - `AGENTSUPPORT_API_AUTH_MODE` 配置为非 `none` 时必须启动失败（fail-fast）。
 
 ## 4. Session Runner 私有契约
@@ -136,7 +137,7 @@ Runner 套件独立覆盖以下 9 个路径：
 | 层级 | 建议位置 | 运行环境 | 目的 |
 | --- | --- | --- | --- |
 | OpenAPI 覆盖门禁 | `tests/contract/agentsupport_api/test_openapi_coverage.py` | 进程内 ASGI | operation 与用例清单一一对应 |
-| 公共 HTTP 契约 | `tests/contract/agentsupport_api/` | 进程内 ASGI、确定性 Runner | 29 个公共路径 + 3 个内部 Runner 注册路径、错误体、Headers、幂等、SSE |
+| 公共 HTTP 契约 | `tests/contract/agentsupport_api/` | 进程内 ASGI、确定性 Runner | 30 个公共路径 + 3 个内部 Runner 注册路径、错误体、Headers、幂等、SSE |
 | Runner HTTP 契约 | `tests/contract/runner_api/` | 进程内 ASGI | 9 个私有路径和 fencing/checkpoint |
 | 服务集成 | `tests/e2e/agentsupport/` | 内存与 SQLite | 状态机、资源租约、故障映射 |
 | 分布式黑盒 | `tests/e2e/compose/test_public_api.py` | Compose、PostgreSQL、Redis、多 API/Worker | 真实网络、持久化、跨实例命令、重启与并发 |
@@ -186,7 +187,7 @@ Compose 黑盒套件全部实现前，结果只能标记为“回归通过”，
 
 ## 8. 放行标准
 
-- OpenAPI operation 覆盖率为 100%，公共 13/13、Runner 9/9。
+- OpenAPI operation 覆盖率为 100%，公共 30/30、Runner 9/9。
 - 所有必测用例通过，无 xfail；环境不满足时只能显式 skip 并使完整验收不通过。
 - 语句覆盖率不是唯一目标；API 路由、错误码、状态迁移和事件类型矩阵不得缺项。
 - 并发/SSE 场景连续运行 3 次无不稳定失败。

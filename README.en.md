@@ -71,7 +71,7 @@ Useful local endpoints:
 
 | URL | Purpose |
 | --- | --- |
-| `http://127.0.0.1:8000/docs` | OpenAPI interface |
+| `http://127.0.0.1:8000/docs` | OpenAPI interface (full API reference embedded on top) |
 | `http://127.0.0.1:8000/debug/` | Task debugging interface |
 | `http://127.0.0.1:8000/live` | Liveness check |
 | `http://127.0.0.1:8000/ready` | Readiness and active configuration |

@@ -15,6 +15,8 @@
 
 Compose 环境的 AgentSupport API 默认地址为 `http://localhost:8000`（经 Nginx 网关）。
 本地直启 Uvicorn 同样监听 `8000`。FastAPI 提供 `/docs`、`/redoc`、`/openapi.json`。
+Swagger UI（`/docs`）顶部内嵌本参考全文（`docs/api/agentsupport-api.md`），
+`/openapi.json` 的 `info.description` 同步携带该内容。
 
 开发控制台监听 `http://127.0.0.1:8010`，通过 `/agentsupport/` 前缀代理到服务；
 本文后续路径均以直连 API 为准（不含代理前缀）。

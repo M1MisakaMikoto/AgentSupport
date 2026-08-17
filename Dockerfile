@@ -7,6 +7,7 @@ COPY pyproject.toml requirements.txt ./
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY src ./src
+COPY docs ./docs
 COPY vendor/trae-agent-src ./vendor/trae-agent-src
 ENV PYTHONPATH=/app/src:/app/vendor/trae-agent-src
 ARG INSTALL_DEPS=true

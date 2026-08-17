@@ -15,6 +15,7 @@ from ...observability import context as obs_context
 from ...observability import logging as obs_logging
 from ...observability import metrics as obs_metrics
 from ...observability import tracing as obs_tracing
+from .api_docs import api_reference_description
 from .errors import install_error_handlers
 from .routes import (
     diagnostics_router,
@@ -70,7 +71,12 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
             with suppress(asyncio.CancelledError):
                 await health
 
-    app = FastAPI(title="AgentSupport", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(
+        title="AgentSupport",
+        version="0.2.0",
+        description=api_reference_description(),
+        lifespan=lifespan,
+    )
     app.state.service = selected_service
     obs_tracing.instrument_app(app)
 
