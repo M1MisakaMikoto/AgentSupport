@@ -1,0 +1,61 @@
+# Temporal execution worker (execution_mode=temporal).
+#
+# The Temporal server itself is expected to be provided externally (Temporal
+# Cloud or a managed server); set AGENTSUPPORT_TEMPORAL_HOST accordingly.
+# The control-plane API pods switch to temporal mode by setting
+# AGENTSUPPORT_EXECUTION_MODE=temporal in their Deployment env.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-worker
+  namespace: agentsupport
+  labels:
+    app: agentsupport
+    component: temporal-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentsupport
+      component: temporal-worker
+  template:
+    metadata:
+      labels:
+        app: agentsupport
+        component: temporal-worker
+    spec:
+      containers:
+        - name: temporal-worker
+          image: agentsupport-api:dev
+          command: ["python", "-m", "agentsupport.execution.temporal.worker"]
+          env:
+            - name: AGENTSUPPORT_PERSISTENCE_MODE
+              value: "postgres"
+            - name: AGENTSUPPORT_EXECUTION_MODE
+              value: "temporal"
+            - name: AGENTSUPPORT_DATABASE_URL
+              value: "postgresql+psycopg://agent:agent@postgres:5432/agentsupport"
+            - name: AGENTSUPPORT_TEMPORAL_HOST
+              value: "temporal.example.internal:7233"
+            - name: AGENTSUPPORT_TEMPORAL_NAMESPACE
+              value: "default"
+            - name: AGENTSUPPORT_TEMPORAL_TASK_QUEUE
+              value: "agentsupport"
+            - name: AGENTSUPPORT_CORE_RUNNER_URL
+              value: "http://runner:8080"
+            - name: AGENTSUPPORT_CORE_RUNNER_WORKSPACE_ROOT
+              value: "/workspace-data"
+            - name: AGENTSUPPORT_WORKSPACE_ROOT
+              value: "/workspace-data"
+          volumeMounts:
+            - name: workspace-data
+              mountPath: /workspace-data
+            - name: skills-data
+              mountPath: /app/src/skills
+      volumes:
+        - name: workspace-data
+          persistentVolumeClaim:
+            claimName: agentsupport-workspace
+        - name: skills-data
+          persistentVolumeClaim:
+            claimName: agentsupport-skills

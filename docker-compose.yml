@@ -168,6 +168,43 @@ services:
       timeout: 5s
       retries: 10
 
+  # Temporal dev server (phase 0/1 dual-run). Production should use a managed
+  # Temporal deployment (Temporal Cloud) or a properly provisioned server.
+  temporal:
+    image: temporalio/dev-server:latest
+    ports:
+      - "7233:7233"
+    restart: unless-stopped
+
+  # Temporal execution worker: drives run workflows for execution_mode=temporal.
+  # The control-plane API runs in the same mode by setting
+  # AGENTSUPPORT_EXECUTION_MODE=temporal on the api service; the classic
+  # `worker` service keeps serving in-flight distributed-mode runs.
+  temporal-worker:
+    image: agentsupport-api
+    command: python -m agentsupport.execution.temporal.worker
+    environment:
+      AGENTSUPPORT_PERSISTENCE_MODE: postgres
+      AGENTSUPPORT_EXECUTION_MODE: temporal
+      AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
+      AGENTSUPPORT_TEMPORAL_HOST: temporal:7233
+      AGENTSUPPORT_TEMPORAL_NAMESPACE: default
+      AGENTSUPPORT_TEMPORAL_TASK_QUEUE: agentsupport
+      AGENTSUPPORT_CORE_RUNNER_URL: http://runner:8080
+      AGENTSUPPORT_CORE_RUNNER_WORKSPACE_ROOT: /workspace-data
+      AGENTSUPPORT_WORKSPACE_ROOT: /workspace-data
+      AGENTSUPPORT_SKILLS_ROOT: /app/src/skills
+    volumes:
+      - workspace-data:/workspace-data
+      - skills-data:/app/src/skills
+    depends_on:
+      postgres:
+        condition: service_healthy
+      runner:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+
   postgres:
     image: postgres:16
     environment:
