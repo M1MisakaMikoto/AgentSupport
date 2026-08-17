@@ -348,3 +348,63 @@ async def test_activity_crash_retries_without_rerunning_completed_work(env, tmp_
     assert env.fake.run_calls == 2, "failed activity must be retried exactly once"
     events = env.repository.list_events(conversation.id)
     assert [event.type for event in events][-1] == "run.completed"
+
+
+async def test_temporal_mode_http_api_contract(env):
+    """The public HTTP contract works unchanged in temporal mode."""
+
+    from httpx import ASGITransport, AsyncClient
+
+    from agentsupport.api import create_app
+
+    app = create_app(env.service)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        workspace = (await client.post("/workspaces", json={"name": "api"})).json()
+        assert "id" in workspace
+        session = (
+            await client.post("/sessions", json={"workspace_id": workspace["id"]})
+        ).json()
+        conversation = (
+            await client.post(
+                f"/sessions/{session['id']}/conversations",
+                json={"task": "ask: approve tool?"},
+            )
+        ).json()
+        conversation_id = conversation["id"]
+        assert "run" in conversation
+
+        deadline = asyncio.get_running_loop().time() + 30
+        approval_id = None
+        while asyncio.get_running_loop().time() < deadline:
+            data = (await client.get(f"/conversations/{conversation_id}")).json()
+            pending = data.get("run", {}).get("pending_interaction")
+            if pending:
+                approval_id = pending["interaction_id"]
+                break
+            await asyncio.sleep(0.1)
+        assert approval_id is not None, "run never reached the human gate"
+
+        response = await client.post(
+            f"/conversations/{conversation_id}/approval",
+            json={"approval_id": approval_id, "decision": "APPROVE_ONCE"},
+        )
+        assert response.status_code == 200
+
+        while asyncio.get_running_loop().time() < deadline:
+            data = (await client.get(f"/conversations/{conversation_id}")).json()
+            if data.get("run", {}).get("state") == "COMPLETED":
+                break
+            await asyncio.sleep(0.1)
+
+        events = (
+            await client.get(f"/conversations/{conversation_id}/events")
+        ).json()
+        types = [event["type"] for event in events]
+        assert types == [
+            "run.started",
+            "run.running",
+            "interaction.requested",
+            "approval.decided",
+            "run.completed",
+        ]
