@@ -179,7 +179,7 @@ $env:TMP=$env:TEST_TMP
 
 ```powershell
 $env:RUN_POSTGRES_DISTRIBUTED_TESTS="1"
-.venv\Scripts\python.exe -m pytest tests/integration/persistence/test_postgres_distributed.py -q -p no:cacheprovider
+.venv\Scripts\python.exe -m pytest tests/integration/persistence/test_repository.py -q -p no:cacheprovider
 ```
 
 开发者控制台的“回归验收”可以执行上述仓库测试和在线任务冒烟，但在第 5 节规划的公共契约与

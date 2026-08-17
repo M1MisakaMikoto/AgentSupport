@@ -11,7 +11,7 @@ Key capabilities include:
 - Durable Workspace, Session and Conversation resources.
 - Ordered event history and Server-Sent Events (SSE) replay.
 - Idempotent commands, optimistic concurrency, approvals, cancellation and checkpoint recovery.
-- Inline development mode and distributed PostgreSQL-backed execution.
+- Inline development mode and Temporal-backed execution.
 - Controlled Trae, MCP, Skill and workspace tool integration.
 - Docker Compose and Kubernetes deployment manifests.
 
@@ -30,7 +30,7 @@ Production packages use the `src/` layout:
 
 | Package | Responsibility |
 | --- | --- |
-| `agentsupport` | Control-plane API, orchestration, persistence and distributed workers |
+| `agentsupport` | Control-plane API, orchestration, persistence and the Temporal execution worker |
 | `session_runner` | Private execution-plane HTTP service and Trae/MCP/tool adapters |
 | `agent_runner_contracts` | Wire models shared by the control and execution planes |
 | `devtools` | Local deployment and task-debugging console |
@@ -38,8 +38,8 @@ Production packages use the `src/` layout:
 ## Requirements
 
 - Python 3.12
-- Docker Engine with the Compose plugin for the distributed stack
-- PostgreSQL 16 and Redis 7 when running distributed services outside Compose
+- Docker Engine with the Compose plugin for the deployment stack
+- PostgreSQL 16 and Redis 7 when running services outside Compose
 - A Kubernetes cluster and `kubectl` for Kubernetes deployment
 
 ## Local development
@@ -235,14 +235,17 @@ other repository files.
 
 ## Configuration
 
-`.env.example` lists the supported local and distributed settings. Important variables include:
+`.env.example` lists the supported local and deployment settings. Important variables include:
 
 | Variable | Purpose |
 | --- | --- |
 | `AGENTSUPPORT_PERSISTENCE_MODE` | `memory` or `postgres` persistence |
-| `AGENTSUPPORT_EXECUTION_MODE` | `inline` or `distributed` execution |
+| `AGENTSUPPORT_EXECUTION_MODE` | `inline` or `temporal` execution (`distributed` is retired) |
 | `AGENTSUPPORT_DATABASE_URL` | SQLAlchemy PostgreSQL URL |
 | `AGENTSUPPORT_REDIS_URL` | Optional Redis event notification URL |
+| `AGENTSUPPORT_TEMPORAL_HOST` | Temporal server address (temporal mode) |
+| `AGENTSUPPORT_TEMPORAL_NAMESPACE` | Temporal namespace (default `default`) |
+| `AGENTSUPPORT_TEMPORAL_TASK_QUEUE` | Temporal task queue (default `agentsupport`) |
 | `AGENTSUPPORT_RUNTIME_DRIVER` | `memory`, `docker_cli`, or `kubernetes` runtime |
 | `AGENTSUPPORT_WORKSPACE_ROOT` | Workspace data directory |
 | `AGENTSUPPORT_MAX_ACTIVE_SESSIONS` | Concurrent active Session limit |
@@ -264,23 +267,31 @@ $env:AGENTSUPPORT_AUTO_CREATE_SCHEMA="false"
 .venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-Production and distributed deployments should keep automatic schema creation disabled.
+Production deployments should keep automatic schema creation disabled.
 
-## Distributed operation
+`temporal` execution mode drives one durable `RunSessionWorkflow` per run
+(workflow_id = run_id): signals replace the command queue, the event history
+takes over checkpointing, and pause/resume, cancellation, idempotency and crash
+recovery are native. See `docs/migration/v0.2-to-v0.3.md` and
+`docs/adr/003-temporal-execution.md`.
 
-API and Worker processes are stateless and can be scaled independently. PostgreSQL is the source
-of truth for jobs, events, commands, checkpoints and leases; Redis only accelerates subscriber
-wake-ups.
+## Temporal execution
+
+The API and Temporal workers are stateless and can be scaled independently.
+PostgreSQL remains the source of truth for conversations, events, checkpoints
+and outbox delivery; Redis accelerates subscriber wake-ups. A Temporal server
+(dev `temporal` service or a managed deployment) owns run lifecycle.
 
 ```powershell
 $env:SESSION_RUNNER_MODE="deterministic"
-docker compose up -d --build --scale api=2 --scale worker=3
+docker compose up -d --build --scale api=2 --scale temporal-worker=2
 Invoke-WebRequest -UseBasicParsing http://localhost:8000/ready
 Invoke-WebRequest -UseBasicParsing http://localhost:8000/metrics
 ```
 
-Workers use expiring claims and fence epochs. A paused Run releases execution capacity, and a
-replacement Runner resumes from a validated checkpoint.
+A paused run is a durable workflow wait (no container alive); a crashed worker
+only retries the in-flight activity, and completed segments are never
+re-executed.
 
 ## Kubernetes
 

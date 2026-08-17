@@ -732,7 +732,7 @@ POST /conversations/{conversation_id}/cancel
 ```json
 {
   "status": "ready",
-  "execution_mode": "distributed",
+  "execution_mode": "temporal",
   "persistence_mode": "postgres",
   "instance_id": "80c32b9f2ae5:1"
 }
