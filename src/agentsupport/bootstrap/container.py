@@ -17,6 +17,7 @@ from ..adapters.workspace import KubernetesWorkspaceProvider, LocalWorkspaceProv
 from ..application.ports import CoreRuntime, RunnerRegistry, RuntimeDriver
 from ..application.runner_registry import InMemoryRunnerRegistry
 from ..application.service import AgentSupportService
+from ..execution.temporal import TemporalRunCoordinator
 from .settings import Settings, settings
 
 
@@ -73,6 +74,17 @@ def build_skill_provider(config: Settings) -> LocalSkillProvider:
     return LocalSkillProvider(config.skills_root)
 
 
+def build_temporal_coordinator(config: Settings) -> TemporalRunCoordinator | None:
+    if config.execution_mode != "temporal":
+        return None
+    return TemporalRunCoordinator(
+        host=config.temporal_host,
+        namespace=config.temporal_namespace,
+        task_queue=config.temporal_task_queue,
+        workflow_timeout_seconds=config.temporal_workflow_timeout_seconds,
+    )
+
+
 def build_agentsupport_dependencies(config: Settings) -> dict[str, Any]:
     repository = build_repository(config)
     return {
@@ -84,6 +96,7 @@ def build_agentsupport_dependencies(config: Settings) -> dict[str, Any]:
         "core_runtime": build_core_runtime(config),
         "repository": repository,
         "runner_registry": build_runner_registry(config, repository),
+        "temporal": build_temporal_coordinator(config),
     }
 
 

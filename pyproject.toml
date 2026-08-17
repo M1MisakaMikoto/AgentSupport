@@ -37,6 +37,9 @@ distributed = [
   "alembic>=1.13,<2",
   "redis>=5,<6",
 ]
+temporal = [
+  "temporalio>=1.7,<2",
+]
 trae = [
   "anthropic>=0.54.0,<=0.60.0",
   "asyncclick>=8.0.0",

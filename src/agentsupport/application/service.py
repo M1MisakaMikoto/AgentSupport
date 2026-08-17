@@ -101,9 +101,12 @@ class AgentSupportService:
         core_runtime: CoreRuntime | None,
         repository: Any | None,
         runner_registry: RunnerRegistry | None = None,
+        temporal: Any | None = None,
     ) -> None:
         self.config = config
-        self.distributed = config.execution_mode == "distributed"
+        self.distributed = config.execution_mode in {"distributed", "temporal"}
+        self.temporal_mode = config.execution_mode == "temporal"
+        self.temporal = temporal
         self.instance_id = config.instance_id or f"{socket.gethostname()}:{os.getpid()}"
         self.workspaces: dict[UUID, Workspace] = {}
         self.sessions: dict[UUID, Session] = {}
@@ -126,7 +129,9 @@ class AgentSupportService:
         self.runner_registry = runner_registry or InMemoryRunnerRegistry()
         self.mcp_servers: dict[str, McpServer] = {}
         if self.distributed and self.repository is None:
-            raise ValueError("distributed execution requires PostgreSQL persistence")
+            raise ValueError(
+                "distributed/temporal execution requires a shared persistence backend"
+            )
         if self.repository and not self.distributed:
             self._load_persisted_state()
 
@@ -806,6 +811,23 @@ class AgentSupportService:
             skills=skills,
             mcp_refs=mcp_refs,
         )
+        if self.temporal_mode:
+            if self.temporal is None:
+                raise ServiceError(
+                    "TEMPORAL_UNAVAILABLE", "temporal coordinator is not configured", 503
+                )
+            assert self.repository is not None
+            try:
+                persisted = self.repository.create_conversation(
+                    conversation, _hash_request(payload), idempotency_key
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            if persisted.id != conversation.id:
+                return persisted  # idempotent replay of an earlier request
+            conversation = persisted
+            await self._start_temporal_run(conversation, session)
+            return conversation
         if self.distributed:
             assert self.repository is not None
             if self.repository.queue_depth() >= self.config.max_queued_conversations:
@@ -895,6 +917,45 @@ class AgentSupportService:
                     await self._run_core(conversation, session)
         self._remember("conversation", idempotency_key, payload, conversation.id)
         return conversation
+
+    def _temporal_run_request(self, conversation: Conversation, session: Session) -> dict:
+        """Build the workflow input consumed by the temporal activities."""
+
+        skills = self._skills_for_conversation(conversation, session)
+        return {
+            "run_id": str(conversation.run.run_id),
+            "conversation_id": str(conversation.id),
+            "session_id": str(session.id),
+            "workspace_id": str(session.workspace_id),
+            "task": conversation.task,
+            "skills": skills,
+            "tool_policy": self._tool_policy_for_session(session),
+            "mcp_refs": (
+                [dict(item) for item in conversation.mcp_refs]
+                if conversation.mcp_refs is not None
+                else (
+                    [dict(item) for item in session.config.resources.mcp_refs]
+                    if session.config is not None and session.config.resources.mcp_refs
+                    else []
+                )
+            ),
+            "core_version": "0.1.0",
+        }
+
+    async def _start_temporal_run(self, conversation: Conversation, session: Session) -> None:
+        if self.temporal is None:
+            raise ServiceError(
+                "TEMPORAL_UNAVAILABLE", "temporal coordinator is not configured", 503
+            )
+        request = self._temporal_run_request(conversation, session)
+        try:
+            await self.temporal.start_run(request)
+        except Exception as exc:
+            raise ServiceError(
+                "TEMPORAL_START_FAILED",
+                f"failed to start temporal run: {exc}",
+                502,
+            ) from exc
 
     async def _run_core(self, conversation: Conversation, session: Session) -> None:
         started = time.perf_counter()
@@ -1125,6 +1186,38 @@ class AgentSupportService:
             "value": value,
             "expected_seq": expected_seq,
         }
+        if self.temporal_mode:
+            if self.temporal is None:
+                raise ServiceError(
+                    "TEMPORAL_UNAVAILABLE", "temporal coordinator is not configured", 503
+                )
+            if self.repository and idempotency_key:
+                existing = self.repository.find_idempotent(
+                    "input", idempotency_key, _hash_request(payload)
+                )
+                if existing:
+                    return self._conversation(existing)
+            self._check_expected_seq(conversation, expected_seq)
+            self._check_interaction(conversation, interaction_id)
+            try:
+                await self.temporal.submit_input(
+                    str(conversation.run.run_id),
+                    interaction_id,
+                    value,
+                    idempotency_key,
+                )
+            except Exception as exc:
+                raise ServiceError(
+                    "TEMPORAL_SIGNAL_FAILED", f"failed to deliver input: {exc}", 409
+                ) from exc
+            self._remember_persisted(
+                "input",
+                idempotency_key,
+                payload,
+                conversation.id,
+                conversation.model_dump(mode="json"),
+            )
+            return conversation
         if self.distributed:
             assert self.repository is not None
             try:
@@ -1226,6 +1319,38 @@ class AgentSupportService:
             "decision": decision,
             "expected_seq": expected_seq,
         }
+        if self.temporal_mode:
+            if self.temporal is None:
+                raise ServiceError(
+                    "TEMPORAL_UNAVAILABLE", "temporal coordinator is not configured", 503
+                )
+            if self.repository and idempotency_key:
+                existing = self.repository.find_idempotent(
+                    "approval", idempotency_key, _hash_request(payload)
+                )
+                if existing:
+                    return self._conversation(existing)
+            self._check_expected_seq(conversation, expected_seq)
+            self._check_interaction(conversation, approval_id)
+            try:
+                await self.temporal.submit_approval(
+                    str(conversation.run.run_id),
+                    approval_id,
+                    decision,
+                    idempotency_key,
+                )
+            except Exception as exc:
+                raise ServiceError(
+                    "TEMPORAL_SIGNAL_FAILED", f"failed to deliver approval: {exc}", 409
+                ) from exc
+            self._remember_persisted(
+                "approval",
+                idempotency_key,
+                payload,
+                conversation.id,
+                conversation.model_dump(mode="json"),
+            )
+            return conversation
         if self.distributed:
             assert self.repository is not None
             try:
@@ -1648,6 +1773,35 @@ class AgentSupportService:
     ) -> Conversation:
         conversation = self._conversation(conversation_id)
         payload = {"conversation_id": conversation_id, "expected_seq": expected_seq}
+        if self.temporal_mode:
+            if self.temporal is None:
+                raise ServiceError(
+                    "TEMPORAL_UNAVAILABLE", "temporal coordinator is not configured", 503
+                )
+            if conversation.run.state in TERMINAL_STATES:
+                self._remember_persisted(
+                    "cancel",
+                    idempotency_key,
+                    payload,
+                    conversation.id,
+                    conversation.model_dump(mode="json"),
+                )
+                return conversation
+            self._check_expected_seq(conversation, expected_seq)
+            try:
+                await self.temporal.cancel(str(conversation.run.run_id))
+            except Exception as exc:
+                raise ServiceError(
+                    "TEMPORAL_SIGNAL_FAILED", f"failed to deliver cancel: {exc}", 409
+                ) from exc
+            self._remember_persisted(
+                "cancel",
+                idempotency_key,
+                payload,
+                conversation.id,
+                conversation.model_dump(mode="json"),
+            )
+            return conversation
         if self.distributed:
             assert self.repository is not None
             try:

@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     core_runner_timeout_seconds: float = 300.0
     core_runner_workspace_root: Path | None = None
     workspace_root: Path = Path("workspace-data")
+    # Temporal execution mode (phase 0 prototype). Requires a Temporal server
+    # reachable at temporal_host and a shared persistence backend.
+    temporal_host: str = "localhost:7233"
+    temporal_namespace: str = "default"
+    temporal_task_queue: str = "agentsupport"
+    temporal_workflow_timeout_seconds: int = 6 * 60 * 60
     waiting_input_timeout_seconds: int = 30 * 60
     pause_worker_interval_seconds: int = 5
     max_active_sessions: int = 2
