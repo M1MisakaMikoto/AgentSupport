@@ -18,12 +18,8 @@ class Settings(BaseSettings):
     auto_create_schema: bool = True
     execution_mode: str = "inline"
     instance_id: str = ""
-    job_lease_seconds: int = 30
-    job_heartbeat_seconds: int = 10
-    worker_poll_interval_seconds: float = 0.25
     event_poll_interval_seconds: float = 0.25
     redis_url: str | None = None
-    max_job_attempts: int = 3
     runtime_driver: str = "memory"
     runtime_context: str = "desktop-linux"
     runner_image: str = "agentsupport-runner:dev"
@@ -42,7 +38,6 @@ class Settings(BaseSettings):
     temporal_namespace: str = "default"
     temporal_task_queue: str = "agentsupport"
     temporal_workflow_timeout_seconds: int = 6 * 60 * 60
-    waiting_input_timeout_seconds: int = 30 * 60
     pause_worker_interval_seconds: int = 5
     max_active_sessions: int = 2
     max_queued_conversations: int = 100
@@ -73,7 +68,7 @@ class Settings(BaseSettings):
     retention_unreferenced_checkpoints_hours: int = 24
     retention_cleanup_interval_hours: int = 24
     retention_published_outbox_days: int = 7
-    retention_terminal_jobs_days: int = 30
+    retention_lease_days: int = 30
     retention_terminal_events_days: int = 90
     # Runner self-registration. A non-empty runner_token enables the internal
     # /runners/* endpoints; heartbeats older than the timeout are expired by

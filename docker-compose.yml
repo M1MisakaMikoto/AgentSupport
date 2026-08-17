@@ -25,7 +25,10 @@ services:
       AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
       AGENTSUPPORT_PERSISTENCE_MODE: postgres
       AGENTSUPPORT_AUTO_CREATE_SCHEMA: "false"
-      AGENTSUPPORT_EXECUTION_MODE: distributed
+      AGENTSUPPORT_EXECUTION_MODE: temporal
+      AGENTSUPPORT_TEMPORAL_HOST: temporal:7233
+      AGENTSUPPORT_TEMPORAL_NAMESPACE: default
+      AGENTSUPPORT_TEMPORAL_TASK_QUEUE: agentsupport
       AGENTSUPPORT_REDIS_URL: redis://redis:6379/0
       AGENTSUPPORT_CORE_RUNNER_URL: http://runner:8080
       AGENTSUPPORT_CORE_RUNNER_TIMEOUT_SECONDS: 300
@@ -47,6 +50,8 @@ services:
         condition: service_completed_successfully
       runner:
         condition: service_healthy
+      temporal:
+        condition: service_started
 
   gateway:
     image: nginx:1.27-alpine
@@ -61,31 +66,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-
-  worker:
-    image: agentsupport-api
-    command: python -m agentsupport.worker
-    environment:
-      AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
-      AGENTSUPPORT_PERSISTENCE_MODE: postgres
-      AGENTSUPPORT_AUTO_CREATE_SCHEMA: "false"
-      AGENTSUPPORT_EXECUTION_MODE: distributed
-      AGENTSUPPORT_RUNTIME_DRIVER: memory
-      AGENTSUPPORT_CORE_RUNNER_URL: http://runner:8080
-      AGENTSUPPORT_CORE_RUNNER_WORKSPACE_ROOT: /workspace-data
-      AGENTSUPPORT_WORKSPACE_ROOT: /workspace-data
-      AGENTSUPPORT_REDIS_URL: redis://redis:6379/0
-      AGENTSUPPORT_MAX_ACTIVE_SESSIONS: 2
-    volumes:
-      - workspace-data:/workspace-data
-      - skills-data:/app/src/skills
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      workspace-init:
-        condition: service_completed_successfully
-      runner:
-        condition: service_healthy
 
   event-publisher:
     image: agentsupport-api

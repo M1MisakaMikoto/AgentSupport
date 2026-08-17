@@ -521,23 +521,6 @@ async def test_unconfirmed_container_stop_keeps_workspace_lease(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_waiting_input_timeout_is_paused(service):
-    service.config.waiting_input_timeout_seconds = 0
-    workspace = service.create_workspace("timeout")
-    session = service.create_session(workspace.id)
-    conversation = await service.create_conversation(session.id, "task")
-    service.request_interaction(
-        conversation.id, {"interaction_id": "input-timeout", "kind": "question"}
-    )
-    assert await service.pause_expired_waiting() == 1
-    assert conversation.run.state == "PAUSED"
-    assert [event.type for event in service.events(conversation.id)][-2:] == [
-        "checkpoint.created",
-        "run.paused",
-    ]
-
-
-@pytest.mark.asyncio
 async def test_health_supervisor_requires_repeated_failures(tmp_path):
     class MissingDriver(DockerRuntimeDriver):
         async def inspect(self, container_id):

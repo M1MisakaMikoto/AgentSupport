@@ -445,7 +445,7 @@ async def test_acceptance_operation_uses_controlled_test_commands(monkeypatch, t
     postgres_call = next(
         call
         for call in runner.calls
-        if "tests/integration/persistence/test_postgres_distributed.py" in call["command"]
+        if "tests/integration/persistence/test_repository.py" in call["command"]
     )
     assert postgres_call["env"] == {
         "PYTHONUTF8": "1",
@@ -702,7 +702,7 @@ def _fake_agentsupport_app() -> FastAPI:
     async def ready():
         return {
             "status": "ready",
-            "execution_mode": "distributed",
+            "execution_mode": "temporal",
             "persistence_mode": "postgres",
             "instance_id": instance,
         }

@@ -42,7 +42,6 @@ def test_settings_expose_retention_windows(tmp_path):
     settings = Settings(workspace_root=tmp_path)
     assert settings.retention_idempotency_hours == 24
     assert settings.retention_unreferenced_checkpoints_hours == 24
-    assert settings.retention_terminal_jobs_days == 30
     assert settings.retention_terminal_events_days == 90
 
 

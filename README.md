@@ -261,7 +261,7 @@ $env:TRAE_API_KEY="<api-key>"
 | 变量 | 用途 |
 | --- | --- |
 | `AGENTSUPPORT_PERSISTENCE_MODE` | `memory` 或 `postgres` 持久化 |
-| `AGENTSUPPORT_EXECUTION_MODE` | `inline`、`distributed` 或 `temporal` 执行 |
+| `AGENTSUPPORT_EXECUTION_MODE` | `inline` 或 `temporal` 执行（`distributed` 已退役） |
 | `AGENTSUPPORT_DATABASE_URL` | SQLAlchemy PostgreSQL URL |
 | `AGENTSUPPORT_REDIS_URL` | 可选的 Redis 事件通知 URL |
 | `AGENTSUPPORT_TEMPORAL_HOST` | Temporal 服务地址（temporal 模式） |
@@ -278,10 +278,10 @@ $env:TRAE_API_KEY="<api-key>"
 | `TRAE_PROVIDER` | 模型提供方实现 |
 | `TRAE_MODEL`、`TRAE_MODEL_BASE_URL`、`TRAE_API_KEY` | Runner 模型配置 |
 
-`temporal` 执行模式是阶段 0/1 的原型形态：每个 run 由一个
+`temporal` 执行模式：每个 run 由一个
 `RunSessionWorkflow` 驱动（workflow_id = run_id），Signal 代替命令队列，
-事件历史承担检查点职责；暂停/恢复、取消、幂等、崩溃恢复语义与自研
-`distributed` 模式等价且恢复粒度更细。启动方式见
+事件历史承担检查点职责；暂停/恢复、取消、幂等、崩溃恢复由 Temporal 原生
+承担，恢复粒度更细。启动方式见
 `docs/migration/v0.2-to-v0.3.md`，设计决策见 `docs/adr/003-temporal-execution.md`。
 | `SESSION_RUNNER_TRAE_PROMPT_FILE` | 可选的 Trae 系统提示词文件路径；未配置时使用内置提示词 |
 

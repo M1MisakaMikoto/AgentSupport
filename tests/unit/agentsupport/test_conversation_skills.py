@@ -59,7 +59,7 @@ async def test_conversation_skills_persist_and_round_trip(tmp_path):
         Settings(
             database_url=f"sqlite:///{tmp_path / 'conversation.db'}",
             persistence_mode="postgres",
-            execution_mode="distributed",
+            execution_mode="inline",
             workspace_root=tmp_path / "workspaces",
             skills_root=tmp_path / "skills",
         )

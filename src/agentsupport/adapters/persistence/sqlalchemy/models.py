@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
-    BigInteger,
     Boolean,
     DateTime,
     Integer,
@@ -136,48 +135,6 @@ class WorkspaceWriteLeaseRow(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class ExecutionJobRow(Base):
-    __tablename__ = "execution_jobs"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    run_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
-    conversation_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
-    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    workspace_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    claimed_by: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    claim_token: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
-    last_error: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    state_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class RuntimeSlotRow(Base):
-    __tablename__ = "runtime_slots"
-    slot_no: Mapped[int] = mapped_column(Integer, primary_key=True)
-    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, unique=True)
-    claim_token: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class RunnerEndpointRow(Base):
-    __tablename__ = "runner_endpoints"
-    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    runtime_id: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)
-    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
-    lease_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    owner_instance_id: Mapped[str] = mapped_column(String(160), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    last_runner_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class RunnerRegistrationRow(Base):
     __tablename__ = "runner_registrations"
     runner_id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -190,20 +147,6 @@ class RunnerRegistrationRow(Base):
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     labels: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, nullable=False, default=dict)
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class RunCommandRow(Base):
-    __tablename__ = "run_commands"
-    __table_args__ = (UniqueConstraint("run_id", "idempotency_key"),)
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    type: Mapped[str] = mapped_column(String(32), nullable=False)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    claimed_by: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

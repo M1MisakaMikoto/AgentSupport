@@ -50,7 +50,6 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
         async def pause_worker() -> None:
             while True:
                 await asyncio.sleep(selected_service.config.pause_worker_interval_seconds)
-                await selected_service.pause_expired_waiting()
                 selected_service.prune_retained_state()
                 selected_service.prune_stale_runners()
 

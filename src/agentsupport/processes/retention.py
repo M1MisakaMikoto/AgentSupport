@@ -28,7 +28,7 @@ class RetentionCleaner:
             idempotency_hours=self.config.retention_idempotency_hours,
             unreferenced_checkpoints_hours=self.config.retention_unreferenced_checkpoints_hours,
             published_outbox_days=self.config.retention_published_outbox_days,
-            terminal_jobs_days=self.config.retention_terminal_jobs_days,
+            lease_retention_days=self.config.retention_lease_days,
             terminal_events_days=self.config.retention_terminal_events_days,
         )
 

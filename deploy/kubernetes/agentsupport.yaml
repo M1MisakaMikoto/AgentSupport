@@ -36,7 +36,10 @@ metadata:
 data:
   AGENTSUPPORT_PERSISTENCE_MODE: postgres
   AGENTSUPPORT_AUTO_CREATE_SCHEMA: "false"
-  AGENTSUPPORT_EXECUTION_MODE: distributed
+  AGENTSUPPORT_EXECUTION_MODE: temporal
+  AGENTSUPPORT_TEMPORAL_HOST: temporal:7233
+  AGENTSUPPORT_TEMPORAL_NAMESPACE: default
+  AGENTSUPPORT_TEMPORAL_TASK_QUEUE: agentsupport
   AGENTSUPPORT_RUNTIME_DRIVER: kubernetes
   AGENTSUPPORT_KUBERNETES_NAMESPACE: agentsupport
   AGENTSUPPORT_RUNNER_IMAGE: agentsupport-runner:dev
@@ -112,32 +115,6 @@ metadata:
 spec:
   selector: {app: agentsupport-api}
   ports: [{name: http, port: 80, targetPort: http}]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: agentsupport-worker
-  namespace: agentsupport
-spec:
-  replicas: 2
-  selector:
-    matchLabels: {app: agentsupport-worker}
-  template:
-    metadata:
-      labels: {app: agentsupport-worker}
-    spec:
-      serviceAccountName: agentsupport-worker
-      containers:
-        - name: worker
-          image: agentsupport-api:latest
-          command: ["python", "-m", "agentsupport.worker"]
-          envFrom:
-            - configMapRef: {name: agentsupport-config}
-            - secretRef: {name: agentsupport-secrets}
-          resources:
-            requests: {cpu: 200m, memory: 256Mi}
-            limits: {cpu: "2", memory: 2Gi}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:

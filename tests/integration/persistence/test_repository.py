@@ -157,7 +157,6 @@ def test_retention_cleanup_deletes_only_transient_rows(tmp_path):
         idempotency_hours=24,
         unreferenced_checkpoints_hours=24,
         published_outbox_days=1,
-        terminal_jobs_days=30,
         terminal_events_days=90,
     )
 
@@ -179,7 +178,7 @@ def test_retention_cleanup_zero_windows_disable_cleanup(tmp_path):
         idempotency_hours=0,
         unreferenced_checkpoints_hours=0,
         published_outbox_days=0,
-        terminal_jobs_days=0,
+        lease_retention_days=0,
         terminal_events_days=0,
     )
     assert removed == {}

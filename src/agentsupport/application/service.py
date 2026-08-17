@@ -104,8 +104,8 @@ class AgentSupportService:
         temporal: Any | None = None,
     ) -> None:
         self.config = config
-        self.distributed = config.execution_mode in {"distributed", "temporal"}
-        self.temporal_mode = config.execution_mode == "temporal"
+        self.distributed = config.execution_mode == "temporal"
+        self.temporal_mode = self.distributed
         self.temporal = temporal
         self.instance_id = config.instance_id or f"{socket.gethostname()}:{os.getpid()}"
         self.workspaces: dict[UUID, Workspace] = {}
@@ -828,21 +828,6 @@ class AgentSupportService:
             conversation = persisted
             await self._start_temporal_run(conversation, session)
             return conversation
-        if self.distributed:
-            assert self.repository is not None
-            if self.repository.queue_depth() >= self.config.max_queued_conversations:
-                raise ServiceError("RESOURCE_EXHAUSTED", "conversation queue is full", 429)
-            try:
-                persisted, _ = self.repository.create_conversation_and_enqueue(
-                    conversation,
-                    session.workspace_id,
-                    _hash_request(payload),
-                    idempotency_key,
-                    max_attempts=self.config.max_job_attempts,
-                )
-            except RepositoryConflict as exc:
-                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
-            return persisted
         if self.repository:
             try:
                 persisted = self.repository.create_conversation(
@@ -1218,20 +1203,6 @@ class AgentSupportService:
                 conversation.model_dump(mode="json"),
             )
             return conversation
-        if self.distributed:
-            assert self.repository is not None
-            try:
-                _, persisted = self.repository.enqueue_conversation_command(
-                    conversation_id,
-                    "input",
-                    {"interaction_id": interaction_id, "value": value},
-                    idempotency_key or uuid4().hex,
-                    expected_seq=expected_seq,
-                    interaction_id=interaction_id,
-                )
-            except RepositoryConflict as exc:
-                raise ServiceError("COMMAND_CONFLICT", str(exc), 409) from exc
-            return persisted
         existing = self._idempotent("input", idempotency_key, payload)
         if existing:
             return self._conversation(existing)
@@ -1351,20 +1322,6 @@ class AgentSupportService:
                 conversation.model_dump(mode="json"),
             )
             return conversation
-        if self.distributed:
-            assert self.repository is not None
-            try:
-                _, persisted = self.repository.enqueue_conversation_command(
-                    conversation_id,
-                    "approval",
-                    {"approval_id": approval_id, "decision": decision},
-                    idempotency_key or uuid4().hex,
-                    expected_seq=expected_seq,
-                    interaction_id=approval_id,
-                )
-            except RepositoryConflict as exc:
-                raise ServiceError("COMMAND_CONFLICT", str(exc), 409) from exc
-            return persisted
         existing = self._idempotent("approval", idempotency_key, payload)
         if existing:
             return self._conversation(existing)
@@ -1472,29 +1429,6 @@ class AgentSupportService:
         conversation.run.state = ExecutionState.PAUSED
         self._append(conversation, "run.paused", {"reason": reason})
         return conversation
-
-    async def pause_expired_waiting(self, now: datetime | None = None) -> int:
-        """Pause WAITING_INPUT conversations whose last interaction has expired."""
-
-        current_time = now or datetime.now(UTC)
-        paused = 0
-        for conversation in list(self.conversations.values()):
-            if conversation.run.state != ExecutionState.WAITING_INPUT:
-                continue
-            requested = [
-                event.occurred_at
-                for event in self.events_store.list(conversation.id)
-                if event.type == "interaction.requested"
-            ]
-            if not requested:
-                continue
-            if (
-                current_time - max(requested)
-            ).total_seconds() < self.config.waiting_input_timeout_seconds:
-                continue
-            await self.pause(conversation.id, reason="waiting_input_timeout")
-            paused += 1
-        return paused
 
     def prune_retained_state(self, now: datetime | None = None) -> dict[str, int]:
         """Drop transient in-memory records that outlived their retention windows.
@@ -1802,19 +1736,6 @@ class AgentSupportService:
                 conversation.model_dump(mode="json"),
             )
             return conversation
-        if self.distributed:
-            assert self.repository is not None
-            try:
-                _, persisted = self.repository.enqueue_conversation_command(
-                    conversation_id,
-                    "cancel",
-                    {},
-                    idempotency_key or uuid4().hex,
-                    expected_seq=expected_seq,
-                )
-            except RepositoryConflict as exc:
-                raise ServiceError("COMMAND_CONFLICT", str(exc), 409) from exc
-            return persisted
         existing = self._idempotent("cancel", idempotency_key, payload)
         if existing:
             return self._conversation(existing)
@@ -1971,8 +1892,6 @@ class AgentSupportService:
         }
 
     def metrics(self) -> dict[str, int]:
-        if self.repository:
-            return self.repository.coordination_metrics()
         return {
             "queue_ready": sum(
                 item.run.state == ExecutionState.QUEUED

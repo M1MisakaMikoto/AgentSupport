@@ -633,7 +633,7 @@ class DevConsoleController:
                         python,
                         "-m",
                         "pytest",
-                        "tests/integration/persistence/test_postgres_distributed.py",
+                        "tests/integration/persistence/test_repository.py",
                         "-q",
                         "-p",
                         "no:cacheprovider",

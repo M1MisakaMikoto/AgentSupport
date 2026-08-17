@@ -1,8 +1,8 @@
-"""Process entry point for the distributed worker."""
+"""Process entry point for the Temporal execution worker."""
 
-from .processes.worker import DistributedWorker, OwnedRun, main
+from .execution.temporal.worker import main
 
-__all__ = ["DistributedWorker", "OwnedRun", "main"]
+__all__ = ["main"]
 
 if __name__ == "__main__":
     main()

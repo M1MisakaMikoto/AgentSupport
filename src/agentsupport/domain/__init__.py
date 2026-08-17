@@ -1,15 +1,6 @@
 """AgentSupport domain models and coordination state."""
 
 from .conversation import Conversation
-from .coordination import (
-    CommandState,
-    ExecutionJob,
-    JobClaim,
-    JobState,
-    OutboxNotification,
-    RunCommand,
-    RunnerEndpoint,
-)
 from .execution import (
     TERMINAL_STATES,
     Checkpoint,
@@ -20,6 +11,7 @@ from .execution import (
 )
 from .mcp import SUPPORTED_TRANSPORTS, McpServer
 from .organization import Organization
+from .outbox import OutboxNotification
 from .project import (
     Preset,
     PresetDefinition,
@@ -40,13 +32,9 @@ __all__ = [
     "SUPPORTED_TRANSPORTS",
     "TERMINAL_STATES",
     "Checkpoint",
-    "CommandState",
     "ContextBundle",
     "Conversation",
-    "ExecutionJob",
     "ExecutionState",
-    "JobClaim",
-    "JobState",
     "McpServer",
     "Organization",
     "OutboxNotification",
@@ -58,9 +46,7 @@ __all__ = [
     "PresetToolPolicy",
     "Project",
     "ProjectConfig",
-    "RunCommand",
     "RunProjection",
-    "RunnerEndpoint",
     "Session",
     "User",
     "Workspace",
