@@ -613,6 +613,7 @@ def _fake_agentsupport_app() -> FastAPI:
     instance = "fake-instance-1"
     state = {
         "workspaces": {},
+        "workspace_versions": {},
         "sessions": {},
         "orgs": {},
         "users": {},
@@ -745,6 +746,86 @@ def _fake_agentsupport_app() -> FastAPI:
         }
         state["workspaces"][item["id"]] = item
         return item
+
+    @app.post("/workspaces/{workspace_id}/versions", status_code=201)
+    async def create_workspace_version(workspace_id: _UUID, request: Request):
+        workspace_id = str(workspace_id)
+        if workspace_id not in state["workspaces"]:
+            return error("WORKSPACE_NOT_FOUND", "workspace not found", 404)
+        raw = await request.body()
+        body = _json.loads(raw) if raw else None
+        value, _created = idempotent(
+            "workspace_version",
+            request.headers.get("Idempotency-Key"),
+            {"workspace_id": workspace_id, "name": (body or {}).get("name")},
+            lambda: _create_workspace_version(workspace_id, body),
+        )
+        return value
+
+    def _create_workspace_version(workspace_id: str, body: dict | None) -> dict:
+        item = {
+            "workspace_id": workspace_id,
+            "version_id": _uuid4().hex,
+            "name": (body or {}).get("name"),
+            "created_at": now,
+            "options": {},
+        }
+        state["workspace_versions"].setdefault(workspace_id, []).append(item)
+        return item
+
+    @app.get("/workspaces/{workspace_id}/versions")
+    async def list_workspace_versions(workspace_id: _UUID):
+        workspace_id = str(workspace_id)
+        if workspace_id not in state["workspaces"]:
+            return error("WORKSPACE_NOT_FOUND", "workspace not found", 404)
+        return state["workspace_versions"].get(workspace_id, [])
+
+    @app.post("/workspaces/{workspace_id}/versions/{version_id}/restore")
+    async def restore_workspace_version(
+        workspace_id: _UUID, version_id: str, request: Request
+    ):
+        workspace_id = str(workspace_id)
+        if workspace_id not in state["workspaces"]:
+            return error("WORKSPACE_NOT_FOUND", "workspace not found", 404)
+        versions = state["workspace_versions"].get(workspace_id, [])
+        if version_id not in {item["version_id"] for item in versions}:
+            return error("WORKSPACE_VERSION_NOT_FOUND", "version not found", 404)
+        key = request.headers.get("Idempotency-Key")
+        if key:
+            record = state["idempotency"].get(("workspace_restore", key))
+            digest = _json.dumps(
+                {"workspace_id": workspace_id, "version_id": version_id},
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            if record:
+                if record["digest"] != digest:
+                    return error(
+                        "IDEMPOTENCY_CONFLICT",
+                        "idempotency key was reused with a different request",
+                        409,
+                    )
+                return {
+                    "workspace_id": workspace_id,
+                    "version_id": version_id,
+                    "restored_at": now,
+                    "idempotent_replay": True,
+                }
+            state["idempotency"][("workspace_restore", key)] = {
+                "digest": digest,
+                "value": {
+                    "workspace_id": workspace_id,
+                    "version_id": version_id,
+                    "restored_at": now,
+                    "idempotent_replay": False,
+                },
+            }
+        return {
+            "workspace_id": workspace_id,
+            "version_id": version_id,
+            "restored_at": now,
+            "idempotent_replay": False,
+        }
 
     @app.post("/sessions", status_code=201)
     async def create_session(request: Request):
@@ -1097,7 +1178,7 @@ async def test_api_acceptance_operation_produces_structured_report(tmp_path):
     assert response.status_code == 202
     assert operation["status"] == "succeeded", operation.get("error")
     result = operation["result"]
-    assert result["summary"]["total"] == 14
+    assert result["summary"]["total"] == 15
     assert result["summary"]["failed"] == 0
     assert result["coverage"]["operations_covered"] == result["coverage"][
         "operations_total"

@@ -30,6 +30,9 @@ Swagger UI（`/docs`）顶部内嵌本参考全文（`docs/api/agentsupport-api.
 | `POST` | `/workspaces` | [4.1](#41-post-workspaces) |
 | `GET` | `/workspaces` | [4.2](#42-get-workspaces) |
 | `GET` | `/workspaces/{workspace_id}` | [4.3](#43-get-workspacesworkspace_id) |
+| `POST` | `/workspaces/{workspace_id}/versions` | [4.4](#44-post-workspacesworkspace_idversions) |
+| `GET` | `/workspaces/{workspace_id}/versions` | [4.5](#45-get-workspacesworkspace_idversions) |
+| `POST` | `/workspaces/{workspace_id}/versions/{version_id}/restore` | [4.6](#46-post-workspacesworkspace_idversionsversion_idrestore) |
 | `POST` | `/sessions` | [5.1](#51-post-sessions) |
 | `GET` | `/sessions` | [5.2](#52-get-sessions) |
 | `GET` | `/sessions/{session_id}` | [5.3](#53-get-sessionssession_id) |
@@ -190,6 +193,92 @@ Idempotency-Key: 6f9c2d3a-4b5c-4d6e-8f70-9a1b2c3d4e5f
 **成功响应 `200`**：与 [4.1](#41-post-workspaces) 响应体相同。
 
 **错误**：`404 WORKSPACE_NOT_FOUND`（不存在）。
+
+### 4.4 POST /workspaces/{workspace_id}/versions
+
+为 Workspace 创建版本快照（评估可复现性的基础：跑任务前先打基线，跑完可整体恢复）。
+快照保存在存储驱动自己的版本目录（本地为 `workspace_root/.versions/<workspace_id>/`），
+不会包含平台内部目录 `.agentsupport`。
+
+**路径参数**：`workspace_id`（UUID）。
+
+**请求体**（可选）：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `name` | string | 否 | 版本名称/备注（如评估数据集版本），1-120 字符 |
+
+**请求头**：`Idempotency-Key`（可选）。
+
+**成功响应 `201`**：
+
+```json
+{
+  "workspace_id": "d93d3e3f-a066-44c3-a5e0-5f2718fcfa6a",
+  "version_id": "9741211be4aa4135925b2c98f2c53c50",
+  "name": "baseline",
+  "created_at": "2026-08-18T08:00:00Z"
+}
+```
+
+**错误**：
+
+| 状态码 | 错误码 | 说明 |
+| --- | --- | --- |
+| `404` | `WORKSPACE_NOT_FOUND` | Workspace 不存在 |
+| `409` | `IDEMPOTENCY_CONFLICT` | 相同 Key 用于不同请求 |
+| `501` | `WORKSPACE_VERSIONING_UNSUPPORTED` | 当前存储驱动不支持快照（如 Kubernetes PVC 引用） |
+| `422` | — | 参数校验失败 |
+
+### 4.5 GET /workspaces/{workspace_id}/versions
+
+返回 Workspace 的版本快照列表，按创建时间升序。
+
+**路径参数**：`workspace_id`（UUID）。
+
+**成功响应 `200`**：
+
+```json
+[
+  {
+    "version_id": "9741211be4aa4135925b2c98f2c53c50",
+    "workspace_id": "d93d3e3f-a066-44c3-a5e0-5f2718fcfa6a",
+    "name": "baseline",
+    "created_at": "2026-08-18T08:00:00Z",
+    "options": {}
+  }
+]
+```
+
+**错误**：`404 WORKSPACE_NOT_FOUND`、`501 WORKSPACE_VERSIONING_UNSUPPORTED`。
+
+### 4.6 POST /workspaces/{workspace_id}/versions/{version_id}/restore
+
+把 Workspace 内容整体恢复为指定版本快照（先清空现有内容再回填）。Workspace 有活动
+Session（正在运行）时拒绝执行，返回 `409 WORKSPACE_BUSY`。
+
+**路径参数**：`workspace_id`（UUID）、`version_id`（快照 ID）。
+
+**请求头**：`Idempotency-Key`（可选；重放返回 `idempotent_replay: true` 且不重复执行）。
+
+**成功响应 `200`**：
+
+```json
+{
+  "workspace_id": "d93d3e3f-a066-44c3-a5e0-5f2718fcfa6a",
+  "version_id": "9741211be4aa4135925b2c98f2c53c50",
+  "restored_at": "2026-08-18T09:00:00Z",
+  "idempotent_replay": false
+}
+```
+
+**错误**：
+
+| 状态码 | 错误码 | 说明 |
+| --- | --- | --- |
+| `404` | `WORKSPACE_NOT_FOUND` / `WORKSPACE_VERSION_NOT_FOUND` | Workspace 或版本不存在 |
+| `409` | `WORKSPACE_BUSY` / `IDEMPOTENCY_CONFLICT` | Workspace 有活动运行 / Key 冲突 |
+| `501` | `WORKSPACE_VERSIONING_UNSUPPORTED` | 当前存储驱动不支持快照 |
 
 ## 5. Session API
 

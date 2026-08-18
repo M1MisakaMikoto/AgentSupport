@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 示范 · 总览 / Agent 工作台 | 执行资源概览与标签模型；Workspace/Session 创建（带标签）、任务下发（可选 `skills` / `mcp_refs`）、SSE 事件轨道、input/approval/cancel | 主任务链（workspace/session/conversation + 标签） |
 | 部署 · 服务状态 | 健康端点 `/live` `/ready` `/metrics` `/cores` | 运维类路径 |
-| 部署 · API 契约验收 | 结构化断言运维、资源、事件、交互四类用例，含错误路径、幂等、乐观并发、SSE 断线续传；按 OpenAPI 输出操作覆盖率 | 30 个公共路径登记；skills 与 mcp-servers 由仓库契约套件覆盖 |
+| 部署 · API 契约验收 | 结构化断言运维、资源、事件、交互四类用例，含错误路径、幂等、乐观并发、SSE 断线续传；按 OpenAPI 输出操作覆盖率 | 33 个公共路径登记；skills 与 mcp-servers 由仓库契约套件覆盖 |
 | 部署 · API 参考 | 由运行时 OpenAPI 渲染参数表、请求体、响应与 cURL | 全部公共路径 |
 
 “API 契约验收”在控制台内通过真实 HTTP 请求对每个用例给出通过/失败、耗时与说明，并展示 OpenAPI
@@ -24,7 +24,7 @@
 一次完整 API 验收必须同时满足：
 
 1. 运行时 OpenAPI 中每个公开 operation 都被测试清单登记，新增或删除接口时覆盖门禁失败。
-2. 30 个 AgentSupport 公共路径都有正常、校验失败和相关业务错误断言。
+2. 33 个 AgentSupport 公共路径都有正常、校验失败和相关业务错误断言。
 3. 所有公共 `POST` 都验证幂等重放和 Key 冲突；三个交互接口验证 `expected_seq` 冲突。
 4. 普通响应、统一错误响应、关联 ID、实例 ID、状态码和 Content-Type 都符合契约。
 5. SSE 验证历史重放、排他游标、顺序、去重和断线续传。
@@ -187,7 +187,7 @@ Compose 黑盒套件全部实现前，结果只能标记为“回归通过”，
 
 ## 8. 放行标准
 
-- OpenAPI operation 覆盖率为 100%，公共 30/30、Runner 9/9。
+- OpenAPI operation 覆盖率为 100%，公共 33/33、Runner 9/9。
 - 所有必测用例通过，无 xfail；环境不满足时只能显式 skip 并使完整验收不通过。
 - 语句覆盖率不是唯一目标；API 路由、错误码、状态迁移和事件类型矩阵不得缺项。
 - 并发/SSE 场景连续运行 3 次无不稳定失败。

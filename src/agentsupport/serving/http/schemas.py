@@ -41,6 +41,10 @@ class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
+class WorkspaceVersionCreate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
 class SessionCreate(BaseModel):
     workspace_id: UUID
     name: str | None = Field(default=None, min_length=1, max_length=120)

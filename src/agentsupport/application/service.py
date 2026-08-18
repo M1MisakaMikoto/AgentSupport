@@ -323,6 +323,161 @@ class AgentSupportService:
             return self.repository.list_workspaces()
         return sorted(self.workspaces.values(), key=lambda item: item.created_at)
 
+    # -- workspace version snapshots --------------------------------------
+    def _workspace_storage_driver(self) -> Any:
+        provider = self.workspace_provider
+        if not all(
+            hasattr(provider, name)
+            for name in ("create_version", "list_versions", "restore_version")
+        ):
+            return None
+        return provider
+
+    def _require_workspace_storage_driver(self) -> Any:
+        driver = self._workspace_storage_driver()
+        if driver is None:
+            raise ServiceError(
+                "WORKSPACE_VERSIONING_UNSUPPORTED",
+                "workspace storage does not support version snapshots",
+                501,
+            )
+        return driver
+
+    @staticmethod
+    def _find_workspace_version(
+        driver: Any, workspace_id: UUID, version_id: str
+    ) -> dict[str, Any] | None:
+        normalized = version_id.replace("-", "")
+        for entry in driver.list_versions(workspace_id):
+            if str(entry.get("version_id")).replace("-", "") == normalized:
+                return entry
+        return None
+
+    def create_workspace_version(
+        self,
+        workspace_id: UUID,
+        *,
+        name: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        workspace = self.get_workspace(workspace_id)
+        driver = self._require_workspace_storage_driver()
+        payload = {"workspace_id": str(workspace_id), "name": name}
+        existing = self._idempotent("workspace_version", idempotency_key, payload)
+        if existing:
+            version = self._find_workspace_version(driver, workspace_id, str(existing))
+            if version is not None:
+                return version
+        if self.repository and idempotency_key:
+            try:
+                existing = self.repository.find_idempotent(
+                    "workspace_version", idempotency_key, _hash_request(payload)
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            if existing:
+                version = self._find_workspace_version(driver, workspace_id, str(existing))
+                if version is not None:
+                    self._remember("workspace_version", idempotency_key, payload, existing)
+                    return version
+        version_id = driver.create_version(workspace_id, name=name)
+        response = {
+            "workspace_id": str(workspace.id),
+            "version_id": version_id,
+            "name": name,
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        self._remember_persisted(
+            "workspace_version",
+            idempotency_key,
+            payload,
+            UUID(version_id),
+            response,
+        )
+        return response
+
+    def list_workspace_versions(self, workspace_id: UUID) -> list[dict[str, Any]]:
+        self.get_workspace(workspace_id)
+        driver = self._require_workspace_storage_driver()
+        return driver.list_versions(workspace_id)
+
+    def _ensure_workspace_idle(self, workspace_id: UUID) -> None:
+        lease_holder = self.workspace_leases.get(workspace_id)
+        if lease_holder is not None:
+            raise ServiceError(
+                "WORKSPACE_BUSY",
+                "workspace has an active session; restore is not allowed while a run is in flight",
+                409,
+            )
+        if self.repository:
+            sessions = self.repository.list_sessions()
+            if any(
+                session.workspace_id == workspace_id and session.active_container_id
+                for session in sessions
+            ):
+                raise ServiceError(
+                    "WORKSPACE_BUSY",
+                    "workspace has an active session; restore is not allowed while a run is in flight",
+                    409,
+                )
+
+    def restore_workspace_version(
+        self,
+        workspace_id: UUID,
+        version_id: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        workspace = self.get_workspace(workspace_id)
+        driver = self._require_workspace_storage_driver()
+        payload = {"workspace_id": str(workspace_id), "version_id": version_id}
+        existing = self._idempotent("workspace_version_restore", idempotency_key, payload)
+        if existing:
+            return {
+                "workspace_id": str(workspace.id),
+                "version_id": version_id,
+                "restored_at": datetime.now(UTC).isoformat(),
+                "idempotent_replay": True,
+            }
+        if self.repository and idempotency_key:
+            try:
+                existing = self.repository.find_idempotent(
+                    "workspace_version_restore", idempotency_key, _hash_request(payload)
+                )
+            except RepositoryConflict as exc:
+                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+            if existing:
+                self._remember(
+                    "workspace_version_restore", idempotency_key, payload, workspace.id
+                )
+                return {
+                    "workspace_id": str(workspace.id),
+                    "version_id": version_id,
+                    "restored_at": datetime.now(UTC).isoformat(),
+                    "idempotent_replay": True,
+                }
+        self._ensure_workspace_idle(workspace_id)
+        try:
+            driver.restore_version(workspace_id, version_id)
+        except FileNotFoundError as exc:
+            raise ServiceError(
+                "WORKSPACE_VERSION_NOT_FOUND", "workspace version does not exist", 404
+            ) from exc
+        response = {
+            "workspace_id": str(workspace.id),
+            "version_id": version_id,
+            "restored_at": datetime.now(UTC).isoformat(),
+            "idempotent_replay": False,
+        }
+        self._remember_persisted(
+            "workspace_version_restore",
+            idempotency_key,
+            payload,
+            workspace.id,
+            response,
+        )
+        return response
+
     def _remember(
         self, scope: str, key: str | None, payload: dict[str, Any], resource_id: UUID
     ) -> None:

@@ -13,7 +13,10 @@ from ..adapters.runtime import (
     default_session_container_env,
 )
 from ..adapters.skills import LocalSkillProvider
-from ..adapters.workspace import KubernetesWorkspaceProvider, LocalWorkspaceProvider
+from ..adapters.workspace import (
+    KubernetesWorkspaceProvider,
+    LocalWorkspaceStorageDriver,
+)
 from ..application.ports import CoreRuntime, RunnerRegistry, RuntimeDriver
 from ..application.runner_registry import InMemoryRunnerRegistry
 from ..application.service import AgentSupportService
@@ -67,7 +70,7 @@ def build_runner_registry(config: Settings, repository: PostgresRepository | Non
 def build_workspace_provider(config: Settings) -> Any:
     if config.runtime_driver == "kubernetes":
         return KubernetesWorkspaceProvider()
-    return LocalWorkspaceProvider(config.workspace_root)
+    return LocalWorkspaceStorageDriver(config.workspace_root)
 
 
 def build_skill_provider(config: Settings) -> LocalSkillProvider:

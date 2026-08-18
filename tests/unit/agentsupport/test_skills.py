@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from agentsupport.config import Settings
@@ -40,12 +42,21 @@ async def test_session_runtime_receives_only_authorized_skill_mounts(tmp_path):
     assert inspection["read_only_mounts"] == [(str(skill.resolve()), "/opt/agent-skills/review")]
 
 
-def test_local_workspace_storage_driver_reports_versioning_as_unimplemented(tmp_path):
+def test_local_workspace_storage_driver_creates_and_restores_versions(tmp_path):
     driver = LocalWorkspaceStorageDriver(tmp_path / "workspaces")
     workspace_id, workspace_path = driver.create("versioned")
+    root = Path(workspace_path)
+    (root / "file.txt").write_text("v1", encoding="utf-8")
 
     assert driver.path(workspace_id) == workspace_path
-    with pytest.raises(NotImplementedError, match="not implemented"):
-        driver.create_version(workspace_id)
-    with pytest.raises(NotImplementedError, match="not implemented"):
-        driver.restore_version(workspace_id, "version-1")
+    version_id = driver.create_version(workspace_id, name="baseline")
+    assert [item["version_id"] for item in driver.list_versions(workspace_id)] == [
+        version_id
+    ]
+
+    (root / "file.txt").write_text("v2", encoding="utf-8")
+    driver.restore_version(workspace_id, version_id)
+    assert (root / "file.txt").read_text(encoding="utf-8") == "v1"
+
+    with pytest.raises(FileNotFoundError):
+        driver.restore_version(workspace_id, "missing-version")

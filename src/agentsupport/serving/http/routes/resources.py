@@ -16,6 +16,7 @@ from ..schemas import (
     ConversationCreate,
     SessionCreate,
     WorkspaceCreate,
+    WorkspaceVersionCreate,
 )
 
 router = APIRouter()
@@ -63,6 +64,39 @@ async def list_workspaces(request: Request):
 @router.get("/workspaces/{workspace_id}")
 async def get_workspace(request: Request, workspace_id: UUID):
     return agentsupport_service(request).get_workspace(workspace_id).model_dump(mode="json")
+
+
+@router.post("/workspaces/{workspace_id}/versions", status_code=201)
+async def create_workspace_version(
+    request: Request,
+    workspace_id: UUID,
+    body: WorkspaceVersionCreate | None = None,
+    idempotency_key: str | None = Header(default=None),
+):
+    return agentsupport_service(request).create_workspace_version(
+        workspace_id,
+        name=body.name if body else None,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.get("/workspaces/{workspace_id}/versions")
+async def list_workspace_versions(request: Request, workspace_id: UUID):
+    return agentsupport_service(request).list_workspace_versions(workspace_id)
+
+
+@router.post("/workspaces/{workspace_id}/versions/{version_id}/restore")
+async def restore_workspace_version(
+    request: Request,
+    workspace_id: UUID,
+    version_id: str,
+    idempotency_key: str | None = Header(default=None),
+):
+    return agentsupport_service(request).restore_workspace_version(
+        workspace_id,
+        version_id,
+        idempotency_key=idempotency_key,
+    )
 
 
 @router.post("/sessions", status_code=201)

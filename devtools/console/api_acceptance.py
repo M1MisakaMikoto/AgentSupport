@@ -427,8 +427,71 @@ class ApiContractVerifier:
             ],
             emit=emit,
         )
+        await self._record(
+            "RS-04",
+            "Workspace 版本快照与恢复",
+            "POST",
+            "/workspaces/{workspace_id}/versions",
+            lambda: self._check_workspace_versions(include_negative),
+            operations=[
+                "POST /workspaces/{workspace_id}/versions",
+                "GET /workspaces/{workspace_id}/versions",
+                "POST /workspaces/{workspace_id}/versions/{version_id}/restore",
+            ],
+            emit=emit,
+        )
 
     # ------------------------------------------------------- conversations
+    async def _check_workspace_versions(self, include_negative: bool) -> str:
+        workspace_id = self._ctx["workspace_id"]
+        headers = {"Idempotency-Key": self._key("workspace-version")}
+        created = await self.client.post(
+            f"/workspaces/{workspace_id}/versions",
+            json={"name": "acceptance-baseline"},
+            headers=headers,
+        )
+        assert created.status_code == 201, (
+            f"expected 201, got {created.status_code}: {created.text}"
+        )
+        body = created.json()
+        version_id = body["version_id"]
+        assert body["workspace_id"] == workspace_id
+        assert body["name"] == "acceptance-baseline"
+
+        replay = await self.client.post(
+            f"/workspaces/{workspace_id}/versions",
+            json={"name": "acceptance-baseline"},
+            headers=headers,
+        )
+        assert replay.status_code == 201
+        assert replay.json()["version_id"] == version_id, "replay returned a new version"
+
+        listed = await self.client.get(f"/workspaces/{workspace_id}/versions")
+        assert listed.status_code == 200
+        assert [item["version_id"] for item in listed.json()] == [version_id]
+
+        restored = await self.client.post(
+            f"/workspaces/{workspace_id}/versions/{version_id}/restore",
+            headers={"Idempotency-Key": self._key("workspace-restore")},
+        )
+        assert restored.status_code == 200
+        assert restored.json()["idempotent_replay"] is False
+        replay_restore = await self.client.post(
+            f"/workspaces/{workspace_id}/versions/{version_id}/restore",
+            headers={"Idempotency-Key": self._key("workspace-restore")},
+        )
+        assert replay_restore.json()["idempotent_replay"] is True
+
+        notes = [f"version {version_id} created/listed/restored"]
+        if include_negative:
+            missing = await self.client.post(
+                f"/workspaces/{workspace_id}/versions/{uuid4().hex}/restore"
+            )
+            assert missing.status_code == 404
+            assert missing.json().get("code") == "WORKSPACE_VERSION_NOT_FOUND"
+            notes.append("unknown version 404")
+        return ", ".join(notes)
+
     async def _check_conversation(self) -> str:
         session_id = self._ctx["session_id"]
         task = f"api-acceptance-{self.suffix}: complete"
