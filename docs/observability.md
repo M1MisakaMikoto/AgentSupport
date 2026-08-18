@@ -31,7 +31,10 @@ AGENTSUPPORT_SERVICE_NAME=agentsupport
 - Run：`run_total{outcome}`、`run_duration_seconds{outcome}`、`queue_wait_seconds`
 - 自服务：`skill_uploads_total`、`runners_registered`、`runner_heartbeat_expired_total`
 
-Runner 指标（`session_runner_` 前缀）：`http_requests_total`、`mcp_connections_total{result}`。
+Runner 指标（`session_runner_` 前缀）：`http_requests_total`、`mcp_connections_total{result}`、
+`llm_tokens_total{kind}`（模型用量：`input_tokens` / `output_tokens` /
+`cache_creation_input_tokens` / `cache_read_input_tokens` / `reasoning_tokens`，随
+`run.completed` 事件中的 `result.usage` 一并上报）。
 
 ## 3. 告警与看板
 

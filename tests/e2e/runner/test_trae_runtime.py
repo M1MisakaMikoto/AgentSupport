@@ -236,6 +236,51 @@ async def test_real_mode_maps_agent_failure_to_run_failed(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_real_mode_attaches_model_usage_to_run_completed(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    class UsageAgent(FakeAgent):
+        async def run(self, task, extra_args):
+            self.trajectory.write_text(
+                json.dumps({"agent_steps": [{"step_number": 1}]}), encoding="utf-8"
+            )
+            return SimpleNamespace(
+                success=True,
+                final_result="used tokens",
+                steps=[1],
+                total_tokens=SimpleNamespace(
+                    input_tokens=10,
+                    output_tokens=5,
+                    cache_creation_input_tokens=2,
+                    cache_read_input_tokens=3,
+                    reasoning_tokens=1,
+                ),
+            )
+
+    app = create_runner_app(
+        runner_mode="trae",
+        trae_settings=settings(tmp_path),
+        trae_agent_factory=lambda runtime_settings, request, trajectory: UsageAgent(
+            workspace / "unused.txt", trajectory
+        ),
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://runner") as client:
+        response = await client.post("/runs", json=request_payload(workspace))
+
+    assert response.json()["status"] == "COMPLETED"
+    completed = [event for event in response.json()["events"] if event["type"] == "run.completed"]
+    assert len(completed) == 1
+    assert completed[0]["payload"]["result"]["usage"] == {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "cache_creation_input_tokens": 2,
+        "cache_read_input_tokens": 3,
+        "reasoning_tokens": 1,
+    }
+
+
+@pytest.mark.asyncio
 async def test_real_mode_resume_rebuilds_tool_batch_in_new_agent(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

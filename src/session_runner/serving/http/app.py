@@ -41,7 +41,12 @@ from ...application import RunRegistry
 from ...diagnostics import run_model_connectivity
 from ...domain import RunState
 from ...mcp_runtime import build_mcp_provider, build_mcp_server_configs
-from ...metrics import record_http, record_mcp_connection, render_metrics
+from ...metrics import (
+    record_http,
+    record_llm_usage,
+    record_mcp_connection,
+    render_metrics,
+)
 from ...observability import configure_logging, run_context, set_correlation_id
 from ...registration import (
     RunnerRegistrationClient,
@@ -220,6 +225,9 @@ def create_runner_app(
         else:
             state.status = "COMPLETED"
             state.pending_interaction = None
+            usage = result.get("usage") if isinstance(result, dict) else None
+            if usage:
+                record_llm_usage(usage)
             state.emit("run.completed", {"result": result})
         finally:
             state.status_changed.set()

@@ -197,6 +197,24 @@ def _trae_tool_result(
     )
 
 
+def _usage_payload(usage: Any) -> dict[str, int] | None:
+    """Normalize a Trae ``LLMUsage`` into the run event usage contract."""
+
+    if usage is None:
+        return None
+    return {
+        "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+        "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+        "cache_creation_input_tokens": int(
+            getattr(usage, "cache_creation_input_tokens", 0) or 0
+        ),
+        "cache_read_input_tokens": int(
+            getattr(usage, "cache_read_input_tokens", 0) or 0
+        ),
+        "reasoning_tokens": int(getattr(usage, "reasoning_tokens", 0) or 0),
+    }
+
+
 class TraeToolGatewayBridge:
     """Trae ToolExecutor wrapper that enforces AgentSupport batch authorization."""
 
@@ -416,6 +434,9 @@ class TraeExecutionAdapter:
             "content": execution.final_result,
             "steps": len(execution.steps),
         }
+        usage = _usage_payload(getattr(execution, "total_tokens", None))
+        if usage is not None:
+            result["usage"] = usage
         if execution.final_result:
             self.emit("message", {"content": execution.final_result})
         return result
@@ -483,12 +504,16 @@ class TraeExecutionAdapter:
             raise RuntimeError(step_error or execution.final_result or "Trae resume failed")
         if execution.final_result:
             self.emit("message", {"content": execution.final_result})
-        return {
+        result = {
             "status": "completed",
             "content": execution.final_result,
             "steps": len(execution.steps),
             "resumed": True,
         }
+        usage = _usage_payload(getattr(execution, "total_tokens", None))
+        if usage is not None:
+            result["usage"] = usage
+        return result
 
     async def _initialize_agent(self) -> None:
         self.settings.validate()
