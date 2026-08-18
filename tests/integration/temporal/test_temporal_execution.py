@@ -31,6 +31,7 @@ from agentsupport.domain import Checkpoint, ContextBundle, ExecutionState
 from agentsupport.execution.temporal.activities import (
     ExecutionContext,
     execute_run,
+    fail_run,
     resume_run,
     set_execution_context,
     start_runner,
@@ -182,7 +183,7 @@ async def env(tmp_path):
         client,
         task_queue=config.temporal_task_queue,
         workflows=[RunSessionWorkflow],
-        activities=[start_runner, execute_run, resume_run, stop_runner],
+        activities=[start_runner, execute_run, resume_run, stop_runner, fail_run],
     )
     worker_task = asyncio.create_task(worker.run())
     try:
@@ -348,6 +349,58 @@ async def test_activity_crash_retries_without_rerunning_completed_work(env, tmp_
     assert env.fake.run_calls == 2, "failed activity must be retried exactly once"
     events = env.repository.list_events(conversation.id)
     assert [event.type for event in events][-1] == "run.completed"
+
+
+async def test_retry_exhaustion_marks_run_failed(env, tmp_path):
+    """A permanently failing segment ends as run.failed, never stuck RUNNING."""
+
+    class AlwaysFailingRuntime:
+        async def run(self, request, event_sink):
+            raise RuntimeError("runner keeps crashing")
+
+        async def checkpoint(self, run_id, reason):
+            raise AssertionError("checkpoint must not be called on a failing run")
+
+        async def resume(self, *args, **kwargs):
+            raise AssertionError("resume must not be called on a failing run")
+
+        async def health(self, run_id=None):
+            return {"live": {"status": "ok"}}
+
+        async def model_connectivity(self):
+            return {}
+
+        async def accept_input(self, *args, **kwargs):
+            return {}
+
+        async def accept_approval(self, *args, **kwargs):
+            return {}
+
+        async def cancel(self, *args, **kwargs):
+            return {}
+
+    fake = AlwaysFailingRuntime()
+    context = ExecutionContext(
+        config=env.config,
+        repository=env.repository,
+        core_runtime=fake,
+    )
+    context.skill_provider = env.service.skill_provider
+    set_execution_context(context)
+    env.fake = fake
+
+    conversation = await _new_conversation(env, "always fail")
+    await _wait_state(env, conversation.id, ExecutionState.FAILED)
+
+    persisted = env.repository.get_conversation(conversation.id)
+    assert persisted is not None
+    assert persisted.run.error is not None
+    events = env.repository.list_events(conversation.id)
+    assert events[-1].type == "run.failed"
+    assert events[-1].payload["code"] == "WORKFLOW_FAILED"
+
+    status = await env.service.temporal.get_status(str(conversation.run.run_id))
+    assert status.get("status") == "failed"
 
 
 async def test_temporal_mode_http_api_contract(env):

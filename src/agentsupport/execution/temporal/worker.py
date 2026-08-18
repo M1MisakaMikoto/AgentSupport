@@ -14,7 +14,7 @@ from temporalio.worker import Worker
 
 from ...bootstrap.settings import settings
 from ...observability import logging as obs_logging
-from .activities import execute_run, resume_run, start_runner, stop_runner
+from .activities import execute_run, fail_run, resume_run, start_runner, stop_runner
 from .workflows import RunSessionWorkflow
 
 
@@ -31,7 +31,7 @@ async def main() -> None:
         client,
         task_queue=settings.temporal_task_queue,
         workflows=[RunSessionWorkflow],
-        activities=[start_runner, execute_run, resume_run, stop_runner],
+        activities=[start_runner, execute_run, resume_run, stop_runner, fail_run],
     )
     await worker.run()
 

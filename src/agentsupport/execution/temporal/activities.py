@@ -8,7 +8,10 @@ workflow event history takes over those responsibilities.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID, uuid4
 
 from temporalio import activity
@@ -26,6 +29,24 @@ from ...bootstrap.container import (
 )
 from ...bootstrap.settings import Settings, settings
 from ...domain import TERMINAL_STATES, Conversation, ExecutionState
+
+ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 10.0
+
+
+async def _heartbeat_until(stop: asyncio.Event, details: dict[str, Any]) -> None:
+    """Keep the Temporal activity alive and cancellation-responsive.
+
+    A long segment without heartbeats cannot be cancelled promptly and a dead
+    worker is only detected after ``heartbeat_timeout`` elapses.  This loop
+    emits periodic heartbeats for the whole segment.
+    """
+
+    while not stop.is_set():
+        activity.heartbeat(details)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=ACTIVITY_HEARTBEAT_INTERVAL_SECONDS)
+        except TimeoutError:
+            continue
 
 
 @dataclass
@@ -238,66 +259,120 @@ async def stop_runner(payload: dict) -> dict:
 async def execute_run(request: dict) -> dict:
     """First run segment: drive the runner until a gate or a terminal state."""
 
-    ctx = _get_context()
-    repository = ctx.repository
-    core_runtime = ctx.core_runtime
-    if repository is None or core_runtime is None:
-        raise RuntimeError("temporal mode requires a repository and core runtime")
-    conversation = repository.get_conversation(UUID(request["conversation_id"]))
-    session = repository.get_session(UUID(request["session_id"]))
-    workspace = repository.get_workspace(UUID(request["workspace_id"]))
-    if conversation is None or session is None or workspace is None:
-        raise RuntimeError("temporal run resources not found")
-    run_request = _build_run_request(request, conversation, session, workspace, ctx)
-    await core_runtime.run(run_request, _make_sink(repository, conversation))
-    return await _after_segment(repository, core_runtime, conversation)
+    stop = asyncio.Event()
+    heartbeat = asyncio.create_task(
+        _heartbeat_until(stop, {"run_id": request["run_id"], "phase": "execute_run"})
+    )
+    try:
+        ctx = _get_context()
+        repository = ctx.repository
+        core_runtime = ctx.core_runtime
+        if repository is None or core_runtime is None:
+            raise RuntimeError("temporal mode requires a repository and core runtime")
+        conversation = repository.get_conversation(UUID(request["conversation_id"]))
+        session = repository.get_session(UUID(request["session_id"]))
+        workspace = repository.get_workspace(UUID(request["workspace_id"]))
+        if conversation is None or session is None or workspace is None:
+            raise RuntimeError("temporal run resources not found")
+        run_request = _build_run_request(request, conversation, session, workspace, ctx)
+        await core_runtime.run(run_request, _make_sink(repository, conversation))
+        return await _after_segment(repository, core_runtime, conversation)
+    finally:
+        stop.set()
+        heartbeat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat
 
 
 @activity.defn
 async def resume_run(payload: dict) -> dict:
     """Resume a run segment from a human gate with the delivered decision."""
 
+    request = payload["request"]
+    stop = asyncio.Event()
+    heartbeat = asyncio.create_task(
+        _heartbeat_until(stop, {"run_id": request["run_id"], "phase": "resume_run"})
+    )
+    try:
+        ctx = _get_context()
+        repository = ctx.repository
+        core_runtime = ctx.core_runtime
+        if repository is None or core_runtime is None:
+            raise RuntimeError("temporal mode requires a repository and core runtime")
+        conversation = repository.get_conversation(UUID(request["conversation_id"]))
+        session = repository.get_session(UUID(request["session_id"]))
+        workspace = repository.get_workspace(UUID(request["workspace_id"]))
+        if conversation is None or session is None or workspace is None:
+            raise RuntimeError("temporal run resources not found")
+        checkpoint = repository.get_checkpoint(UUID(payload["checkpoint_id"]))
+        if checkpoint is None:
+            raise RuntimeError("checkpoint not found for resume")
+        if "input" in payload:
+            event_type = "interaction.input"
+            value = payload["input"]["value"]
+            decision = payload["input"]
+        else:
+            event_type = "approval.decided"
+            value = payload["approval"]["decision"]
+            decision = payload["approval"]
+        conversation.run.state = ExecutionState.RUNNING
+        decision_event = EventEnvelope(
+            event_id=uuid4(),
+            run_id=conversation.run.run_id,
+            seq=conversation.run.last_seq + 1,
+            type=event_type,
+            payload=decision,
+            source="agentsupport",
+        )
+        await _make_sink(repository, conversation)(decision_event)
+        await core_runtime.resume(
+            checkpoint,
+            value,
+            _make_sink(repository, conversation),
+            runtime_context={
+                "session_id": str(session.id),
+                "container_id": "temporal",
+                "fence_epoch": session.lease_epoch,
+                "correlation_id": str(uuid4()),
+            },
+        )
+        return await _after_segment(repository, core_runtime, conversation)
+    finally:
+        stop.set()
+        heartbeat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat
+
+
+@activity.defn
+async def fail_run(payload: dict) -> dict:
+    """Persist a terminal ``run.failed`` event when the workflow fails.
+
+    Called from the workflow after segment retries are exhausted so a dead
+    run never stays in ``RUNNING``/``STARTING`` forever in the control plane.
+    """
+
     ctx = _get_context()
     repository = ctx.repository
-    core_runtime = ctx.core_runtime
-    if repository is None or core_runtime is None:
-        raise RuntimeError("temporal mode requires a repository and core runtime")
+    if repository is None:
+        raise RuntimeError("temporal mode requires a repository")
     request = payload["request"]
+    error = payload.get("error") or {}
     conversation = repository.get_conversation(UUID(request["conversation_id"]))
-    session = repository.get_session(UUID(request["session_id"]))
-    workspace = repository.get_workspace(UUID(request["workspace_id"]))
-    if conversation is None or session is None or workspace is None:
-        raise RuntimeError("temporal run resources not found")
-    checkpoint = repository.get_checkpoint(UUID(payload["checkpoint_id"]))
-    if checkpoint is None:
-        raise RuntimeError("checkpoint not found for resume")
-    if "input" in payload:
-        event_type = "interaction.input"
-        value = payload["input"]["value"]
-        decision = payload["input"]
-    else:
-        event_type = "approval.decided"
-        value = payload["approval"]["decision"]
-        decision = payload["approval"]
-    conversation.run.state = ExecutionState.RUNNING
-    decision_event = EventEnvelope(
+    if conversation is None:
+        return {"status": "missing", "run_id": request["run_id"]}
+    if conversation.run.state in TERMINAL_STATES:
+        return {"status": "already_terminal", "run_id": request["run_id"]}
+    event = EventEnvelope(
         event_id=uuid4(),
         run_id=conversation.run.run_id,
         seq=conversation.run.last_seq + 1,
-        type=event_type,
-        payload=decision,
+        type="run.failed",
+        payload={
+            "code": str(error.get("code") or "WORKFLOW_FAILED"),
+            "message": str(error.get("message") or "workflow failed"),
+        },
         source="agentsupport",
     )
-    await _make_sink(repository, conversation)(decision_event)
-    await core_runtime.resume(
-        checkpoint,
-        value,
-        _make_sink(repository, conversation),
-        runtime_context={
-            "session_id": str(session.id),
-            "container_id": "temporal",
-            "fence_epoch": session.lease_epoch,
-            "correlation_id": str(uuid4()),
-        },
-    )
-    return await _after_segment(repository, core_runtime, conversation)
+    await _make_sink(repository, conversation)(event)
+    return {"status": "failed", "run_id": request["run_id"]}

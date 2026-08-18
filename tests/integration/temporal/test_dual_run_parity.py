@@ -27,6 +27,7 @@ from agentsupport.domain import ExecutionState
 from agentsupport.execution.temporal.activities import (
     ExecutionContext,
     execute_run,
+    fail_run,
     resume_run,
     set_execution_context,
     start_runner,
@@ -106,7 +107,7 @@ async def _new_layer(tmp_path, task: str) -> tuple[list[str], ExecutionState]:
         client,
         task_queue=config.temporal_task_queue,
         workflows=[RunSessionWorkflow],
-        activities=[start_runner, execute_run, resume_run, stop_runner],
+        activities=[start_runner, execute_run, resume_run, stop_runner, fail_run],
     )
     worker_task = asyncio.create_task(worker.run())
     try:
