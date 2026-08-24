@@ -39,7 +39,7 @@ class RedisEventNotifier:
         try:
             from redis.asyncio import Redis
         except ImportError as exc:  # pragma: no cover - dependency is deployment optional
-            raise RuntimeError("redis support requires the 'distributed' dependency extra") from exc
+            raise RuntimeError("redis support requires the 'postgres' dependency extra") from exc
         self._redis = Redis.from_url(url, decode_responses=True)
         self.prefix = prefix
 

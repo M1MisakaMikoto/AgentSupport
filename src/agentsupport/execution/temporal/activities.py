@@ -1,4 +1,4 @@
-"""Temporal activities: the durable counterpart of ``DistributedWorker``.
+"""Temporal activities: durable run steps executed by the Temporal worker.
 
 Each activity drives the real ``CoreRuntime`` (the session runner HTTP
 adapter) and persists conversation events/state through the repository.
@@ -136,7 +136,7 @@ def _build_run_request(
     workspace,
     ctx: ExecutionContext,
 ) -> dict:
-    """Build the runner request, mirroring ``DistributedWorker``."""
+    """Build the runner request, mirroring the inline execution path."""
 
     skills = request.get("skills") or []
     tool_policy = request.get("tool_policy") or {}

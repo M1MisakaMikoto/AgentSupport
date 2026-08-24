@@ -15,7 +15,7 @@ async def model_connectivity(request: Request):
     if service.core_runtime is None:
         raise ServiceError(
             "DIAGNOSTICS_UNAVAILABLE",
-            "runner diagnostics require a configured core runner (distributed mode)",
+            "runner diagnostics require a configured core runner (temporal mode)",
             503,
         )
     try:

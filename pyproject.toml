@@ -33,7 +33,7 @@ observability = [
   "opentelemetry-instrumentation-httpx>=0.49b0,<1",
   "opentelemetry-instrumentation-sqlalchemy>=0.49b0,<1",
 ]
-distributed = [
+postgres = [
   "alembic>=1.13,<2",
   "redis>=5,<6",
 ]

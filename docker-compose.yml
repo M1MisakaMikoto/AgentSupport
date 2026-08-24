@@ -74,7 +74,6 @@ services:
       AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
       AGENTSUPPORT_PERSISTENCE_MODE: postgres
       AGENTSUPPORT_AUTO_CREATE_SCHEMA: "false"
-      AGENTSUPPORT_EXECUTION_MODE: distributed
       AGENTSUPPORT_REDIS_URL: redis://redis:6379/0
     depends_on:
       db-migrate:
@@ -89,7 +88,6 @@ services:
       AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
       AGENTSUPPORT_PERSISTENCE_MODE: postgres
       AGENTSUPPORT_AUTO_CREATE_SCHEMA: "false"
-      AGENTSUPPORT_EXECUTION_MODE: distributed
       AGENTSUPPORT_RUNTIME_DRIVER: memory
     depends_on:
       db-migrate:
@@ -102,7 +100,6 @@ services:
       AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
       AGENTSUPPORT_PERSISTENCE_MODE: postgres
       AGENTSUPPORT_AUTO_CREATE_SCHEMA: "false"
-      AGENTSUPPORT_EXECUTION_MODE: distributed
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -158,8 +155,7 @@ services:
 
   # Temporal execution worker: drives run workflows for execution_mode=temporal.
   # The control-plane API runs in the same mode by setting
-  # AGENTSUPPORT_EXECUTION_MODE=temporal on the api service; the classic
-  # `worker` service keeps serving in-flight distributed-mode runs.
+  # AGENTSUPPORT_EXECUTION_MODE=temporal on the api service.
   temporal-worker:
     image: agentsupport-api
     command: python -m agentsupport.execution.temporal.worker

@@ -1,4 +1,4 @@
-"""Retired execution reconciler.
+"""Runner heartbeat reconciler.
 
 The Temporal execution backend owns run lifecycle, container orchestration,
 heartbeats and cleanup.  What remains here is runner self-registration
@@ -17,7 +17,7 @@ from ..observability import logging as obs_logging
 from ..observability import metrics as obs_metrics
 
 
-class DistributedReconciler:
+class RunnerHeartbeatReconciler:
     """Expire stale runner self-registrations; container lifecycle is Temporal's."""
 
     def __init__(
@@ -55,7 +55,7 @@ def main() -> None:
         level=settings.log_level,
         service_name=settings.service_name,
     )
-    asyncio.run(DistributedReconciler().serve_forever())
+    asyncio.run(RunnerHeartbeatReconciler().serve_forever())
 
 
 if __name__ == "__main__":
