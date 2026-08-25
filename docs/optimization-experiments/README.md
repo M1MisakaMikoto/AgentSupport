@@ -41,6 +41,8 @@ python devtools/experiments/exp2_event_load.py --phase before
 | exp18 | 内存事件流 lost-wakeup（通知丢失） | `stream()` 锁内重查后再等待 | [exp18](./exp18_event_store_lost_wakeup/) |
 | exp19 | SSE 忽略 `Last-Event-ID` 断线重放 | 流式路由支持 `Last-Event-ID` 续传 | [exp19](./exp19_sse_last_event_id/) |
 | exp20 | temporal 模式协调指标恒 0 | `metrics()` 从 PostgreSQL 真实统计 | [exp20](./exp20_metrics_temporal_truth/) |
+| exp21 | 列表接口默认无上限 | `AGENTSUPPORT_LIST_DEFAULT_LIMIT`（默认 100） | [exp21](./exp21_list_default_limit/) |
+| exp22 | 事件表无界增长、清理逐行 DELETE | `conversation_events` 按月分区 + 安全分区清理 | [exp22](./exp22_event_partitioning/) |
 
 ## 口径说明
 
