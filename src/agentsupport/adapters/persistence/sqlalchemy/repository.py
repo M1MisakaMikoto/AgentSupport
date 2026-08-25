@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,7 @@ from agent_runner_contracts.registration import RunnerRegistration
 
 from ....application.ports.persistence import RepositoryConflict, StaleClaim
 from ....domain import (
+    TERMINAL_STATES,
     Checkpoint,
     ContextBundle,
     Conversation,
@@ -62,6 +64,8 @@ class PostgresRepository:
     def __init__(self, database_url: str, *, create_schema: bool = False) -> None:
         self.engine = create_engine(database_url, pool_pre_ping=True)
         self.session_factory = sessionmaker(self.engine, expire_on_commit=False)
+        self._event_partitions: set[str] = set()
+        self._event_table_partitioned: bool | None = None
         if create_schema:
             Base.metadata.create_all(self.engine)
             if "active_run_id" not in {
@@ -577,6 +581,7 @@ class PostgresRepository:
                 raise RepositoryConflict(
                     f"event sequence conflict: expected {expected}, got {event.seq}"
                 )
+            self._ensure_event_partition(db, event.occurred_at)
             db.add(
                 ConversationEventRow(
                     id=str(event.event_id),
@@ -754,6 +759,7 @@ class PostgresRepository:
                 raise RepositoryConflict(
                     f"event sequence conflict: expected {expected}, got {event.seq}"
                 )
+            self._ensure_event_partition(db, event.occurred_at)
             db.add(self._checkpoint_row(checkpoint))
             db.add(
                 ConversationEventRow(
@@ -791,6 +797,119 @@ class PostgresRepository:
                     .where(ContainerLeaseRow.status == "ACTIVE")
                 ).scalar_one()
             )
+
+    def _is_partitioned_event_table(self, db: DbSession) -> bool:
+        if self._event_table_partitioned is None:
+            relkind = db.execute(
+                text(
+                    "SELECT relkind FROM pg_class "
+                    "WHERE relname = 'conversation_events'"
+                )
+            ).scalar_one_or_none()
+            self._event_table_partitioned = relkind == "p"
+        return self._event_table_partitioned
+
+    def _ensure_event_partition(self, db: DbSession, occurred_at: datetime) -> None:
+        """Create the month partition for a write, if the table is partitioned.
+
+        The partition-ensure is cached per month per process; DDL uses
+        ``IF NOT EXISTS`` so concurrent processes converge safely. Plain
+        (non-partitioned) tables and SQLite are untouched.
+        """
+
+        if self.engine.dialect.name != "postgresql":
+            return
+        if not self._is_partitioned_event_table(db):
+            return
+        month = occurred_at.astimezone(UTC).strftime("%Y%m")
+        if month in self._event_partitions:
+            return
+        month_start = occurred_at.astimezone(UTC).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        partition = f"conversation_events_{month}"
+        db.execute(
+            text(
+                f"CREATE TABLE IF NOT EXISTS {partition} PARTITION OF "
+                f"conversation_events FOR VALUES FROM "
+                f"('{month_start.isoformat()}') TO ('{month_end.isoformat()}')"
+            )
+        )
+        db.execute(
+            text(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS uq_{partition}_conversation_id_seq "
+                f"ON {partition} (conversation_id, seq)"
+            )
+        )
+        db.execute(
+            text(
+                f"CREATE INDEX IF NOT EXISTS ix_{partition}_conversation_id "
+                f"ON {partition} (conversation_id)"
+            )
+        )
+        self._event_partitions.add(month)
+
+    def drop_idle_event_partitions_before(
+        self,
+        *,
+        cutoff: datetime,
+        terminal_states: set[str] | None = None,
+    ) -> int:
+        """Drop whole month partitions that end before ``cutoff``.
+
+        A partition is only dropped when none of its events belongs to a
+        conversation that is still active (non-terminal state), preserving the
+        retention semantics of the row-level cleanup for long-running
+        conversations. Returns the number of partitions dropped.
+        """
+
+        if self.engine.dialect.name != "postgresql":
+            return 0
+        terminal = terminal_states or {
+            state.value for state in TERMINAL_STATES
+        }
+        placeholder = ", ".join(f":state_{i}" for i in range(len(terminal)))
+        params = {f"state_{i}": state for i, state in enumerate(terminal)}
+        params["cutoff"] = cutoff
+        dropped = 0
+        with self.transaction() as db:
+            rows = db.execute(
+                text(
+                    "SELECT c.relname, pg_get_expr(c.relpartbound, c.oid) AS bound "
+                    "FROM pg_class c "
+                    "JOIN pg_inherits i ON i.inhrelid = c.oid "
+                    "JOIN pg_class p ON p.oid = i.inhparent "
+                    "WHERE p.relname = 'conversation_events' AND c.relispartition"
+                )
+            ).fetchall()
+            bound_pattern = re.compile(r"TO \('([^']+)'\)")
+            for partition, bound in rows:
+                match = bound_pattern.search(bound or "")
+                if match is None:
+                    continue
+                try:
+                    upper = datetime.fromisoformat(match.group(1))
+                except ValueError:
+                    continue
+                if upper.tzinfo is None:
+                    upper = upper.replace(tzinfo=UTC)
+                if upper > cutoff:
+                    continue
+                active = db.execute(
+                    text(
+                        f"SELECT 1 FROM {partition} e "
+                        "JOIN conversations c ON c.id = e.conversation_id "
+                        f"WHERE c.execution_state NOT IN ({placeholder}) LIMIT 1"
+                    ),
+                    params,
+                ).scalar_one_or_none()
+                if active is not None:
+                    continue
+                db.execute(text(f"DROP TABLE {partition}"))
+                self._event_partitions.discard(partition.rsplit("_", 1)[-1])
+                dropped += 1
+        return dropped
 
     def conversation_state_counts(self) -> dict[str, int]:
         """Number of conversations per execution state (single query)."""
@@ -1210,6 +1329,14 @@ class PostgresRepository:
                 ).rowcount
             if terminal_events_days > 0:
                 cutoff = now - timedelta(days=terminal_events_days)
+                result["conversation_event_partitions"] = (
+                    self.drop_idle_event_partitions_before(
+                        cutoff=cutoff,
+                        terminal_states={
+                            state.value for state in TERMINAL_STATES
+                        },
+                    )
+                )
                 terminal_conversation_ids = select(ConversationRow.id).where(
                     ConversationRow.execution_state.in_(
                         [

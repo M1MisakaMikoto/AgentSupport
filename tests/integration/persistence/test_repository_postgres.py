@@ -282,3 +282,121 @@ def test_conversation_state_counts_and_oldest_queued(repository):
     oldest = repository.oldest_queued_created_at()
     assert oldest is not None
     assert (datetime.now(UTC) - oldest).total_seconds() > 3600
+
+
+def _is_partitioned(engine) -> bool:
+    with engine.connect() as conn:
+        relkind = conn.execute(
+            text(
+                "SELECT relkind FROM pg_class "
+                "WHERE relname = 'conversation_events'"
+            )
+        ).scalar_one_or_none()
+    return relkind == "p"
+
+
+def _partitions(engine) -> set[str]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT c.relname FROM pg_class c "
+                "JOIN pg_inherits i ON i.inhrelid = c.oid "
+                "JOIN pg_class p ON p.oid = i.inhparent "
+                "WHERE p.relname = 'conversation_events' AND c.relispartition"
+            )
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
+def test_append_creates_month_partition_when_partitioned(repository):
+    if not _is_partitioned(repository.engine):
+        pytest.skip("conversation_events is not partitioned in this database")
+    workspace = repository.create_workspace(
+        "part-ws", "/workspace/part-ws", _request_hash(), f"pw-{uuid4().hex}"
+    )
+    session = repository.create_session(workspace, _request_hash(), f"ps-{uuid4().hex}")
+    conversation = Conversation(session_id=session.id, task="partition")
+    persisted = repository.create_conversation(
+        conversation, _request_hash(), f"pc-{uuid4().hex}"
+    )
+    event = EventEnvelope(
+        run_id=persisted.run.run_id,
+        seq=persisted.run.last_seq + 1,
+        type="message",
+        payload={},
+        occurred_at=datetime(2030, 5, 15, tzinfo=UTC),
+    )
+    repository.append_event(persisted, event)
+    assert "conversation_events_203005" in _partitions(repository.engine)
+
+
+def test_append_creates_no_partition_on_plain_table(repository):
+    if _is_partitioned(repository.engine):
+        pytest.skip("conversation_events is partitioned in this database")
+    workspace = repository.create_workspace(
+        "plain-ws", "/workspace/plain-ws", _request_hash(), f"nw-{uuid4().hex}"
+    )
+    session = repository.create_session(workspace, _request_hash(), f"ns-{uuid4().hex}")
+    conversation = Conversation(session_id=session.id, task="plain")
+    persisted = repository.create_conversation(
+        conversation, _request_hash(), f"nc-{uuid4().hex}"
+    )
+    event = EventEnvelope(
+        run_id=persisted.run.run_id,
+        seq=persisted.run.last_seq + 1,
+        type="message",
+        payload={},
+        occurred_at=datetime(2030, 6, 15, tzinfo=UTC),
+    )
+    repository.append_event(persisted, event)
+    assert "conversation_events_203006" not in _partitions(repository.engine)
+
+
+def test_drop_idle_event_partitions_keeps_active_months(repository):
+    if not _is_partitioned(repository.engine):
+        pytest.skip("conversation_events is not partitioned in this database")
+    workspace = repository.create_workspace(
+        "drop-ws", "/workspace/drop-ws", _request_hash(), f"dw-{uuid4().hex}"
+    )
+    session = repository.create_session(workspace, _request_hash(), f"ds-{uuid4().hex}")
+
+    def conversation(task: str) -> Conversation:
+        return repository.create_conversation(
+            Conversation(session_id=session.id, task=task),
+            _request_hash(),
+            f"dc-{task}-{uuid4().hex}",
+        )
+
+    terminal = conversation("terminal")
+    active = conversation("active")
+    for conv, month, state in (
+        (terminal, 1, "COMPLETED"),
+        (active, 2, "RUNNING"),
+    ):
+        fresh = repository.get_conversation(conv.id)
+        assert fresh is not None
+        event = EventEnvelope(
+            run_id=fresh.run.run_id,
+            seq=fresh.run.last_seq + 1,
+            type="message",
+            payload={},
+            occurred_at=datetime(2024, month, 15, tzinfo=UTC),
+        )
+        repository.append_event(fresh, event)
+        with repository.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE conversations SET execution_state = :state WHERE id = :id"
+                ),
+                {"state": state, "id": str(fresh.id)},
+            )
+
+    dropped = repository.drop_idle_event_partitions_before(
+        cutoff=datetime(2024, 6, 1, tzinfo=UTC)
+    )
+    partitions = _partitions(repository.engine)
+    # 2024-01 holds only terminal events -> dropped; 2024-02 holds an active
+    # conversation's event -> kept.
+    assert "conversation_events_202401" not in partitions
+    assert "conversation_events_202402" in partitions
+    assert dropped >= 1
