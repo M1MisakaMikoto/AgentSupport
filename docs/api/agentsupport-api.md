@@ -60,6 +60,15 @@ Swagger UI（`/docs`）顶部内嵌本参考全文（`docs/api/agentsupport-api.
 | `GET` | `/metrics` | [11.3](#113-get-metrics) |
 | `GET` | `/cores` | [11.4](#114-get-cores) |
 | `GET` | `/diagnostics/model-connectivity` | [11.5](#115-get-diagnosticsmodel-connectivity) |
+| `POST` | `/eval/datasets` | [17.1](#171-post-evldatasets) |
+| `GET` | `/eval/datasets` | [17.2](#172-get-evldatasets) |
+| `GET` | `/eval/datasets/{dataset_id}` | [17.3](#173-get-evldatasetsdataset_id) |
+| `POST` | `/eval/datasets/{dataset_id}/cases` | [17.4](#174-post-evldatasetsdataset_idcases) |
+| `POST` | `/eval/runs` | [17.5](#175-post-evlruns) |
+| `GET` | `/eval/runs` | [17.6](#176-get-evlruns) |
+| `GET` | `/eval/runs/{run_id}` | [17.7](#177-get-evlrunsrun_id) |
+| `GET` | `/eval/runs/{run_id}/report` | [17.8](#178-get-evlrunsrun_idreport) |
+| `GET` | `/eval/runs/{run_id}/compare` | [17.9](#179-get-evlrunsrun_idcompare) |
 
 ### 2.2 内部 API（Runner 注册协议，不在 OpenAPI 中）
 
@@ -1124,3 +1133,81 @@ FastAPI 自身的请求校验错误使用标准 `422` 格式，不一定包含�
 - 按 tenant 的并发配额与运行时调整 `max_active_sessions`。
 
 迁移与升级说明见[上游迁移指南](../migration/v0.1-to-v0.2.md)。
+
+## 17. 评估 API（Phase 1）
+
+评估层把数据集 / 用例 / 运行作为平台资源管理，运行复用现有执行链路（Workspace
+快照克隆 + Session/Conversation），判定只基于 canonical 数据（跑后 Workspace 状态、
+平台事件流、归一化 usage + 最终结果）。设计见 ADR-004 与
+`docs/evaluation/verifier-contract.md`。
+
+### 17.1 POST /eval/datasets
+
+创建评估数据集（绑定 Workspace 与基线版本快照）。
+
+**请求体**：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `name` | string | 是 | 数据集名称，1-120 字符 |
+| `description` | string | 否 | 描述 |
+| `workspace_id` | UUID | 是 | 基线所在 Workspace |
+| `baseline_version` | string | 是 | 基线版本快照 ID |
+| `labels` | object | 否 | `tenant_id` / `user_id` / `project_id` 等标签 |
+
+**请求头**：`Idempotency-Key`（可选）。
+
+**成功响应 `201`**：数据集对象（含 `cases`）。
+
+**错误**：`404 WORKSPACE_VERSION_NOT_FOUND`（基线版本不存在）、
+`409 IDEMPOTENCY_CONFLICT`。
+
+### 17.2 GET /eval/datasets
+
+返回数据集列表，按创建时间升序。**Query**：`limit`（1-500，默认 100）、
+`offset`（默认 0）。
+
+### 17.3 GET /eval/datasets/{dataset_id}
+
+返回单个数据集（含用例）。**错误**：`404 EVAL_DATASET_NOT_FOUND`。
+
+### 17.4 POST /eval/datasets/{dataset_id}/cases
+
+向数据集追加用例。
+
+**请求体**：`task`（string，必填）、`tags`（string[]）、`verifiers`
+（`{type, params}` 数组；缺省为 `terminal_state` + `convergence`）。
+
+**成功响应 `201`**：用例对象。
+
+### 17.5 POST /eval/runs
+
+提交一次评估运行。执行在后台进行：请求立即返回 `202` 与 `status=running` 的
+运行对象；轮询 `GET /eval/runs/{run_id}`（17.7）直到 `completed` / `failed`。
+
+**请求体**：`dataset_id`（UUID）、`runner_fingerprint`（object，可选）。
+
+**请求头**：`Idempotency-Key`（可选）。
+
+**成功响应 `202`**：运行对象（`status` 为 `running`）。终态经 17.7 获取，含
+`summary`（total / passed / failed / error / pass_rate / usage）与 `results`。
+
+**错误**：`404 EVAL_DATASET_NOT_FOUND`、`409 IDEMPOTENCY_CONFLICT`。
+
+### 17.6 GET /eval/runs
+
+返回运行列表，按创建时间升序。**Query**：`limit`（1-500，默认 100）、
+`offset`（默认 0）。
+
+### 17.7 GET /eval/runs/{run_id}
+
+返回单个运行。**错误**：`404 EVAL_RUN_NOT_FOUND`。
+
+### 17.8 GET /eval/runs/{run_id}/report
+
+返回运行报告：`summary` + 逐用例 `cases`（verdict、score、reasons、metrics）。
+
+### 17.9 GET /eval/runs/{run_id}/compare?baseline={run_id}
+
+与基线运行逐用例对比。**响应**：`regressions` / `improvements` / `unchanged` 计数与
+`deltas` 明细；`same_fingerprint` 标注 runner 指纹是否一致（跨指纹仅结果正确性可比）。

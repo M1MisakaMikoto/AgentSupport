@@ -21,6 +21,9 @@ Key capabilities include:
 - [API full-test plan (Chinese)](docs/testing/api-full-test-plan.md)
 - [Observability](docs/observability.md)
 - [Directory architecture](docs/architecture/directory-structure.en.md)
+- [Evaluation layer (ADR-004)](docs/adr/004-evaluation-layer.md) ·
+  [Verifier contract](docs/evaluation/verifier-contract.md) ·
+  [Canonical event vocabulary](docs/evaluation/event-vocabulary.md)
 - [Architecture decision records](docs/adr/)
 - [简体中文 README](README.md)
 
@@ -240,7 +243,7 @@ other repository files.
 | Variable | Purpose |
 | --- | --- |
 | `AGENTSUPPORT_PERSISTENCE_MODE` | `memory` or `postgres` persistence |
-| `AGENTSUPPORT_EXECUTION_MODE` | `inline` or `temporal` execution (`distributed` is retired) |
+| `AGENTSUPPORT_EXECUTION_MODE` | `inline` or `temporal` execution |
 | `AGENTSUPPORT_DATABASE_URL` | SQLAlchemy PostgreSQL URL |
 | `AGENTSUPPORT_REDIS_URL` | Optional Redis event notification URL |
 | `AGENTSUPPORT_TEMPORAL_HOST` | Temporal server address (temporal mode) |
@@ -253,6 +256,7 @@ other repository files.
 | `AGENTSUPPORT_AUTO_CREATE_MISSING` | Missing-precondition auto-completion switch (default on) |
 | `AGENTSUPPORT_API_AUTH_MODE` | API auth mode; only `none` is supported |
 | `AGENTSUPPORT_RUNNER_TOKEN` | Runner self-registration shared token (empty disables registration) |
+| `AGENTSUPPORT_EVAL_CASE_TIMEOUT_SECONDS` | Evaluation per-case Temporal wait limit in seconds (default 1800; timeout cancels the workflow and records ERROR) |
 | `SESSION_RUNNER_MODE` | `deterministic` or `trae` Runner mode |
 | `TRAE_PROVIDER` | Model provider implementation |
 | `TRAE_MODEL`, `TRAE_MODEL_BASE_URL`, `TRAE_API_KEY` | Runner model configuration |

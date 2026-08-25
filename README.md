@@ -23,6 +23,9 @@ Workspace、Session 和 Conversation，而隔离的 Session Runner 负责执行�
 - [可观测性](docs/observability.md)
 - [API 全量测试设计](docs/testing/api-full-test-plan.md)
 - [目录架构](docs/architecture/directory-structure.md)
+- [评估层设计（ADR-004）](docs/adr/004-evaluation-layer.md) ·
+  [Verifier 契约](docs/evaluation/verifier-contract.md) ·
+  [canonical 事件词汇表](docs/evaluation/event-vocabulary.md)
 - [架构决策记录（ADR）](docs/adr/)
 
 英文版本：
@@ -261,7 +264,7 @@ $env:TRAE_API_KEY="<api-key>"
 | 变量 | 用途 |
 | --- | --- |
 | `AGENTSUPPORT_PERSISTENCE_MODE` | `memory` 或 `postgres` 持久化 |
-| `AGENTSUPPORT_EXECUTION_MODE` | `inline` 或 `temporal` 执行（`distributed` 已退役） |
+| `AGENTSUPPORT_EXECUTION_MODE` | `inline` 或 `temporal` 执行 |
 | `AGENTSUPPORT_DATABASE_URL` | SQLAlchemy PostgreSQL URL |
 | `AGENTSUPPORT_REDIS_URL` | 可选的 Redis 事件通知 URL |
 | `AGENTSUPPORT_TEMPORAL_HOST` | Temporal 服务地址（temporal 模式） |
@@ -274,6 +277,7 @@ $env:TRAE_API_KEY="<api-key>"
 | `AGENTSUPPORT_AUTO_CREATE_MISSING` | 缺失前置条件自动补全总开关（默认开启） |
 | `AGENTSUPPORT_API_AUTH_MODE` | API 鉴权模式，仅支持 `none` |
 | `AGENTSUPPORT_RUNNER_TOKEN` | Runner 自注册共享 token（留空关闭注册） |
+| `AGENTSUPPORT_EVAL_CASE_TIMEOUT_SECONDS` | 评估层单 case 走 Temporal 的最大等待秒数（默认 1800，超时取消并记为 ERROR） |
 | `SESSION_RUNNER_MODE` | `deterministic` 或 `trae` Runner 模式 |
 | `TRAE_PROVIDER` | 模型提供方实现 |
 | `TRAE_MODEL`、`TRAE_MODEL_BASE_URL`、`TRAE_API_KEY` | Runner 模型配置 |
@@ -284,6 +288,51 @@ $env:TRAE_API_KEY="<api-key>"
 承担，恢复粒度更细。启动方式见
 `docs/migration/v0.2-to-v0.3.md`，设计决策见 `docs/adr/003-temporal-execution.md`。
 | `SESSION_RUNNER_TRAE_PROMPT_FILE` | 可选的 Trae 系统提示词文件路径；未配置时使用内置提示词 |
+
+## 本地全栈运行（Docker Compose）
+
+以 Temporal + PostgreSQL + Redis 的全栈形态在本地跑通（`.env` 已按此配置）：
+
+```powershell
+# 一键启动（等价于下面两条命令）
+.\devtools\start-stack.ps1
+
+# 或手动：先起基础设施，再起 API 与 Worker
+docker compose up -d postgres redis temporal
+docker compose up -d temporal-worker api
+```
+
+- `db-migrate` 会在 API 启动前自动执行 `alembic upgrade head`；
+- 健康检查：`Invoke-RestMethod http://127.0.0.1:8000/ready` 返回 `status: ready`；
+- 关闭：`.\devtools\stop-stack.ps1`（或 `docker compose down`）。
+
+从零环境安装依赖：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,postgres,temporal,trae]"
+```
+
+评估层（`/eval/*`）在此形态下走真实 Temporal 执行路径；本地没有 Temporal 服务时，
+`tests/integration/evaluation/test_eval_temporal_integration.py` 会自动跳过。
+
+### 评估（/eval）
+
+最小闭环：创建数据集（绑定 Workspace 基线版本）→ 追加用例（含 verifier）→
+提交运行（`202` 后台执行）→ 轮询到终态 → 查看报告 / 对比。
+
+```text
+POST /eval/datasets                    {"name","workspace_id","baseline_version"}
+POST /eval/datasets/{id}/cases         {"task","verifiers":[{"type":"test_command","params":{"command":"..."}}]}
+POST /eval/runs                        {"dataset_id"}        # 202 + status=running
+GET  /eval/runs/{id}                                         # 轮询到 completed/failed
+GET  /eval/runs/{id}/report
+GET  /eval/runs/{id}/compare?baseline={baseline_run_id}
+```
+
+- verifier 类型与契约见 `docs/evaluation/verifier-contract.md`；
+- 单 case 走 Temporal 的等待上限由 `AGENTSUPPORT_EVAL_CASE_TIMEOUT_SECONDS` 控制
+  （默认 1800 秒，超时取消 workflow 并记为 ERROR）；
+- 完整接口说明见 `docs/api/agentsupport-api.md` 第 17 节。
 
 ## 数据库迁移
 
