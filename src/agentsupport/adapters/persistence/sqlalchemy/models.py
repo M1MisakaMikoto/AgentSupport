@@ -7,7 +7,9 @@ from uuid import uuid4
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
+    Float,
     Integer,
     String,
     Text,
@@ -182,6 +184,79 @@ class RuntimeOperationRow(Base):
     resource_id: Mapped[str] = mapped_column(String(160), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EvalDatasetRow(Base):
+    """Evaluation dataset: a reproducible case set pinned to a baseline."""
+
+    __tablename__ = "eval_datasets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    workspace_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    baseline_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    labels: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EvalCaseRow(Base):
+    __tablename__ = "eval_dataset_cases"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    task: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    verifiers: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EvalRunRow(Base):
+    __tablename__ = "eval_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','running','completed','failed')",
+            name="ck_eval_runs_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    runner_fingerprint: Mapped[dict[str, str]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class EvalRunCaseRow(Base):
+    __tablename__ = "eval_run_cases"
+    __table_args__ = (
+        CheckConstraint(
+            "verdict IN ('PASS','FAIL','ERROR','UNCERTAIN')",
+            name="ck_eval_run_cases_verdict",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    run_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    case_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    task: Mapped[str] = mapped_column(Text, nullable=False)
+    verdict: Mapped[str] = mapped_column(String(16), nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    verifier_results: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    outcome: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    usage: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    cost_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

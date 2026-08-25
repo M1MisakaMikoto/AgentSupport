@@ -142,6 +142,37 @@ class LocalWorkspaceStorageDriver(LocalWorkspaceProvider):
         _rmtree_force(workspace)
         shutil.copytree(source, workspace, ignore=_ignore_manifest, symlinks=True)
 
+    def create_from_version(
+        self, workspace_id: UUID, version_id: str
+    ) -> tuple[UUID, str]:
+        """Clone a fresh workspace seeded from an existing version snapshot.
+
+        The eval layer uses this to give every case an isolated, reproducible
+        baseline without mutating the original workspace.
+        """
+
+        source = self._versions_dir(workspace_id) / version_id
+        if not source.is_dir() or not (source / self.MANIFEST_NAME).is_file():
+            raise FileNotFoundError(f"workspace version does not exist: {version_id}")
+
+        def _ignore_manifest(_path: Path, names: list[str]) -> set[str]:
+            return {self.MANIFEST_NAME} if self.MANIFEST_NAME in names else set()
+
+        clone_id = uuid4()
+        target = self.root / str(clone_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, target, ignore=_ignore_manifest, symlinks=True)
+        (target / ".workspace").write_text("eval-clone\n", encoding="utf-8")
+        self._paths[clone_id] = target
+        return clone_id, str(target)
+
+    def delete_workspace(self, workspace_id: UUID) -> None:
+        """Remove a workspace directory (used by eval case cleanup)."""
+
+        path = Path(self.path(workspace_id))
+        self._paths.pop(workspace_id, None)
+        _rmtree_force(path)
+
 
 class KubernetesWorkspaceProvider:
     """Creates stable PVC references without writing API-local filesystem state."""
