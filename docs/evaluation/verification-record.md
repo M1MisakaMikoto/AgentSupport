@@ -284,6 +284,21 @@ http://127.0.0.1:8000/ready
   temporalio 下反序列化失败（`Unserializable type: object`），改为 `Any`；
   现有测试只覆盖 approval 信号，input 信号首次被端到端触发即暴露。
 
+### CI 门禁与覆盖率门禁（2026-08-25）
+
+- `.github/workflows/ci.yml`：
+  - `test` job：python 3.12，`pip install -e ".[dev]"` → `ruff check` →
+    `pytest tests/unit tests/contract tests/e2e/evaluation tests/e2e/devtools
+    --cov=agentsupport --cov-report=term` → `docker compose config --quiet`；
+  - `integration` job：`postgres:16` service + `temporalio/setup-temporal` →
+    `alembic upgrade head` → 门控集成测试
+    （`tests/integration/evaluation` + `test_repository_postgres.py`，
+    `RUN_POSTGRES_INTEGRATION_TESTS=1`）。
+- 覆盖率门禁：`[tool.coverage.report] fail_under = 60`；本地 CI 等价命令
+  实测 **65.75%（187 passed）通过门禁**；2 个测试冒烟 18.37% 被正确拒绝。
+- 集成命令本地实测：**8 passed**（5 temporal eval 含自动代答 + 3 postgres 门控）。
+- GitHub Actions 侧首次实跑为准（本机无法模拟 runner 环境）。
+
 ### 遗留说明
 
 - 冒烟用的 `agentsupport-api:latest` 镜像早于 evaluation 层构建，容器内 `/eval/*`
