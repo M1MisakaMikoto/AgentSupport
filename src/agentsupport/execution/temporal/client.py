@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowFailureError
 
 
 class TemporalRunCoordinator:
@@ -87,6 +87,31 @@ class TemporalRunCoordinator:
         client = await self._connect()
         handle = client.get_workflow_handle(run_id)
         return await handle.query("get_status")
+
+    async def wait_for_run(
+        self, run_id: str, timeout_seconds: float | None = None
+    ) -> dict:
+        """Await workflow completion and return its terminal state dict.
+
+        Raises ``asyncio.TimeoutError`` when the workflow does not finish
+        within ``timeout_seconds``; with ``None`` the workflow's own execution
+        timeout applies. Workflow-level failures are returned as a
+        ``{"status": "failed", ...}`` payload instead of being raised.
+        """
+
+        client = await self._connect()
+        handle = client.get_workflow_handle(run_id)
+        timeout = (
+            timedelta(seconds=timeout_seconds) if timeout_seconds is not None else None
+        )
+        try:
+            if timeout is None:
+                return await handle.result()
+            return await asyncio.wait_for(
+                handle.result(), timeout=timeout.total_seconds()
+            )
+        except WorkflowFailureError as exc:
+            return {"status": "failed", "error": str(exc)}
 
     async def close(self) -> None:
         if self._client is not None:
