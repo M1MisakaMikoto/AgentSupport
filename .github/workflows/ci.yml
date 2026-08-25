@@ -23,3 +23,39 @@ jobs:
           --cov=agentsupport --cov-report=term -q
       - name: Compose config
         run: docker compose config --quiet
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: agent
+          POSTGRES_DB: agentsupport
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent -d agentsupport"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: temporalio/setup-temporal@v1
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Migrate schema
+        run: >-
+          AGENTSUPPORT_DATABASE_URL="postgresql+psycopg://agent:agent@localhost:5432/agentsupport"
+          alembic upgrade head
+      - name: Integration tests
+        env:
+          AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@localhost:5432/agentsupport
+          RUN_POSTGRES_INTEGRATION_TESTS: "1"
+        run: >-
+          pytest tests/integration/evaluation
+          tests/integration/persistence/test_repository_postgres.py -q
