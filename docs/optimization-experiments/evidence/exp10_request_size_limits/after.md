@@ -1,7 +1,7 @@
 # Experiment `exp10_request_size_limits` — phase `after`
 
-- timestamp: `2026-08-25T05:40:20+00:00`
-- git head: `307c773`
+- timestamp: `2026-08-25T07:01:29+00:00`
+- git head: `2944874`
 - python: `3.12.6`
 - database: `postgresql+psycopg://agent:agent@localhost:5432/agentsupport_exp`
 - command: `python devtools/experiments/exp10_request_size_limits.py --phase after`

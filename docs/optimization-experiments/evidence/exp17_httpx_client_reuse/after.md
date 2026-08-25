@@ -1,7 +1,7 @@
 # Experiment `exp17_httpx_client_reuse` — phase `after`
 
-- timestamp: `2026-08-25T06:12:28+00:00`
-- git head: `307c773`
+- timestamp: `2026-08-25T07:02:23+00:00`
+- git head: `2944874`
 - python: `3.12.6`
 - database: `postgresql+psycopg://agent:agent@localhost:5432/agentsupport_exp`
 - command: `python devtools/experiments/exp17_httpx_client_reuse.py --phase after`

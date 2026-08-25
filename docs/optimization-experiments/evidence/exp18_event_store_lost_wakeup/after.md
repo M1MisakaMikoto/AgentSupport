@@ -1,7 +1,7 @@
 # Experiment `exp18_event_store_lost_wakeup` — phase `after`
 
-- timestamp: `2026-08-25T06:16:49+00:00`
-- git head: `307c773`
+- timestamp: `2026-08-25T07:02:25+00:00`
+- git head: `2944874`
 - python: `3.12.6`
 - database: `postgresql+psycopg://agent:agent@localhost:5432/agentsupport_exp`
 - command: `python devtools/experiments/exp18_event_store_lost_wakeup.py --phase after`

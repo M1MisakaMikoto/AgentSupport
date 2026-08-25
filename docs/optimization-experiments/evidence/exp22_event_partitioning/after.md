@@ -1,7 +1,7 @@
 # Experiment `exp22_event_partitioning` — phase `after`
 
-- timestamp: `2026-08-25T06:46:08+00:00`
-- git head: `fa45b14`
+- timestamp: `2026-08-25T07:07:11+00:00`
+- git head: `2944874`
 - python: `3.12.6`
 - database: `postgresql+psycopg://agent:agent@localhost:5432/agentsupport_exp`
 - command: `python devtools/experiments/exp22_event_partitioning.py --phase after`

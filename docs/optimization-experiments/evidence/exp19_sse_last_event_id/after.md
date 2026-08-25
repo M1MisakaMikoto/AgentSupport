@@ -1,7 +1,7 @@
 # Experiment `exp19_sse_last_event_id` — phase `after`
 
-- timestamp: `2026-08-25T06:27:59+00:00`
-- git head: `307c773`
+- timestamp: `2026-08-25T07:02:32+00:00`
+- git head: `2944874`
 - python: `3.12.6`
 - database: `postgresql+psycopg://agent:agent@localhost:5432/agentsupport_exp`
 - command: `python devtools/experiments/exp19_sse_last_event_id.py --phase after`

@@ -1,7 +1,7 @@
 # Experiment `exp20_metrics_temporal_truth` — phase `after`
 
-- timestamp: `2026-08-25T06:28:04+00:00`
-- git head: `307c773`
+- timestamp: `2026-08-25T07:02:39+00:00`
+- git head: `2944874`
 - python: `3.12.6`
 - database: `postgresql+psycopg://agent:agent@localhost:5432/agentsupport_exp`
 - command: `python devtools/experiments/exp20_metrics_temporal_truth.py --phase after`
@@ -19,7 +19,7 @@
 | agentsupport_jobs_running | 1.0 |
 | agentsupport_jobs_waiting | 1.0 |
 | agentsupport_active_runtimes | 1.0 |
-| agentsupport_queue_oldest_ready_seconds | 3600.074393 |
+| agentsupport_queue_oldest_ready_seconds | 3600.123146 |
 
 Before the fix the gauges read 0 because they are computed from the
 in-memory maps that are empty in temporal mode. After the fix the

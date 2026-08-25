@@ -1,7 +1,7 @@
 # Experiment `exp5_checkpoint_growth` — phase `after`
 
-- timestamp: `2026-08-25T05:16:24+00:00`
-- git head: `307c773`
+- timestamp: `2026-08-25T07:00:08+00:00`
+- git head: `2944874`
 - python: `3.12.6`
 - database: `postgresql+psycopg://agent:agent@localhost:5432/agentsupport_exp`
 - command: `python devtools/experiments/exp5_checkpoint_growth.py --phase after`

@@ -1,7 +1,7 @@
 # Experiment `exp3_publish_tasks` — phase `after`
 
-- timestamp: `2026-08-25T05:16:01+00:00`
-- git head: `307c773`
+- timestamp: `2026-08-25T06:59:56+00:00`
+- git head: `2944874`
 - python: `3.12.6`
 - database: `postgresql+psycopg://agent:agent@localhost:5432/agentsupport_exp`
 - command: `python devtools/experiments/exp3_publish_tasks.py --phase after`
