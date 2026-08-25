@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import tempfile
 from pathlib import Path
 
 import httpx
@@ -419,7 +420,10 @@ async def test_acceptance_operation_uses_controlled_test_commands(monkeypatch, t
     controller = DevConsoleController(project_root=tmp_path, command_runner=runner)
 
     async def live_acceptance(request, operation):
-        assert (tmp_path / ".pytest-debug").is_dir()
+        pytest_temp = (
+            Path(tempfile.gettempdir()) / "agentsupport-console" / f"console-{operation.id}"
+        )
+        assert pytest_temp.is_dir()
         return {"api_instances": ["api-a", "api-b"], "conversation_id": "conversation"}
 
     monkeypatch.setattr(controller, "_live_acceptance", live_acceptance)
@@ -438,19 +442,27 @@ async def test_acceptance_operation_uses_controlled_test_commands(monkeypatch, t
 
     commands = [call["command"] for call in runner.calls]
     assert operation.status == "succeeded"
-    assert not (tmp_path / ".pytest-debug").exists()
+    assert not (
+        Path(tempfile.gettempdir()) / "agentsupport-console" / f"console-{operation.id}"
+    ).exists()
     ruff_command = next(command for command in commands if command[2:4] == ["ruff", "check"])
     assert ruff_command[4:] == ["src", "tests", "alembic", "devtools"]
     assert sum("pytest" in command for command in commands) == 2
     postgres_call = next(
         call
         for call in runner.calls
-        if "tests/integration/persistence/test_repository.py" in call["command"]
+        if "tests/integration/persistence/test_repository_postgres.py" in call["command"]
     )
     assert postgres_call["env"] == {
         "PYTHONUTF8": "1",
-        "RUN_POSTGRES_DISTRIBUTED_TESTS": "1",
+        "RUN_POSTGRES_INTEGRATION_TESTS": "1",
     }
+    alembic_call = next(
+        call
+        for call in runner.calls
+        if call["command"][2:4] == ["alembic", "upgrade"]
+    )
+    assert runner.calls.index(alembic_call) < runner.calls.index(postgres_call)
     assert not any(re.search(r"[;&|]", argument) for command in commands for argument in command)
 
 

@@ -8,6 +8,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -451,7 +452,12 @@ class DevConsoleController:
             operation.status = "succeeded"
         finally:
             if operation.action == "accept":
-                shutil.rmtree(self.project_root / ".pytest-debug", ignore_errors=True)
+                shutil.rmtree(
+                    Path(tempfile.gettempdir())
+                    / "agentsupport-console"
+                    / f"console-{operation.id}",
+                    ignore_errors=True,
+                )
             operation.finished_at = _now()
             async with self._lock:
                 if self._active_id == operation.id:
@@ -584,8 +590,11 @@ class DevConsoleController:
     async def _accept(
         self, operation: ConsoleOperation, request: AcceptanceRequest
     ) -> None:
-        (self.project_root / ".pytest-debug").mkdir(parents=True, exist_ok=True)
-        temp_root = f".pytest-debug/console-{operation.id}"
+        pytest_root = (
+            Path(tempfile.gettempdir()) / "agentsupport-console" / f"console-{operation.id}"
+        )
+        pytest_root.mkdir(parents=True, exist_ok=True)
+        temp_root = str(pytest_root)
         python = sys.executable
         connection = await self._step(
             operation, "检查 Docker 与 Compose", self._verify_docker(operation, request)
@@ -618,7 +627,7 @@ class DevConsoleController:
                     "-q",
                     "-p",
                     "no:cacheprovider",
-                    f"--basetemp={temp_root}-fast",
+                    os.path.join(temp_root, "fast"),
                 ],
                 env={"PYTHONUTF8": "1"},
             ),
@@ -626,20 +635,29 @@ class DevConsoleController:
         if request.include_postgres:
             await self._step(
                 operation,
-                "运行 PostgreSQL 并发测试",
+                "迁移 PostgreSQL schema",
+                self._command(
+                    operation,
+                    [python, "-m", "alembic", "upgrade", "head"],
+                    env={"PYTHONUTF8": "1"},
+                ),
+            )
+            await self._step(
+                operation,
+                "运行 PostgreSQL 集成测试",
                 self._command(
                     operation,
                     [
                         python,
                         "-m",
                         "pytest",
-                        "tests/integration/persistence/test_repository.py",
+                        "tests/integration/persistence/test_repository_postgres.py",
                         "-q",
                         "-p",
                         "no:cacheprovider",
-                        f"--basetemp={temp_root}-postgres",
+                        os.path.join(temp_root, "postgres"),
                     ],
-                    env={"PYTHONUTF8": "1", "RUN_POSTGRES_DISTRIBUTED_TESTS": "1"},
+                    env={"PYTHONUTF8": "1", "RUN_POSTGRES_INTEGRATION_TESTS": "1"},
                 ),
             )
         live_result = await self._step(
