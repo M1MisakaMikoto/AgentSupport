@@ -23,6 +23,7 @@ dependencies = [
 dev = [
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.24,<1",
+  "pytest-cov>=5,<7",
   "ruff>=0.6,<1",
 ]
 observability = [
@@ -77,3 +78,10 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.coverage.run]
+source = ["agentsupport"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
