@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import timedelta
+from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -134,7 +135,7 @@ class RunSessionWorkflow:
 
     @workflow.signal
     async def submit_input(
-        self, interaction_id: str, value: object, idempotency_key: str | None = None
+        self, interaction_id: str, value: Any, idempotency_key: str | None = None
     ) -> None:
         if idempotency_key is not None:
             if idempotency_key in self._signal_keys:

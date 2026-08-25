@@ -22,6 +22,7 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport
 
+from agent_runner_contracts.events import EventEnvelope
 from agentsupport.adapters.notification import InMemoryEventStore, create_event_notifier
 from agentsupport.adapters.persistence.sqlalchemy.eval_store import SqlAlchemyEvalStore
 from agentsupport.adapters.persistence.sqlalchemy.repository import PostgresRepository
@@ -31,6 +32,7 @@ from agentsupport.adapters.workspace import LocalWorkspaceProvider
 from agentsupport.adapters.workspace.providers import LocalWorkspaceStorageDriver
 from agentsupport.application.service import AgentSupportService
 from agentsupport.bootstrap.settings import Settings
+from agentsupport.domain import Checkpoint, ContextBundle
 from agentsupport.evaluation import EvalService, VerifierConfig
 from agentsupport.execution.temporal.activities import (
     ExecutionContext,
@@ -58,6 +60,76 @@ class BlockingCoreRuntime:
 
     async def run(self, request: dict, event_sink) -> None:
         await asyncio.Event().wait()
+
+
+class GatedCoreRuntime:
+    """Runner that requests one interaction, then completes on resume."""
+
+    def __init__(self) -> None:
+        self.resume_calls = 0
+
+    @staticmethod
+    def _interaction(run_id: UUID) -> dict:
+        return {
+            "interaction_id": "eval-gate-1",
+            "kind": "question",
+            "pending_tool_calls": [],
+            "tool_policy": {"allowed_tools": ["bash"]},
+        }
+
+    async def run(self, request: dict, event_sink) -> dict:
+        run_id = UUID(request["run_id"])
+        await event_sink(
+            EventEnvelope(
+                run_id=run_id,
+                seq=0,
+                type="interaction.requested",
+                payload=self._interaction(run_id),
+                source="runner",
+            )
+        )
+        return {"status": "waiting"}
+
+    async def checkpoint(self, run_id, reason):
+        if not isinstance(run_id, UUID):
+            run_id = UUID(run_id)
+        return Checkpoint(
+            conversation_id=UUID("00000000-0000-0000-0000-000000000000"),
+            run_id=run_id,
+            last_event_seq=0,
+            context_bundle=ContextBundle(
+                task="task",
+                conversation_id=UUID("00000000-0000-0000-0000-000000000000"),
+                workspace_ref="/workspace",
+                recent_events=[],
+                tool_policy={"allowed_tools": ["bash"]},
+            ),
+            pending_interaction=self._interaction(run_id),
+            context_bundle_hash="test",
+            workspace_ref="/workspace",
+            workspace_write_lease_epoch=0,
+        )
+
+    async def resume(
+        self,
+        checkpoint,
+        value,
+        event_sink,
+        *,
+        command_id=None,
+        runtime_context=None,
+    ) -> dict:
+        self.resume_calls += 1
+        await event_sink(
+            EventEnvelope(
+                run_id=checkpoint.run_id,
+                seq=0,
+                type="run.completed",
+                payload={"result": {"status": "completed"}},
+                source="runner",
+            )
+        )
+        return {"status": "completed"}
 
 
 @pytest.fixture
@@ -244,3 +316,21 @@ async def test_temporal_eval_workflow_execution_timeout_is_error_not_stuck(env):
     result = run.results[0]
     assert result.verdict == "ERROR"
     assert "terminal conversation state" in result.verifier_results[0].reason
+
+
+@pytest.mark.asyncio
+async def test_temporal_eval_auto_answers_human_gate(env):
+    workspace_id, version_id = _seed(env)
+    dataset = _dataset(env, "temporal-auto-answer", workspace_id, version_id)
+
+    env.context.core_runtime = GatedCoreRuntime()
+    env.eval_service.auto_interaction = True
+    env.eval_service.auto_input = "continue"
+
+    run = await env.eval_service.run_dataset(dataset.id)
+
+    assert run.status == "completed"
+    result = run.results[0]
+    assert result.verdict == "PASS"
+    assert result.outcome is not None
+    assert result.outcome.terminal_state == "COMPLETED"

@@ -257,6 +257,9 @@ other repository files.
 | `AGENTSUPPORT_API_AUTH_MODE` | API auth mode; only `none` is supported |
 | `AGENTSUPPORT_RUNNER_TOKEN` | Runner self-registration shared token (empty disables registration) |
 | `AGENTSUPPORT_EVAL_CASE_TIMEOUT_SECONDS` | Evaluation per-case Temporal wait limit in seconds (default 1800; timeout cancels the workflow and records ERROR) |
+| `AGENTSUPPORT_EVAL_AUTO_INTERACTION` | Auto-answer evaluation human gates (default false; when enabled, waiting cases submit `EVAL_AUTO_INPUT`) |
+| `AGENTSUPPORT_EVAL_AUTO_INPUT` | Auto-answer input value (default `continue`) |
+| `AGENTSUPPORT_EVAL_AUTO_ANSWER_LIMIT` | Max auto-answers per case (default 10) |
 | `SESSION_RUNNER_MODE` | `deterministic` or `trae` Runner mode |
 | `TRAE_PROVIDER` | Model provider implementation |
 | `TRAE_MODEL`, `TRAE_MODEL_BASE_URL`, `TRAE_API_KEY` | Runner model configuration |

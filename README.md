@@ -278,6 +278,9 @@ $env:TRAE_API_KEY="<api-key>"
 | `AGENTSUPPORT_API_AUTH_MODE` | API 鉴权模式，仅支持 `none` |
 | `AGENTSUPPORT_RUNNER_TOKEN` | Runner 自注册共享 token（留空关闭注册） |
 | `AGENTSUPPORT_EVAL_CASE_TIMEOUT_SECONDS` | 评估层单 case 走 Temporal 的最大等待秒数（默认 1800，超时取消并记为 ERROR） |
+| `AGENTSUPPORT_EVAL_AUTO_INTERACTION` | 评估层自动代答 human gate（默认 false；开启后 waiting 的 case 自动提交 `EVAL_AUTO_INPUT`） |
+| `AGENTSUPPORT_EVAL_AUTO_INPUT` | 自动代答的输入值（默认 `continue`） |
+| `AGENTSUPPORT_EVAL_AUTO_ANSWER_LIMIT` | 单个 case 自动代答次数上限（默认 10） |
 | `SESSION_RUNNER_MODE` | `deterministic` 或 `trae` Runner 模式 |
 | `TRAE_PROVIDER` | 模型提供方实现 |
 | `TRAE_MODEL`、`TRAE_MODEL_BASE_URL`、`TRAE_API_KEY` | Runner 模型配置 |

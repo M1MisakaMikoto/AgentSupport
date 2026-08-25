@@ -27,6 +27,9 @@ def build_test_eval_service(config: Settings, **eval_kwargs: Any) -> EvalService
     """Build an eval service whose cases run on the deterministic runner."""
 
     eval_kwargs.setdefault("case_timeout_seconds", config.eval_case_timeout_seconds)
+    eval_kwargs.setdefault("auto_interaction", config.eval_auto_interaction)
+    eval_kwargs.setdefault("auto_input", config.eval_auto_input)
+    eval_kwargs.setdefault("auto_answer_limit", config.eval_auto_answer_limit)
     deps = build_agentsupport_dependencies(config)
     service = AgentSupportService(config, **deps)
     service.core_runtime = TraeCoreRunnerRuntime(

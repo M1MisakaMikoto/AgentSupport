@@ -264,6 +264,26 @@ http://127.0.0.1:8000/ready
   → failed + 原因码；completed 不受影响）。
 - 限制：假设单实例拥有 store；多实例部署需先引入 run 心跳/所有权再启用恢复。
 
+### human gate 自动代答（v2 落地，2026-08-25）
+
+- 配置：`eval_auto_interaction`（默认 false）、`eval_auto_input`（默认
+  `continue`）、`eval_auto_answer_limit`（默认 10），env 前缀
+  `AGENTSUPPORT_`；`build_eval_service` 透传。
+- 行为：`_wait_with_auto_input` 轮询 workflow `get_status` 与持久化
+  conversation：`waiting` 时读取 `pending_interaction.interaction_id` 自动
+  `submit_input`（同一 interaction 只代答一次，`eval-auto-{interaction_id}`
+  幂等 key，上限 `auto_answer_limit` 防多轮死循环）；conversation 到
+  terminal 或 workflow 查询失败时转 `wait_for_run` 收尾；整体仍受
+  `case_timeout_seconds` 约束（超时 cancel → ERROR）。
+- 单测（fake coordinator）：自动代答提交参数正确、同一 interaction 去重、
+  达到上限后停止代答、auto 模式超时仍 cancel → ERROR。
+- 集成（真实 Temporal + gated runner）：runner 请求 interaction → workflow
+  停 `waiting` → auto 代答 → resume → COMPLETED → verdict PASS
+  （`test_temporal_eval_auto_answers_human_gate`，7.58s）。
+- 过程中修复潜伏 bug：workflow `submit_input` 信号参数 `value: object` 在
+  temporalio 下反序列化失败（`Unserializable type: object`），改为 `Any`；
+  现有测试只覆盖 approval 信号，input 信号首次被端到端触发即暴露。
+
 ### 遗留说明
 
 - 冒烟用的 `agentsupport-api:latest` 镜像早于 evaluation 层构建，容器内 `/eval/*`

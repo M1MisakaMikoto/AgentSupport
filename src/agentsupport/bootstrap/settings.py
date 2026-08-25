@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     # Evaluation layer: per-case wait limit when a case runs through Temporal.
     # A case that outlives this window is cancelled and recorded as ERROR.
     eval_case_timeout_seconds: int = 1800
+    # Evaluation layer: auto-answer human gates. When enabled, a case whose
+    # workflow parks at a waiting gate submits eval_auto_input instead of
+    # timing out; eval_auto_answer_limit bounds repeated gates per case.
+    eval_auto_interaction: bool = False
+    eval_auto_input: str = "continue"
+    eval_auto_answer_limit: int = 10
     # Observability: structured logging, tracing and metrics.
     log_format: str = "console"
     log_level: str = "INFO"

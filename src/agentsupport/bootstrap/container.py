@@ -143,4 +143,7 @@ def build_eval_service(
         agentsupport=service,
         store=store,
         case_timeout_seconds=config.eval_case_timeout_seconds,
+        auto_interaction=config.eval_auto_interaction,
+        auto_input=config.eval_auto_input,
+        auto_answer_limit=config.eval_auto_answer_limit,
     )

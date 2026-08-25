@@ -64,12 +64,18 @@ class EvalService:
         store: EvalStore | None = None,
         case_timeout_seconds: float | None = None,
         case_concurrency: int = 4,
+        auto_interaction: bool = False,
+        auto_input: str = "continue",
+        auto_answer_limit: int = 10,
     ) -> None:
         self.workspace_driver = workspace_driver
         self.agentsupport = agentsupport
         self.store = store or InMemoryEvalStore()
         self.case_timeout_seconds = case_timeout_seconds
         self.case_concurrency = case_concurrency
+        self.auto_interaction = auto_interaction
+        self.auto_input = auto_input
+        self.auto_answer_limit = auto_answer_limit
         self._idempotency: dict[tuple[str, str], tuple[str, UUID]] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._recover_stale_runs()
@@ -433,14 +439,17 @@ class EvalService:
             raise ServiceError(
                 "TEMPORAL_UNAVAILABLE", "temporal coordinator is not configured", 503
             )
+        run_id = str(conversation.run.run_id)
         try:
-            result = await temporal.wait_for_run(
-                str(conversation.run.run_id),
-                timeout_seconds=self.case_timeout_seconds,
-            )
+            if self.auto_interaction:
+                result = await self._wait_with_auto_input(conversation, run_id)
+            else:
+                result = await temporal.wait_for_run(
+                    run_id, timeout_seconds=self.case_timeout_seconds
+                )
         except TimeoutError:
             with suppress(Exception):
-                await temporal.cancel(str(conversation.run.run_id))
+                await temporal.cancel(run_id)
             raise
         conversation = self.agentsupport.get_conversation(conversation.id)
         if conversation.run.state not in TERMINAL_STATES:
@@ -450,6 +459,62 @@ class EvalService:
                 502,
             )
         return conversation
+
+    async def _wait_with_auto_input(self, conversation: Conversation, run_id: str) -> dict:
+        """Wait for the workflow, auto-answering human gates with a fixed input.
+
+        Polls the workflow status and the persisted conversation projection:
+        a ``waiting`` gate is answered with ``auto_input`` (once per
+        interaction id, up to ``auto_answer_limit`` times), and a terminal
+        conversation state ends the wait.
+        """
+
+        temporal = self.agentsupport.temporal
+        assert temporal is not None
+        started = time.perf_counter()
+        answered: set[str] = set()
+        while True:
+            elapsed = time.perf_counter() - started
+            if (
+                self.case_timeout_seconds is not None
+                and elapsed >= self.case_timeout_seconds
+            ):
+                raise TimeoutError(
+                    f"run {run_id} timed out after {self.case_timeout_seconds}s"
+                )
+            current = self.agentsupport.get_conversation(conversation.id)
+            if current.run.state in TERMINAL_STATES:
+                remaining = (
+                    self.case_timeout_seconds - elapsed
+                    if self.case_timeout_seconds is not None
+                    else None
+                )
+                return await temporal.wait_for_run(run_id, timeout_seconds=remaining)
+            try:
+                status = await temporal.get_status(run_id)
+            except Exception:  # noqa: BLE001 - terminated workflows make the query fail
+                remaining = (
+                    self.case_timeout_seconds - elapsed
+                    if self.case_timeout_seconds is not None
+                    else None
+                )
+                return await temporal.wait_for_run(run_id, timeout_seconds=remaining)
+            if (
+                status.get("status") == "waiting"
+                and len(answered) < self.auto_answer_limit
+            ):
+                pending = current.run.pending_interaction or {}
+                interaction_id = pending.get("interaction_id")
+                if interaction_id and interaction_id not in answered:
+                    await temporal.submit_input(
+                        run_id,
+                        interaction_id,
+                        self.auto_input,
+                        idempotency_key=f"eval-auto-{interaction_id}",
+                    )
+                    answered.add(interaction_id)
+                    continue
+            await asyncio.sleep(1.0)
 
     @staticmethod
     def _summarize(results: list[EvalCaseResult]) -> dict[str, Any]:
