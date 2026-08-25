@@ -1,9 +1,22 @@
 """HTTP request schemas for the v0.2 public API (execution resources only)."""
 
+import json
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+#: Upper bound for free-text task payloads. Long enough for real prompts,
+#: bounded so a caller cannot push unbounded text into the database and into
+#: every downstream system prompt.
+MAX_TASK_CHARS = 100_000
+#: Upper bound for the serialized size of dynamic JSON fields (metadata,
+#: interaction values) that are stored verbatim in conversation/event rows.
+MAX_DYNAMIC_JSON_BYTES = 32_768
+
+
+def _json_size(value: Any) -> int:
+    return len(json.dumps(value, default=str, separators=(",", ":")))
 
 
 class ConfigSkillInput(BaseModel):
@@ -54,9 +67,18 @@ class SessionCreate(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     config: SessionConfigInput | None = None
 
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_size(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if _json_size(value) > MAX_DYNAMIC_JSON_BYTES:
+            raise ValueError(
+                f"metadata exceeds {MAX_DYNAMIC_JSON_BYTES} serialized bytes"
+            )
+        return value
+
 
 class ConversationCreate(BaseModel):
-    task: str = Field(min_length=1)
+    task: str = Field(min_length=1, max_length=MAX_TASK_CHARS)
     parent_conversation_id: UUID | None = None
     workspace_id: UUID | None = None
     skills: list[ConfigSkillInput] | None = None
@@ -87,6 +109,15 @@ class InteractionRequest(BaseModel):
     interaction_id: str
     value: Any
     expected_seq: int | None = None
+
+    @field_validator("value")
+    @classmethod
+    def _value_size(cls, value: Any) -> Any:
+        if _json_size(value) > MAX_DYNAMIC_JSON_BYTES:
+            raise ValueError(
+                f"value exceeds {MAX_DYNAMIC_JSON_BYTES} serialized bytes"
+            )
+        return value
 
 
 class ApprovalRequest(BaseModel):

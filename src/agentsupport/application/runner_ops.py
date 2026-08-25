@@ -98,7 +98,10 @@ class RunnerOpsMixin:
 
     def select_ready_runner(self, capabilities: set[str]) -> RunnerRegistration | None:
         ready = self.runner_registry.list_ready(capabilities)
-        return ready[0] if ready else None
+        if not ready:
+            return None
+        # Prefer the least-loaded Runner; ties keep registry order.
+        return min(ready, key=lambda entry: entry.load)
 
 
     def prune_stale_runners(self) -> int:

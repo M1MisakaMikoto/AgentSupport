@@ -15,12 +15,12 @@ async def live() -> dict[str, str]:
 
 
 @router.get("/ready")
-async def ready(request: Request) -> dict[str, Any]:
+def ready(request: Request) -> dict[str, Any]:
     return agentsupport_service(request).readiness()
 
 
 @router.get("/metrics", response_class=PlainTextResponse)
-async def metrics(request: Request) -> str:
+def metrics(request: Request) -> str:
     service = agentsupport_service(request)
     obs_metrics.publish_coordination(service.metrics())
     obs_metrics.set_runners_registered(len(service.runner_snapshot()))
@@ -29,5 +29,5 @@ async def metrics(request: Request) -> str:
 
 
 @router.get("/cores")
-async def list_cores(request: Request):
+def list_cores(request: Request):
     return agentsupport_service(request).runner_snapshot()

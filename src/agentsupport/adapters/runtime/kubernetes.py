@@ -32,6 +32,10 @@ class KubernetesRuntimeDriver:
         runner_secret_name: str | None = None,
         startup_timeout_seconds: float = 60,
         poll_interval_seconds: float = 0.5,
+        pod_cpu_request: str = "500m",
+        pod_memory_request: str = "1Gi",
+        pod_cpu_limit: str = "2",
+        pod_memory_limit: str = "2Gi",
         container_env: dict[str, str] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -46,6 +50,10 @@ class KubernetesRuntimeDriver:
         self.runner_secret_name = runner_secret_name
         self.startup_timeout_seconds = startup_timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
+        self.pod_cpu_request = pod_cpu_request
+        self.pod_memory_request = pod_memory_request
+        self.pod_cpu_limit = pod_cpu_limit
+        self.pod_memory_limit = pod_memory_limit
         self.container_env = container_env or {}
         self.transport = transport
 
@@ -151,6 +159,16 @@ class KubernetesRuntimeDriver:
             ],
             "env": [{"name": key, "value": value} for key, value in sorted(env.items())],
             "ports": [{"name": "http", "containerPort": 8080}],
+            "resources": {
+                "requests": {
+                    "cpu": self.pod_cpu_request,
+                    "memory": self.pod_memory_request,
+                },
+                "limits": {
+                    "cpu": self.pod_cpu_limit,
+                    "memory": self.pod_memory_limit,
+                },
+            },
             "readinessProbe": {
                 "httpGet": {"path": "/ready", "port": "http"},
                 "periodSeconds": 2,

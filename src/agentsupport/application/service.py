@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import socket
 from datetime import UTC, datetime, timedelta
@@ -44,6 +45,13 @@ from .runner_registry import InMemoryRunnerRegistry
 from .session_ops import SessionOpsMixin
 from .skill_mcp_ops import SkillMcpOpsMixin
 from .workspace_ops import WorkspaceOpsMixin
+
+logger = logging.getLogger(__name__)
+
+#: Soft ceiling for in-flight in-process event notifications. A slow notifier
+#: (e.g. a wedged Redis connection) would otherwise accumulate one task per
+#: event with no visibility; we only warn, never drop notifications.
+MAX_PUBLISH_TASKS = 200
 
 
 class AgentSupportService(
@@ -94,6 +102,7 @@ class AgentSupportService(
         self.workspace_leases: dict[UUID, UUID] = {}
         self._health_failures: dict[UUID, int] = {}
         self._scheduler_lock = asyncio.Lock()
+        self._publish_tasks: set[asyncio.Task[Any]] = set()
         self.repository = repository
         self.runner_registry = runner_registry or InMemoryRunnerRegistry()
         self.mcp_servers: dict[str, McpServer] = {}
@@ -154,6 +163,50 @@ class AgentSupportService(
             if register is not None:
                 register(run_id, endpoint)
         return endpoint
+
+    async def _cancel_runner_best_effort(self, run_id: UUID) -> None:
+        """Best-effort cancel so a timed-out/failed control-plane call does not
+        leave the runner executing in the background (orphan run)."""
+
+        if self.core_runtime is None:
+            return
+        try:
+            await self.core_runtime.cancel(run_id)
+        except Exception as exc:  # noqa: BLE001 - cancel is best effort
+            logger.warning(
+                "best-effort runner cancel failed for run %s: %s", run_id, exc
+            )
+
+    def _schedule_publish(self, conversation_id: UUID, event: EventEnvelope) -> None:
+        """Schedule the in-process event notification with tracking and error
+        logging (replaces untracked fire-and-forget tasks)."""
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if len(self._publish_tasks) >= MAX_PUBLISH_TASKS:
+            logger.warning(
+                "event publish backlog reached %d tasks; notifier may be slow",
+                MAX_PUBLISH_TASKS,
+            )
+        task = loop.create_task(self.events_store.publish(conversation_id, event))
+        self._publish_tasks.add(task)
+        task.add_done_callback(self._on_publish_done)
+
+    def _on_publish_done(self, task: asyncio.Task[Any]) -> None:
+        self._publish_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            exc = task.exception()
+        except (asyncio.CancelledError, RuntimeError):
+            return
+        if exc is not None:
+            logger.error(
+                "event publish task failed (%s): %s", task.get_name(), exc,
+                exc_info=exc,
+            )
 
 
     @staticmethod
@@ -271,12 +324,7 @@ class AgentSupportService(
                 raise ServiceError("EVENT_CONFLICT", str(exc), 409) from exc
         self.events_store.append(conversation.id, event)
         conversation.run.last_seq = seq
-        try:
-            asyncio.get_running_loop().create_task(
-                self.events_store.publish(conversation.id, event)
-            )
-        except RuntimeError:
-            pass
+        self._schedule_publish(conversation.id, event)
         return event
 
 

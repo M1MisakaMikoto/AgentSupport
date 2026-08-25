@@ -147,6 +147,7 @@ class InteractionOpsMixin:
             except ServiceError:
                 raise
             except Exception as exc:  # noqa: BLE001 - runtime errors become run failures
+                await self._cancel_runner_best_effort(conversation.run.run_id)
                 self._mark_run_failed(
                     conversation,
                     {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
@@ -267,6 +268,7 @@ class InteractionOpsMixin:
             except ServiceError:
                 raise
             except Exception as exc:  # noqa: BLE001 - runtime errors become run failures
+                await self._cancel_runner_best_effort(conversation.run.run_id)
                 self._mark_run_failed(
                     conversation,
                     {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
@@ -401,6 +403,7 @@ class InteractionOpsMixin:
                 response = await self.core_runtime.cancel(conversation.run.run_id)
                 await self._forward_core_events(conversation, response)
             except Exception as exc:  # noqa: BLE001 - runtime errors become run failures
+                await self._cancel_runner_best_effort(conversation.run.run_id)
                 self._mark_run_failed(
                     conversation,
                     {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},

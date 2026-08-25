@@ -35,13 +35,24 @@ class ConversationOpsMixin:
         return self._conversation(conversation_id)
 
 
-    def list_conversations(self, session_id: UUID | None = None) -> list[Conversation]:
+    def list_conversations(
+        self,
+        session_id: UUID | None = None,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Conversation]:
         if self.repository:
-            return self.repository.list_conversations(session_id=session_id)
+            return self.repository.list_conversations(
+                session_id, limit=limit, offset=offset
+            )
         items = self.conversations.values()
         if session_id is not None:
             items = [item for item in items if item.session_id == session_id]
-        return sorted(items, key=lambda item: item.created_at)
+        items = sorted(items, key=lambda item: item.created_at)
+        if limit is not None:
+            items = items[offset : offset + limit]
+        return items
 
 
     async def create_conversation(
@@ -295,6 +306,7 @@ class ConversationOpsMixin:
         try:
             await self.core_runtime.run(request, event_sink)
         except Exception as exc:  # noqa: BLE001 - runtime failures become AgentSupport events
+            await self._cancel_runner_best_effort(conversation.run.run_id)
             self._mark_run_failed(
                 conversation,
                 {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
@@ -424,8 +436,11 @@ class ConversationOpsMixin:
             conversation = self.repository.get_conversation(conversation_id)
             if conversation and not self.temporal_mode:
                 self.conversations[conversation.id] = conversation
-                for event in self.repository.list_events(conversation.id):
-                    if not self.events_store.list(conversation.id, event.seq - 1):
+                events = self.repository.list_events(conversation.id)
+                existing = self.events_store.list(conversation.id)
+                last_seq = existing[-1].seq if existing else 0
+                for event in events:
+                    if event.seq > last_seq:
                         self.events_store.append(conversation.id, event)
         if not conversation:
             raise ServiceError("CONVERSATION_NOT_FOUND", "conversation does not exist", 404)

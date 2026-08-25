@@ -4,13 +4,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 from typing import Any
 from uuid import UUID
 
 from agent_runner_contracts.checkpoint import (
+    RECENT_EVENTS_LIMIT,
     tool_policy_hash,
     tool_versions_hash,
 )
@@ -70,8 +70,9 @@ class CheckpointOpsMixin:
             conversation_id=conversation.id,
             workspace_ref="/workspace",
             recent_events=[
-                event.model_dump(mode="json") for event in self.events_store.list(conversation.id)
-            ],
+                event.model_dump(mode="json")
+                for event in self.events_store.list(conversation.id)
+            ][-RECENT_EVENTS_LIMIT:],
             tool_policy=tool_policy,
         )
         context_hash = hashlib.sha256(
@@ -109,10 +110,5 @@ class CheckpointOpsMixin:
                 raise ServiceError("CHECKPOINT_CONFLICT", str(exc), 409) from exc
         self.events_store.append(conversation.id, event)
         conversation.run.last_seq = event.seq
-        try:
-            asyncio.get_running_loop().create_task(
-                self.events_store.publish(conversation.id, event)
-            )
-        except RuntimeError:
-            pass
+        self._schedule_publish(conversation.id, event)
         return checkpoint

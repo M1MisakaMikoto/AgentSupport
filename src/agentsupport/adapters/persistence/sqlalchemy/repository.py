@@ -232,9 +232,14 @@ class PostgresRepository:
             id=UUID(row.id), name=row.name, root_path=row.storage_ref, created_at=row.created_at
         )
 
-    def list_workspaces(self) -> list[Workspace]:
+    def list_workspaces(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> list[Workspace]:
         with self.transaction() as db:
-            rows = db.execute(select(WorkspaceRow).order_by(WorkspaceRow.created_at)).scalars()
+            statement = select(WorkspaceRow).order_by(WorkspaceRow.created_at)
+            if limit is not None:
+                statement = statement.limit(limit).offset(offset)
+            rows = db.execute(statement).scalars()
             return [
                 Workspace(
                     id=UUID(row.id),
@@ -346,6 +351,8 @@ class PostgresRepository:
         tenant_id: str | None = None,
         user_id: str | None = None,
         project_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Session]:
         with self.transaction() as db:
             statement = select(SessionRow).order_by(SessionRow.created_at)
@@ -355,8 +362,33 @@ class PostgresRepository:
                 statement = statement.where(SessionRow.user_id == user_id)
             if project_id is not None:
                 statement = statement.where(SessionRow.project_id == str(project_id))
-            rows = db.execute(statement).scalars()
-            return [self.get_session(UUID(row.id), db=db) for row in rows]
+            if limit is not None:
+                statement = statement.limit(limit).offset(offset)
+            rows = list(db.execute(statement).scalars())
+            active_leases = {
+                lease.session_id: lease
+                for lease in db.execute(
+                    select(ContainerLeaseRow).where(ContainerLeaseRow.status == "ACTIVE")
+                ).scalars()
+            }
+            result: list[Session] = []
+            for row in rows:
+                lease = active_leases.get(row.id)
+                result.append(
+                    Session(
+                        id=UUID(row.id),
+                        workspace_id=UUID(row.workspace_id),
+                        tenant_id=row.tenant_id,
+                        user_id=row.user_id,
+                        project_id=row.project_id,
+                        metadata=dict(row.labels),
+                        config=ProjectConfig.model_validate(row.config) if row.config else None,
+                        lease_epoch=row.lease_epoch,
+                        active_run_id=UUID(row.active_run_id) if row.active_run_id else None,
+                        active_container_id=lease.container_id if lease else None,
+                    )
+                )
+            return result
 
     def save_session(self, session: Session) -> None:
         with self.transaction() as db:
@@ -478,6 +510,10 @@ class PostgresRepository:
         row = db.get(ConversationRow, str(conversation_id))
         if not row:
             return None
+        return self._conversation_from_row(row)
+
+    @staticmethod
+    def _conversation_from_row(row: ConversationRow) -> Conversation:
         return Conversation(
             id=UUID(row.id),
             session_id=UUID(row.session_id),
@@ -507,15 +543,25 @@ class PostgresRepository:
             ),
         )
 
-    def list_conversations(self, session_id: UUID | None = None) -> list[Conversation]:
+    def list_conversations(
+        self,
+        session_id: UUID | None = None,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Conversation]:
         with self.transaction() as db:
             statement = select(ConversationRow).order_by(ConversationRow.created_at)
             if session_id is not None:
                 statement = statement.where(
                     ConversationRow.session_id == str(session_id)
                 )
-            rows = db.execute(statement).scalars()
-            return [self.get_conversation(UUID(row.id), db=db) for row in rows]
+            if limit is not None:
+                statement = statement.limit(limit).offset(offset)
+            return [
+                self._conversation_from_row(row)
+                for row in db.execute(statement).scalars()
+            ]
 
     def append_event(self, conversation: Conversation, event: EventEnvelope) -> None:
         with self.transaction() as db:
@@ -599,16 +645,64 @@ class PostgresRepository:
             created_at=row.created_at,
         )
 
-    def list_events(self, conversation_id: UUID, after_seq: int = 0) -> list[EventEnvelope]:
+    def list_events(
+        self,
+        conversation_id: UUID,
+        after_seq: int = 0,
+        limit: int | None = None,
+    ) -> list[EventEnvelope]:
         with self.transaction() as db:
-            rows = db.execute(
+            statement = (
                 select(ConversationEventRow)
                 .where(
                     ConversationEventRow.conversation_id == str(conversation_id),
                     ConversationEventRow.seq > after_seq,
                 )
                 .order_by(ConversationEventRow.seq)
-            ).scalars()
+            )
+            if limit is not None:
+                statement = statement.limit(limit)
+            rows = db.execute(statement).scalars()
+            return [
+                EventEnvelope(
+                    event_id=UUID(row.id),
+                    run_id=UUID(row.run_id),
+                    seq=row.seq,
+                    type=row.type,
+                    payload=row.payload,
+                    source=row.source,
+                    occurred_at=row.occurred_at,
+                )
+                for row in rows
+            ]
+
+    def list_session_events(
+        self, session_id: UUID, after_seq: int = 0, limit: int | None = None
+    ) -> list[EventEnvelope]:
+        """All events of a session's conversations in a single query.
+
+        ``after_seq`` mirrors the per-conversation semantics of
+        ``list_events``: only events with ``seq > after_seq`` are returned
+        (``seq`` is unique per conversation, so the union of per-conversation
+        filters equals a global ``seq > after_seq`` filter).
+        """
+
+        with self.transaction() as db:
+            statement = (
+                select(ConversationEventRow)
+                .join(
+                    ConversationRow,
+                    ConversationRow.id == ConversationEventRow.conversation_id,
+                )
+                .where(
+                    ConversationRow.session_id == str(session_id),
+                    ConversationEventRow.seq > after_seq,
+                )
+                .order_by(ConversationEventRow.occurred_at, ConversationEventRow.seq)
+            )
+            if limit is not None:
+                statement = statement.limit(limit)
+            rows = db.execute(statement).scalars()
             return [
                 EventEnvelope(
                     event_id=UUID(row.id),
@@ -697,6 +791,25 @@ class PostgresRepository:
                     .where(ContainerLeaseRow.status == "ACTIVE")
                 ).scalar_one()
             )
+
+    def conversation_state_counts(self) -> dict[str, int]:
+        """Number of conversations per execution state (single query)."""
+
+        with self.transaction() as db:
+            rows = db.execute(
+                select(ConversationRow.execution_state, func.count()).group_by(
+                    ConversationRow.execution_state
+                )
+            ).all()
+        return {state: int(count) for state, count in rows}
+
+    def oldest_queued_created_at(self) -> datetime | None:
+        with self.transaction() as db:
+            return db.execute(
+                select(func.min(ConversationRow.created_at)).where(
+                    ConversationRow.execution_state == ExecutionState.QUEUED.value
+                )
+            ).scalar_one_or_none()
 
     def try_acquire_workspace_lease(
         self,
@@ -993,6 +1106,28 @@ class PostgresRepository:
                     )
                 )
             return result
+
+    def outbox_stats(self, *, now: datetime | None = None) -> dict[str, float]:
+        """Pending outbox count and age of the oldest pending item (seconds)."""
+
+        current = now or _now()
+        with self.transaction() as db:
+            pending = int(
+                db.execute(
+                    select(func.count())
+                    .select_from(OutboxEventRow)
+                    .where(OutboxEventRow.published_at.is_(None))
+                ).scalar_one()
+            )
+            oldest = db.execute(
+                select(func.min(OutboxEventRow.created_at)).where(
+                    OutboxEventRow.published_at.is_(None)
+                )
+            ).scalar_one()
+        lag_seconds = 0.0
+        if oldest is not None:
+            lag_seconds = max(0.0, (current - _as_utc(oldest)).total_seconds())
+        return {"pending": float(pending), "lag_seconds": round(lag_seconds, 3)}
 
     def finish_outbox(
         self, notification_id: UUID, publisher_id: str, *, published: bool

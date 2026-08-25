@@ -109,7 +109,9 @@ class ConversationCheckpointRow(Base):
     tool_policy_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     tool_versions_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     workspace_write_lease_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class ContainerLeaseRow(Base):
@@ -122,7 +124,9 @@ class ContainerLeaseRow(Base):
     run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     owner_instance_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
 
 class WorkspaceWriteLeaseRow(Base):
@@ -134,7 +138,9 @@ class WorkspaceWriteLeaseRow(Base):
     run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     owner_instance_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
 
 class RunnerRegistrationRow(Base):
@@ -159,7 +165,9 @@ class OutboxEventRow(Base):
     aggregate_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     claimed_by: Mapped[str | None] = mapped_column(String(160), nullable=True)
     claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -174,7 +182,9 @@ class IdempotencyKeyRow(Base):
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     resource_id: Mapped[str] = mapped_column(String(36), nullable=False)
     response_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class RuntimeOperationRow(Base):
@@ -184,7 +194,9 @@ class RuntimeOperationRow(Base):
     resource_id: Mapped[str] = mapped_column(String(160), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class EvalDatasetRow(Base):

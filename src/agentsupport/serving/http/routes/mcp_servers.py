@@ -9,7 +9,7 @@ router = APIRouter()
 
 
 @router.post("/mcp-servers", status_code=201)
-async def create_mcp_server(request: Request, body: McpServerCreate):
+def create_mcp_server(request: Request, body: McpServerCreate):
     return agentsupport_service(request).create_mcp_server(
         server_id=body.server_id,
         name=body.name,
@@ -23,7 +23,7 @@ async def create_mcp_server(request: Request, body: McpServerCreate):
 
 
 @router.get("/mcp-servers")
-async def list_mcp_servers(request: Request):
+def list_mcp_servers(request: Request):
     return [
         item.model_dump(mode="json")
         for item in agentsupport_service(request).list_mcp_servers()
@@ -31,12 +31,12 @@ async def list_mcp_servers(request: Request):
 
 
 @router.get("/mcp-servers/{server_id}")
-async def get_mcp_server(request: Request, server_id: str):
+def get_mcp_server(request: Request, server_id: str):
     return agentsupport_service(request).get_mcp_server(server_id).model_dump(mode="json")
 
 
 @router.patch("/mcp-servers/{server_id}")
-async def update_mcp_server(request: Request, server_id: str, body: McpServerUpdate):
+def update_mcp_server(request: Request, server_id: str, body: McpServerUpdate):
     return agentsupport_service(request).update_mcp_server(
         server_id,
         name=body.name,
@@ -49,5 +49,5 @@ async def update_mcp_server(request: Request, server_id: str, body: McpServerUpd
 
 
 @router.delete("/mcp-servers/{server_id}", status_code=204)
-async def delete_mcp_server(request: Request, server_id: str) -> None:
+def delete_mcp_server(request: Request, server_id: str) -> None:
     agentsupport_service(request).delete_mcp_server(server_id)

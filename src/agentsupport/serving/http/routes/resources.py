@@ -7,7 +7,7 @@ upstream caller; this platform only stores their identifiers as optional labels.
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Query, Request
 from pydantic import BaseModel
 
 from ....domain import PresetSkill, ProjectConfig
@@ -46,7 +46,7 @@ def _session_labels(
 
 
 @router.post("/workspaces", status_code=201)
-async def create_workspace(
+def create_workspace(
     request: Request,
     body: WorkspaceCreate,
     idempotency_key: str | None = Header(default=None),
@@ -57,17 +57,26 @@ async def create_workspace(
 
 
 @router.get("/workspaces")
-async def list_workspaces(request: Request):
-    return [item.model_dump(mode="json") for item in agentsupport_service(request).list_workspaces()]
+def list_workspaces(
+    request: Request,
+    limit: int | None = Query(default=None, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    return [
+        item.model_dump(mode="json")
+        for item in agentsupport_service(request).list_workspaces(
+            limit=limit, offset=offset
+        )
+    ]
 
 
 @router.get("/workspaces/{workspace_id}")
-async def get_workspace(request: Request, workspace_id: UUID):
+def get_workspace(request: Request, workspace_id: UUID):
     return agentsupport_service(request).get_workspace(workspace_id).model_dump(mode="json")
 
 
 @router.post("/workspaces/{workspace_id}/versions", status_code=201)
-async def create_workspace_version(
+def create_workspace_version(
     request: Request,
     workspace_id: UUID,
     body: WorkspaceVersionCreate | None = None,
@@ -81,12 +90,12 @@ async def create_workspace_version(
 
 
 @router.get("/workspaces/{workspace_id}/versions")
-async def list_workspace_versions(request: Request, workspace_id: UUID):
+def list_workspace_versions(request: Request, workspace_id: UUID):
     return agentsupport_service(request).list_workspace_versions(workspace_id)
 
 
 @router.post("/workspaces/{workspace_id}/versions/{version_id}/restore")
-async def restore_workspace_version(
+def restore_workspace_version(
     request: Request,
     workspace_id: UUID,
     version_id: str,
@@ -100,7 +109,7 @@ async def restore_workspace_version(
 
 
 @router.post("/sessions", status_code=201)
-async def create_session(
+def create_session(
     request: Request,
     body: SessionCreate,
     idempotency_key: str | None = Header(default=None),
@@ -131,12 +140,14 @@ async def create_session(
 
 
 @router.get("/sessions")
-async def list_sessions(
+def list_sessions(
     request: Request,
     workspace_id: UUID | None = None,
     tenant_id: str | None = None,
     user_id: str | None = None,
     project_id: str | None = None,
+    limit: int | None = Query(default=None, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ):
     return [
         item.model_dump(mode="json")
@@ -145,12 +156,14 @@ async def list_sessions(
             tenant_id=tenant_id,
             user_id=user_id,
             project_id=project_id,
+            limit=limit,
+            offset=offset,
         )
     ]
 
 
 @router.get("/sessions/{session_id}")
-async def get_session(request: Request, session_id: UUID):
+def get_session(request: Request, session_id: UUID):
     return agentsupport_service(request).get_session(session_id).model_dump(mode="json")
 
 
@@ -180,15 +193,22 @@ async def create_conversation(
 
 
 @router.get("/sessions/{session_id}/conversations")
-async def list_session_conversations(request: Request, session_id: UUID):
+def list_session_conversations(
+    request: Request,
+    session_id: UUID,
+    limit: int | None = Query(default=None, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
     service = agentsupport_service(request)
     service.get_session(session_id)
     return [
         item.model_dump(mode="json")
-        for item in service.list_conversations(session_id=session_id)
+        for item in service.list_conversations(
+            session_id=session_id, limit=limit, offset=offset
+        )
     ]
 
 
 @router.get("/conversations/{conversation_id}")
-async def get_conversation(request: Request, conversation_id: UUID):
+def get_conversation(request: Request, conversation_id: UUID):
     return agentsupport_service(request).get_conversation(conversation_id).model_dump(mode="json")

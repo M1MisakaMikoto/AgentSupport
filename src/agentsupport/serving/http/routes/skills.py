@@ -32,15 +32,15 @@ async def create_skill(
 
 
 @router.get("/skills")
-async def list_skills(request: Request):
+def list_skills(request: Request):
     return agentsupport_service(request).list_skills()
 
 
 @router.get("/skills/{skill_id}")
-async def get_skill(request: Request, skill_id: str):
+def get_skill(request: Request, skill_id: str):
     return agentsupport_service(request).get_skill(skill_id)
 
 
 @router.delete("/skills/{skill_id}", status_code=204)
-async def delete_skill(request: Request, skill_id: str) -> None:
+def delete_skill(request: Request, skill_id: str) -> None:
     agentsupport_service(request).delete_skill(skill_id)

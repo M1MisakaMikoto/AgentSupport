@@ -57,10 +57,15 @@ class WorkspaceOpsMixin:
         return workspace
 
 
-    def list_workspaces(self) -> list[Workspace]:
+    def list_workspaces(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> list[Workspace]:
         if self.repository:
-            return self.repository.list_workspaces()
-        return sorted(self.workspaces.values(), key=lambda item: item.created_at)
+            return self.repository.list_workspaces(limit=limit, offset=offset)
+        items = sorted(self.workspaces.values(), key=lambda item: item.created_at)
+        if limit is not None:
+            items = items[offset : offset + limit]
+        return items
 
 
     # -- workspace version snapshots --------------------------------------

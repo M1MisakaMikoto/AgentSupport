@@ -19,6 +19,11 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    if "execution_jobs" not in sa.inspect(bind).get_table_names():
+        # The retired distributed execution layer is not created on fresh
+        # installs; this column only matters for databases that still have
+        # the legacy table (it is dropped later by 20260817_0001).
+        return
     existing = {
         column["name"] for column in sa.inspect(bind).get_columns("execution_jobs")
     }
@@ -39,6 +44,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    if "execution_jobs" not in sa.inspect(bind).get_table_names():
+        return
     existing = {
         column["name"] for column in sa.inspect(bind).get_columns("execution_jobs")
     }

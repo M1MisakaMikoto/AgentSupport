@@ -30,10 +30,16 @@ class SessionOpsMixin:
         tenant_id: str | None = None,
         user_id: str | None = None,
         project_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Session]:
         if self.repository:
             return self.repository.list_sessions(
-                tenant_id=tenant_id, user_id=user_id, project_id=project_id
+                tenant_id=tenant_id,
+                user_id=user_id,
+                project_id=project_id,
+                limit=limit,
+                offset=offset,
             )
         items = self.sessions.values()
         if workspace_id is not None:
@@ -44,7 +50,10 @@ class SessionOpsMixin:
             items = [item for item in items if item.user_id == user_id]
         if project_id is not None:
             items = [item for item in items if item.project_id == project_id]
-        return sorted(items, key=lambda item: item.created_at)
+        items = sorted(items, key=lambda item: item.created_at)
+        if limit is not None:
+            items = items[offset : offset + limit]
+        return items
 
 
     def get_session(self, session_id: UUID) -> Session:

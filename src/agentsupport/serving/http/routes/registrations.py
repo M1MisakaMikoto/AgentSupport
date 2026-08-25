@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.post("/runners/register", status_code=201, include_in_schema=False)
-async def register_runner(
+def register_runner(
     request: Request, payload: RunnerRegistrationRequest
 ) -> dict:
     return agentsupport_service(request).register_runner(
@@ -21,14 +21,14 @@ async def register_runner(
 
 
 @router.post("/runners/{runner_id}/heartbeat", include_in_schema=False)
-async def runner_heartbeat(request: Request, runner_id: UUID, payload: RunnerHeartbeat) -> dict:
+def runner_heartbeat(request: Request, runner_id: UUID, payload: RunnerHeartbeat) -> dict:
     return agentsupport_service(request).runner_heartbeat(
         runner_id, payload, runner_token=request.headers.get("X-Runner-Token")
     ).model_dump(mode="json")
 
 
 @router.delete("/runners/{runner_id}", status_code=204, include_in_schema=False)
-async def deregister_runner(request: Request, runner_id: UUID) -> None:
+def deregister_runner(request: Request, runner_id: UUID) -> None:
     agentsupport_service(request).runner_deregister(
         runner_id, runner_token=request.headers.get("X-Runner-Token")
     )

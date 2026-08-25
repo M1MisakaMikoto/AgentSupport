@@ -68,6 +68,8 @@ def upgrade() -> None:
         },
     )
 def downgrade() -> None:
+    bind = op.get_bind()
+    existing = set(sa.inspect(bind).get_table_names())
     for table in [
         "outbox_events",
         "run_commands",
@@ -75,4 +77,5 @@ def downgrade() -> None:
         "runtime_slots",
         "execution_jobs",
     ]:
-        op.drop_table(table)
+        if table in existing:
+            op.drop_table(table)

@@ -40,7 +40,7 @@ class EvalRunCreate(BaseModel):
 
 
 @router.post("/datasets", status_code=201)
-async def create_dataset(
+def create_dataset(
     request: Request,
     body: EvalDatasetCreate,
     idempotency_key: str | None = Header(default=None),
@@ -57,7 +57,7 @@ async def create_dataset(
 
 
 @router.get("/datasets")
-async def list_datasets(
+def list_datasets(
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -69,12 +69,12 @@ async def list_datasets(
 
 
 @router.get("/datasets/{dataset_id}")
-async def get_dataset(request: Request, dataset_id: UUID):
+def get_dataset(request: Request, dataset_id: UUID):
     return eval_service(request).get_dataset(dataset_id).model_dump(mode="json")
 
 
 @router.post("/datasets/{dataset_id}/cases", status_code=201)
-async def add_case(request: Request, dataset_id: UUID, body: EvalCaseCreate):
+def add_case(request: Request, dataset_id: UUID, body: EvalCaseCreate):
     case = eval_service(request).add_case(
         dataset_id,
         task=body.task,
@@ -99,7 +99,7 @@ async def create_run(
 
 
 @router.get("/runs")
-async def list_runs(
+def list_runs(
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -111,15 +111,15 @@ async def list_runs(
 
 
 @router.get("/runs/{run_id}")
-async def get_run(request: Request, run_id: UUID):
+def get_run(request: Request, run_id: UUID):
     return eval_service(request).get_run(run_id).model_dump(mode="json")
 
 
 @router.get("/runs/{run_id}/report")
-async def get_report(request: Request, run_id: UUID):
+def get_report(request: Request, run_id: UUID):
     return eval_service(request).report(run_id).model_dump(mode="json")
 
 
 @router.get("/runs/{run_id}/compare")
-async def compare_runs(request: Request, run_id: UUID, baseline: UUID):
+def compare_runs(request: Request, run_id: UUID, baseline: UUID):
     return eval_service(request).compare(baseline, run_id)

@@ -44,4 +44,14 @@ class InMemoryEventStore:
                 continue
             condition = self._conditions[conversation_id]
             async with condition:
-                await condition.wait()
+                # Re-check under the lock: a publisher that notified while we
+                # were between the outer check and acquiring the lock would
+                # otherwise be lost (no waiter yet), stalling the stream until
+                # the next event or forever.
+                events = self.list(conversation_id, cursor)
+                if not events:
+                    await condition.wait()
+                    continue
+            for event in events:
+                cursor = event.seq
+                yield event
