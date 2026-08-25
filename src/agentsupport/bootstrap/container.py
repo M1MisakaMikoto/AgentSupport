@@ -105,3 +105,42 @@ def build_agentsupport_dependencies(config: Settings) -> dict[str, Any]:
 
 def build_agentsupport_service(config: Settings = settings) -> AgentSupportService:
     return AgentSupportService(config, **build_agentsupport_dependencies(config))
+
+
+def build_eval_service(
+    config: Settings = settings,
+    *,
+    agentsupport: AgentSupportService | None = None,
+):
+    """Wiring for the evaluation layer.
+
+    The eval service drives the platform execution path (Session/Conversation),
+    so real agents run through the configured execution backend (Temporal in
+    production, inline for local/dev). Tests inject their own in-process
+    deterministic runner instead of relying on this builder.
+    """
+
+    from ..adapters.persistence.sqlalchemy.eval_store import SqlAlchemyEvalStore
+    from ..application.service import AgentSupportService
+    from ..evaluation import EvalService
+    from ..evaluation.store import InMemoryEvalStore
+
+    service = agentsupport or AgentSupportService(
+        config, **build_agentsupport_dependencies(config)
+    )
+    if config.persistence_mode == "postgres":
+        repository = getattr(service, "repository", None)
+        engine = getattr(repository, "engine", None) if repository is not None else None
+        store = SqlAlchemyEvalStore(
+            config.database_url,
+            create_schema=config.auto_create_schema,
+            engine=engine,
+        )
+    else:
+        store = InMemoryEvalStore()
+    return EvalService(
+        workspace_driver=LocalWorkspaceStorageDriver(config.workspace_root),
+        agentsupport=service,
+        store=store,
+        case_timeout_seconds=config.eval_case_timeout_seconds,
+    )

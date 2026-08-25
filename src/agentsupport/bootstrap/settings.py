@@ -72,9 +72,12 @@ class Settings(BaseSettings):
     retention_terminal_events_days: int = 90
     # Runner self-registration. A non-empty runner_token enables the internal
     # /runners/* endpoints; heartbeats older than the timeout are expired by
-    # the inline health worker or the distributed reconciler.
+    # the inline health worker or the runner heartbeat reconciler.
     runner_token: str = ""
     runner_heartbeat_timeout_seconds: float = 30.0
+    # Evaluation layer: per-case wait limit when a case runs through Temporal.
+    # A case that outlives this window is cancelled and recorded as ERROR.
+    eval_case_timeout_seconds: int = 1800
     # Observability: structured logging, tracing and metrics.
     log_format: str = "console"
     log_level: str = "INFO"
