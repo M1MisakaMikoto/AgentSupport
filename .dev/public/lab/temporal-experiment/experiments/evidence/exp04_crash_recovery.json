@@ -1,0 +1,22 @@
+[
+  {
+    "name": "step_a",
+    "detail": "",
+    "count": 1
+  },
+  {
+    "name": "step_b",
+    "detail": "",
+    "count": 1
+  },
+  {
+    "name": "step_b",
+    "detail": "",
+    "count": 2
+  },
+  {
+    "name": "step_b_done",
+    "detail": "",
+    "count": 1
+  }
+]

@@ -13,4 +13,17 @@ dist/
 workspace-data/
 .tmp/
 .docker-runtime-workspace/
-.dev/
+
+# 嵌套的独立配置仓库（自带 .git），不作为本仓库内容
+ai-coding-configs/
+
+# .dev 收纳：public（服务项目，记录）；private（服务 coding agent，不记录）
+.dev/*
+!.dev/public/
+!.dev/public/**
+.dev/public/lab/**/__pycache__/
+*.py[cod]
+.dev/private/
+
+# 项目根 AGENTS.md 属 config，不入库（本地保留）
+/AGENTS.md
