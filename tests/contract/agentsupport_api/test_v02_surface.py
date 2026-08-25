@@ -84,3 +84,18 @@ async def test_list_sessions_pagination(service):
         first_ids = {item["id"] for item in first_page.json()}
         second_ids = {item["id"] for item in second_page.json()}
         assert first_ids.isdisjoint(second_ids)
+
+
+@pytest.mark.asyncio
+async def test_list_default_limit_applied(tmp_path):
+    capped = AgentSupportService(
+        Settings(workspace_root=tmp_path, list_default_limit=2)
+    )
+    workspace = capped.create_workspace("cap")
+    for _ in range(3):
+        capped.create_session(workspace.id)
+    app = create_app(capped)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/sessions")
+        assert response.status_code == 200
+        assert len(response.json()) == 2

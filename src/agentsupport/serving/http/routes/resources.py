@@ -22,6 +22,15 @@ from ..schemas import (
 router = APIRouter()
 
 
+def _effective_limit(service, limit: int | None) -> int | None:
+    """Apply the configured default page size when the caller omits ``limit``."""
+
+    if limit is not None:
+        return limit
+    default = getattr(service.config, "list_default_limit", 100)
+    return default or None
+
+
 def _created(entity: BaseModel, auto_created: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = entity.model_dump(mode="json")
     if auto_created:
@@ -62,10 +71,11 @@ def list_workspaces(
     limit: int | None = Query(default=None, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ):
+    service = agentsupport_service(request)
     return [
         item.model_dump(mode="json")
-        for item in agentsupport_service(request).list_workspaces(
-            limit=limit, offset=offset
+        for item in service.list_workspaces(
+            limit=_effective_limit(service, limit), offset=offset
         )
     ]
 
@@ -149,14 +159,15 @@ def list_sessions(
     limit: int | None = Query(default=None, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ):
+    service = agentsupport_service(request)
     return [
         item.model_dump(mode="json")
-        for item in agentsupport_service(request).list_sessions(
+        for item in service.list_sessions(
             workspace_id=workspace_id,
             tenant_id=tenant_id,
             user_id=user_id,
             project_id=project_id,
-            limit=limit,
+            limit=_effective_limit(service, limit),
             offset=offset,
         )
     ]
@@ -204,7 +215,9 @@ def list_session_conversations(
     return [
         item.model_dump(mode="json")
         for item in service.list_conversations(
-            session_id=session_id, limit=limit, offset=offset
+            session_id=session_id,
+            limit=_effective_limit(service, limit),
+            offset=offset,
         )
     ]
 

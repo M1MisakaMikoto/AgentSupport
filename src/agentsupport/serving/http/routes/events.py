@@ -39,7 +39,13 @@ def list_events(
     after_seq: int = Query(default=0, ge=0),
     limit: int | None = Query(default=None, ge=1, le=1000),
 ):
-    return agentsupport_service(request).events(conversation_id, after_seq, limit)
+    service = agentsupport_service(request)
+    effective = (
+        limit
+        if limit is not None
+        else (getattr(service.config, "list_default_limit", 100) or None)
+    )
+    return service.events(conversation_id, after_seq, effective)
 
 
 @router.get("/conversations/{conversation_id}/events/stream")
@@ -86,7 +92,13 @@ def session_events(
     after_seq: int = Query(default=0, ge=0),
     limit: int | None = Query(default=None, ge=1, le=1000),
 ):
-    return agentsupport_service(request).session_events(session_id, after_seq, limit)
+    service = agentsupport_service(request)
+    effective = (
+        limit
+        if limit is not None
+        else (getattr(service.config, "list_default_limit", 100) or None)
+    )
+    return service.session_events(session_id, after_seq, effective)
 
 
 @router.get("/sessions/{session_id}/events/stream")

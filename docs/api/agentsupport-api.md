@@ -178,7 +178,8 @@ Idempotency-Key: 6f9c2d3a-4b5c-4d6e-8f70-9a1b2c3d4e5f
 
 ### 4.2 GET /workspaces
 
-返回全部 Workspace 列表，按创建时间升序。无查询参数。
+返回全部 Workspace 列表，按创建时间升序。支持 `limit`/`offset` 查询参数分页；
+未传 `limit` 时使用默认上限（`AGENTSUPPORT_LIST_DEFAULT_LIMIT`，默认 100，`0` 表示不限）。
 
 **成功响应 `200`**：
 
@@ -375,6 +376,8 @@ Workspace 缺失且 auto-create 开启时，响应追加：
 返回 Session 列表，按创建时间升序，支持过滤。
 
 **查询参数**（均可选，多个条件为 AND）：
+`limit`（1–1000，可选）/ `offset`（可选）分页；未传 `limit` 时使用默认上限
+（`AGENTSUPPORT_LIST_DEFAULT_LIMIT`，默认 100，`0` 表示不限）。
 
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
@@ -472,6 +475,7 @@ Idempotency-Key: a1b2c3d4-...
 ### 6.2 GET /sessions/{session_id}/conversations
 
 返回该 Session 下的对话列表（按创建时间升序）。
+支持 `limit`/`offset` 分页；未传 `limit` 时使用默认上限（同上）。
 
 **路径参数**：`session_id`（UUID）。
 
@@ -660,9 +664,9 @@ POST /mcp-servers
 
 **查询参数**：
 
-| 参数 | 类型 | 默认 | 说明 |
-| --- | --- | --- | --- |
-| `after_seq` | integer | `0` | 排他游标，只返回 `seq > after_seq`；不能为负 |
+- `after_seq`（可选，默认 0）：仅返回 `seq > after_seq` 的事件。
+- `limit`（可选，1–1000）：限制单次返回的事件数；未传时使用默认上限
+  （`AGENTSUPPORT_LIST_DEFAULT_LIMIT`，默认 100，`0` 表示不限）。
 
 **成功响应 `200`**：事件对象数组：
 
@@ -703,7 +707,8 @@ data: {"schema_version":"1","event_id":"...","run_id":"...","seq":2,"type":"mess
 ### 9.3 GET /sessions/{session_id}/events
 
 返回该 Session 下所有 Conversation 中满足 `seq > after_seq` 的事件，按 `occurred_at`
-聚合排序。参数同 [9.1](#91-get-conversationsconversation_idevents)。
+聚合排序。`limit`（可选，默认上限同上）限制单次返回的事件数；其余参数同
+[9.1](#91-get-conversationsconversation_idevents)。
 
 注意：`seq` 是 Conversation 级游标，不是 Session 全局游标；需要严格可靠消费单个任务时，
 应优先使用 Conversation 事件接口。

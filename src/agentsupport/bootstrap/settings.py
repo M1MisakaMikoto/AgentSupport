@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     pause_worker_interval_seconds: int = 5
     max_active_sessions: int = 2
     max_queued_conversations: int = 100
+    #: Default page size for list endpoints when the caller omits ``limit``.
+    #: ``0`` disables the cap (full list). An explicit ``limit`` always wins.
+    list_default_limit: int = 100
     runtime_start_timeout_seconds: int = 30
     runtime_stop_grace_seconds: int = 30
     health_check_interval_seconds: int = 5
