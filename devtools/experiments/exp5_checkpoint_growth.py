@@ -113,6 +113,10 @@ async def main(phase: str) -> str:
             "capped to a bounded window while `run events` still grows.",
         ]
     )
+    if phase == "after":
+        for row in rows:
+            assert row[2] <= 250, f"recent_events window too large: {row[2]}"
+        assert rows[1][2] <= rows[0][2] + 50, "recent_events grew with history"
 
 
 if __name__ == "__main__":

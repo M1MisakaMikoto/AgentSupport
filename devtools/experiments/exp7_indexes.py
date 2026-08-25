@@ -223,6 +223,10 @@ def main(phase: str) -> None:
             )
         )
 
+    if phase == "after":
+        assert any("Bitmap" in section for section in sections), (
+            "retention plans do not use the new indexes"
+        )
     record_evidence(
         "exp7_indexes",
         phase,

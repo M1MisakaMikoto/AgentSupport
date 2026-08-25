@@ -137,6 +137,8 @@ async def run(phase: str) -> str:
             "seq 2 (first frame id: 3).",
         ]
     )
+    if phase == "after":
+        assert "id: 3" in ids, f"resume frame ids: {ids}"
     record_evidence(
         "exp19_sse_last_event_id",
         phase,

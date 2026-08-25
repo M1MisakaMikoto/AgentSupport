@@ -60,6 +60,10 @@ def main(phase: str) -> None:
             "```",
         ]
     )
+    if phase == "after":
+        assert resources is not None, "pod container has no resources block"
+        assert resources.get("limits", {}).get("memory"), "no memory limit"
+        assert resources.get("limits", {}).get("cpu"), "no cpu limit"
     record_evidence(
         "exp11_k8s_pod_resources",
         phase,

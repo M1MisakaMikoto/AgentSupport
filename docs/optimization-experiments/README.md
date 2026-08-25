@@ -17,6 +17,19 @@ python devtools/experiments/exp2_event_load.py --phase before
 实验数据库：本机 PostgreSQL `agentsupport_exp`（脚本自动重建表结构），
 迁移验证使用 `agentsupport_exp_mig`。
 
+## TDD 门禁（TDDGate）
+
+每个实验脚本在 `--phase after` 阶段内置关键断言；统一 runner 顺序重跑全部
+实验，任一断言失败即退出非零：
+
+```powershell
+python devtools/experiments/run_gate.py
+```
+
+CI 的 `experiments-gate` job（PostgreSQL + Redis services）会自动执行该门禁；
+任何修复回归都会让对应实验失败，从而拦截。覆盖 21 个可脚本化实验
+（exp8 为 CI 配置本身，无脚本）。
+
 ## 实验清单
 
 | 实验 | 核实的问题 | 修复 | 证据 |

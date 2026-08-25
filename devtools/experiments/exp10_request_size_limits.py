@@ -119,6 +119,14 @@ async def run(phase: str) -> str:
             "the API rejects it with 422 and nothing is written.",
         ]
     )
+    if phase == "after":
+        assert task_response.status_code == 422, (
+            f"oversized task accepted: {task_response.status_code}"
+        )
+        assert metadata_response.status_code == 422, (
+            f"oversized metadata accepted: {metadata_response.status_code}"
+        )
+        assert stored_task_len in (None, 0), f"oversized task stored: {stored_task_len}"
     record_evidence(
         "exp10_request_size_limits",
         phase,

@@ -134,6 +134,10 @@ async def run(phase: str) -> str:
             "(FastAPI worker thread), the canary fires on schedule.",
         ]
     )
+    if phase == "after":
+        assert canary_delay is not None and canary_delay < 0.5, (
+            f"event-loop stall {canary_delay} seconds"
+        )
     record_evidence(
         "exp12_rest_route_blocking",
         phase,

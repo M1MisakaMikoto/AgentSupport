@@ -84,6 +84,8 @@ async def run(phase: str) -> str:
             "delivers the event.",
         ]
     )
+    if phase == "after":
+        assert len(delivered) == 1, f"delivered {len(delivered)} events"
     record_evidence(
         "exp18_event_store_lost_wakeup",
         phase,

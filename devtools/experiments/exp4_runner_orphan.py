@@ -206,6 +206,9 @@ async def main(phase: str) -> str:
         __import__("json").dumps(events_after_wait, indent=2, default=str),
         "```",
     ]
+    if phase == "after":
+        assert not has_completed_after, "runner kept working after control plane gave up"
+        assert has_cancelled_after, "runner was not cancelled after timeout"
 
     try:
         shutil.rmtree(workspace_path, ignore_errors=True)

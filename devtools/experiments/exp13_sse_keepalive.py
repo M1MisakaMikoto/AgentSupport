@@ -125,6 +125,9 @@ async def run(phase: str) -> str:
             "comment frame arrives at the configured interval.",
         ]
     )
+    if phase == "after":
+        assert first_chunk is not None, "no keepalive frame arrived"
+        assert b": keepalive" in first_chunk, f"unexpected frame: {first_chunk!r}"
     record_evidence(
         "exp13_sse_keepalive",
         phase,

@@ -127,6 +127,8 @@ async def run(phase: str) -> str:
             "full table is returned. After the fix `limit`/`offset` are honored.",
         ]
     )
+    if phase == "after":
+        assert limited_items == 100, f"limit=100 returned {limited_items} items"
     record_evidence(
         "exp14_list_pagination",
         phase,

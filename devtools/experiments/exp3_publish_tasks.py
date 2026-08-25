@@ -138,6 +138,11 @@ def main(phase: str) -> None:
             f"- application-level error records: {len(app_errors)}\n"
             f"  ```\n" + "\n".join(app_errors[:2]) + "\n  ```\n"
         )
+        if phase == "after":
+            tracked = getattr(service2, "_publish_tasks", None)
+            assert tracked is not None, "publish tasks are not tracked"
+            assert len(messages) == 0, "unhandled asyncio task exceptions remain"
+            assert len(app_errors) >= 1, "publish failure was not logged"
         return "\n\n".join(sections)
 
     markdown = asyncio.run(run())

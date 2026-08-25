@@ -153,6 +153,10 @@ async def run(phase: str) -> str:
             "fires on schedule while the query runs in a worker thread.",
         ]
     )
+    if phase == "after":
+        assert canary_delay is not None and canary_delay < 0.5, (
+            f"event-loop stall {canary_delay} seconds"
+        )
     record_evidence(
         "exp9_event_loop_blocking",
         phase,

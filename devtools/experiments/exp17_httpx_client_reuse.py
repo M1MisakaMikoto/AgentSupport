@@ -86,6 +86,8 @@ async def run(phase: str) -> str:
             "connection pool). After the fix one client is reused.",
         ]
     )
+    if phase == "after":
+        assert instances == 1, f"AsyncClient instances created: {instances}"
     record_evidence(
         "exp17_httpx_client_reuse",
         phase,

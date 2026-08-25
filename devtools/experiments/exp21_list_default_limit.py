@@ -110,6 +110,11 @@ async def run(phase: str) -> str:
             "`limit` still overrides.",
         ]
     )
+    if phase == "after":
+        assert len(no_params.json()) == 100, (
+            f"default limit returned {len(no_params.json())} items"
+        )
+        assert len(explicit.json()) == 1000, "explicit limit override broken"
     record_evidence(
         "exp21_list_default_limit",
         phase,

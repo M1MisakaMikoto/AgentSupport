@@ -175,6 +175,10 @@ def main(phase: str) -> None:
         "\n".join(session_events_queries[:6]),
         "```",
     ]
+    if phase == "after":
+        assert rows[0][2] <= 2, f"list_sessions query count: {rows[0][2]}"
+        assert rows[3][2] <= 5, f"session_events query count: {rows[3][2]}"
+        assert rows[4][2] <= 30, f"stream poll query count: {rows[4][2]}"
     record_evidence(
         "exp1_nplus1",
         phase,

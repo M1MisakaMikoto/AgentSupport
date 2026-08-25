@@ -75,6 +75,12 @@ async def run(phase: str) -> str:
             "per channel is reused across waits.",
         ]
     )
+    if phase == "after":
+        assert counters["pubsub"] == 1, f"pubsub objects created: {counters['pubsub']}"
+        assert counters["subscribe"] == 1, (
+            f"SUBSCRIBE commands issued: {counters['subscribe']}"
+        )
+        assert woke is True, "publish did not wake the waiter"
     await notifier.close()
     record_evidence(
         "exp15_redis_pubsub_churn",

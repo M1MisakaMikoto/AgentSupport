@@ -118,9 +118,11 @@ def main(phase: str) -> None:
 
     rows: list[list[object]] = []
     ratios: list[str] = []
+    last_elapsed = 0.0
     for event_count in (500, 1000, 2000, 4000):
         conversation_id = _seed(repo, event_count)
         elapsed, loaded = _measure(repo, conversation_id, event_count)
+        last_elapsed = elapsed
         rows.append([event_count, f"{elapsed * 1000:.2f} ms", loaded])
         ratios.append(f"E={event_count}: t/E = {elapsed / event_count * 1e6:.2f} µs/event")
 
@@ -137,6 +139,8 @@ def main(phase: str) -> None:
         "O(E) expected when the fill loop appends missing events in one pass.",
         "```",
     ]
+    if phase == "after":
+        assert last_elapsed < 0.5, f"4000-event warm-up took {last_elapsed:.3f}s"
     record_evidence(
         "exp2_event_load",
         phase,

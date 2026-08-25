@@ -215,6 +215,16 @@ def main(phase: str) -> None:
             "```",
         ]
     )
+    if phase == "after":
+        assert rows[0][1] == "p", "conversation_events is not partitioned"
+        assert any(
+            row[0] == "automatic partition after write (2026-12)" and row[1] is True
+            for row in rows
+        ), "future-month write did not create a partition"
+        assert any(
+            row[0] == "idle partitions dropped before 2026-05" and row[1] >= 4
+            for row in rows
+        ), "idle month partitions were not dropped"
     record_evidence(
         "exp22_event_partitioning",
         phase,

@@ -67,6 +67,10 @@ def main(phase: str) -> None:
             "with load 5. After the fix the lowest-load Runner is preferred.",
         ]
     )
+    if phase == "after":
+        assert selections.get("C", 0) == 60, (
+            f"lowest-load runner selected {selections.get('C', 0)}/60"
+        )
     record_evidence(
         "exp16_runner_load_balancing",
         phase,

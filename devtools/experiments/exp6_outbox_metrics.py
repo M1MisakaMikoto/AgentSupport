@@ -130,6 +130,9 @@ def main(phase: str) -> None:
             "Expected after fix: `agentsupport_outbox_pending = 6.0` and lag > 0.",
         ]
     )
+    if phase == "after":
+        assert pending == "6.0", f"outbox_pending scrape: {pending}"
+        assert lag != "0.0", "outbox lag is still hard-coded to 0"
     record_evidence(
         "exp6_outbox_metrics",
         phase,

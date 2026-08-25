@@ -133,6 +133,13 @@ async def run(phase: str) -> str:
             "gauges are computed from PostgreSQL.",
         ]
     )
+    if phase == "after":
+        assert _metric(lines, "agentsupport_queue_ready ") == "5.0", (
+            "queue_ready does not reflect the database"
+        )
+        assert _metric(lines, "agentsupport_jobs_running ") == "1.0"
+        assert _metric(lines, "agentsupport_jobs_waiting ") == "1.0"
+        assert _metric(lines, "agentsupport_active_runtimes ") == "1.0"
     record_evidence(
         "exp20_metrics_temporal_truth",
         phase,
