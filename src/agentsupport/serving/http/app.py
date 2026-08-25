@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from ...application.service import AgentSupportService
-from ...bootstrap.container import build_agentsupport_service
+from ...bootstrap.container import build_agentsupport_service, build_eval_service
 from ...observability import context as obs_context
 from ...observability import logging as obs_logging
 from ...observability import metrics as obs_metrics
@@ -19,6 +19,7 @@ from .api_docs import api_reference_description
 from .errors import install_error_handlers
 from .routes import (
     diagnostics_router,
+    eval_router,
     events_router,
     interactions_router,
     mcp_servers_router,
@@ -29,8 +30,15 @@ from .routes import (
 )
 
 
-def create_app(service: AgentSupportService | None = None) -> FastAPI:
+def create_app(
+    service: AgentSupportService | None = None,
+    *,
+    eval_service=None,
+) -> FastAPI:
     selected_service = service or build_agentsupport_service()
+    selected_eval_service = eval_service or build_eval_service(
+        selected_service.config, agentsupport=selected_service
+    )
     obs_logging.configure_logging(
         log_format=selected_service.config.log_format,
         level=selected_service.config.log_level,
@@ -43,7 +51,7 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if selected_service.distributed:
+        if selected_service.temporal_mode:
             yield
             return
 
@@ -77,6 +85,7 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.service = selected_service
+    app.state.eval_service = selected_eval_service
     obs_tracing.instrument_app(app)
 
     @app.middleware("http")
@@ -104,6 +113,7 @@ def create_app(service: AgentSupportService | None = None) -> FastAPI:
     app.include_router(resources_router)
     app.include_router(diagnostics_router)
     app.include_router(events_router)
+    app.include_router(eval_router)
     app.include_router(interactions_router)
     app.include_router(mcp_servers_router)
     app.include_router(registrations_router)
