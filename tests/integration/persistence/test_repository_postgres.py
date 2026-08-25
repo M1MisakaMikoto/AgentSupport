@@ -17,12 +17,16 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import inspect, select, text
+from sqlalchemy import event as sa_event
+from sqlalchemy import insert, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from agentsupport.adapters.persistence.sqlalchemy.eval_store import SqlAlchemyEvalStore
-from agentsupport.adapters.persistence.sqlalchemy.models import EvalRunCaseRow
+from agentsupport.adapters.persistence.sqlalchemy.models import (
+    EvalRunCaseRow,
+    OutboxEventRow,
+)
 from agentsupport.adapters.persistence.sqlalchemy.repository import PostgresRepository
 from agentsupport.domain import Conversation, ExecutionState
 from agentsupport.evaluation.domain import (
@@ -146,3 +150,135 @@ def test_run_cases_index_and_check_constraints():
                 "created_at": datetime.now(UTC),
             },
         )
+
+
+def test_list_sessions_uses_batched_lease_lookup(repository):
+    """list_sessions must not issue one container-lease query per session."""
+
+    workspace = repository.create_workspace(
+        "batch-ws", "/workspace/batch-ws", _request_hash(), f"bw-{uuid4().hex}"
+    )
+    for _ in range(10):
+        repository.create_session(workspace, _request_hash(), f"bs-{uuid4().hex}")
+
+    counts = {"selects": 0}
+
+    def _count(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().lower().startswith("select"):
+            counts["selects"] += 1
+
+    sa_event.listen(repository.engine, "before_cursor_execute", _count)
+    try:
+        sessions = repository.list_sessions()
+    finally:
+        sa_event.remove(repository.engine, "before_cursor_execute", _count)
+    assert len(sessions) >= 10
+    assert counts["selects"] <= 2, f"expected <=2 SELECTs, got {counts['selects']}"
+
+
+def test_list_session_events_is_single_query(repository):
+    workspace = repository.create_workspace(
+        "events-ws", "/workspace/events-ws", _request_hash(), f"ew-{uuid4().hex}"
+    )
+    session = repository.create_session(workspace, _request_hash(), f"es-{uuid4().hex}")
+    conversation = Conversation(session_id=session.id, task="events")
+    persisted = repository.create_conversation(
+        conversation, _request_hash(), f"ec-{uuid4().hex}"
+    )
+    event = EventEnvelope(
+        run_id=persisted.run.run_id,
+        seq=persisted.run.last_seq + 1,
+        type="message",
+        payload={},
+    )
+    repository.append_event(persisted, event)
+
+    counts = {"selects": 0}
+
+    def _count(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().lower().startswith("select"):
+            counts["selects"] += 1
+
+    sa_event.listen(repository.engine, "before_cursor_execute", _count)
+    try:
+        events = repository.list_session_events(session.id)
+    finally:
+        sa_event.remove(repository.engine, "before_cursor_execute", _count)
+    assert [item.type for item in events] == ["message"]
+    assert counts["selects"] == 1
+
+
+def test_outbox_stats_reports_pending(repository):
+    baseline = repository.outbox_stats()["pending"]
+    now = datetime.now(UTC)
+    with repository.engine.begin() as conn:
+        conn.execute(
+            insert(OutboxEventRow),
+            [
+                {
+                    "id": str(uuid4()),
+                    "topic": "conversation.events",
+                    "aggregate_id": str(uuid4()),
+                    "payload": {"pending": True},
+                    "created_at": now,
+                    "published_at": None,
+                },
+                {
+                    "id": str(uuid4()),
+                    "topic": "conversation.events",
+                    "aggregate_id": str(uuid4()),
+                    "payload": {"pending": True},
+                    "created_at": now,
+                    "published_at": None,
+                },
+                {
+                    "id": str(uuid4()),
+                    "topic": "conversation.events",
+                    "aggregate_id": str(uuid4()),
+                    "payload": {"published": True},
+                    "created_at": now,
+                    "published_at": now,
+                },
+            ],
+        )
+    stats = repository.outbox_stats()
+    assert stats["pending"] == baseline + 2
+    assert stats["lag_seconds"] >= 0
+
+
+def test_retention_indexes_exist(repository):
+    expected = {
+        ("outbox_events", "ix_outbox_events_published_at"),
+        ("idempotency_keys", "ix_idempotency_keys_created_at"),
+        ("conversation_checkpoints", "ix_conversation_checkpoints_created_at"),
+        ("runtime_operations", "ix_runtime_operations_created_at"),
+        ("container_leases", "ix_container_leases_expires_at"),
+        ("workspace_write_leases", "ix_workspace_write_leases_expires_at"),
+    }
+    found = set()
+    for table_name in {name for name, _index in expected}:
+        for index in inspect(repository.engine).get_indexes(table_name):
+            found.add((table_name, index["name"]))
+    assert expected <= found
+
+
+def test_conversation_state_counts_and_oldest_queued(repository):
+    workspace = repository.create_workspace(
+        "states-ws", "/workspace/states-ws", _request_hash(), f"sw-{uuid4().hex}"
+    )
+    session = repository.create_session(workspace, _request_hash(), f"ss-{uuid4().hex}")
+    for i in range(3):
+        conversation = Conversation(session_id=session.id, task=f"state-{i}")
+        repository.create_conversation(conversation, _request_hash(), f"sc-{i}-{uuid4().hex}")
+    with repository.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE conversations SET execution_state = 'QUEUED', "
+                "created_at = now() - interval '2 hours'"
+            )
+        )
+    counts = repository.conversation_state_counts()
+    assert counts.get("QUEUED", 0) >= 3
+    oldest = repository.oldest_queued_created_at()
+    assert oldest is not None
+    assert (datetime.now(UTC) - oldest).total_seconds() > 3600

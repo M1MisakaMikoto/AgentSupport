@@ -46,3 +46,41 @@ async def test_session_sse_streams_events(service):
     assert first.user_id == "u-1"
     assert first.project_id == "p-1"
     await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_oversized_request_bodies_rejected(service):
+    workspace = service.create_workspace("size-limit")
+    session = service.create_session(workspace.id)
+    app = create_app(service)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        oversized_task = await client.post(
+            f"/sessions/{session.id}/conversations",
+            json={"task": "x" * 100_001},
+        )
+        assert oversized_task.status_code == 422
+        oversized_metadata = await client.post(
+            "/sessions",
+            json={
+                "workspace_id": str(workspace.id),
+                "metadata": {"blob": "y" * 40_000},
+            },
+        )
+        assert oversized_metadata.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_pagination(service):
+    workspace = service.create_workspace("pagination")
+    for _ in range(5):
+        service.create_session(workspace.id)
+    app = create_app(service)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first_page = await client.get("/sessions", params={"limit": 2, "offset": 0})
+        second_page = await client.get("/sessions", params={"limit": 2, "offset": 2})
+        assert first_page.status_code == 200
+        assert len(first_page.json()) == 2
+        assert len(second_page.json()) == 2
+        first_ids = {item["id"] for item in first_page.json()}
+        second_ids = {item["id"] for item in second_page.json()}
+        assert first_ids.isdisjoint(second_ids)

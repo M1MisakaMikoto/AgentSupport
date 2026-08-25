@@ -59,12 +59,15 @@ async def test_kubernetes_runtime_creates_fenced_runner_and_preserves_workspace_
 
     pod = resources["pods"][runtime_id]
     assert pod["metadata"]["labels"]["agentsupport/lease-epoch"] == "7"
+    container = pod["spec"]["containers"][0]
+    assert container["resources"] == {
+        "requests": {"cpu": "500m", "memory": "1Gi"},
+        "limits": {"cpu": "2", "memory": "2Gi"},
+    }
     assert pod["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] in resources[
         "persistentvolumeclaims"
     ]
-    assert {item["name"]: item["value"] for item in pod["spec"]["containers"][0]["env"]}[
-        "SESSION_LEASE_EPOCH"
-    ] == "7"
+    assert {item["name"]: item["value"] for item in container["env"]}["SESSION_LEASE_EPOCH"] == "7"
     assert await driver.endpoint(runtime_id) == f"http://{runtime_id}.agents.svc:8080"
     assert (await driver.inspect(runtime_id))["status"] == "running"
 

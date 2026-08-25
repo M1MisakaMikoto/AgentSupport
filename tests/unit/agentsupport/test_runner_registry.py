@@ -118,3 +118,37 @@ async def test_registered_runner_is_used_for_inline_routing(tmp_path):
     await service.create_conversation(session.id, "task")
 
     assert captured["runner_url"] == "http://127.0.0.1:8080"
+
+
+def test_select_ready_runner_prefers_lowest_load(tmp_path):
+    service = _service(tmp_path)
+    first = service.register_runner(
+        RunnerRegistrationRequest(
+            provider="trae",
+            endpoint="http://runner-a:8080",
+            capabilities=list(RUNNER_CAPABILITIES),
+        ),
+        bootstrap_token="bootstrap-secret",
+    )
+    second = service.register_runner(
+        RunnerRegistrationRequest(
+            provider="trae",
+            endpoint="http://runner-b:8080",
+            capabilities=list(RUNNER_CAPABILITIES),
+        ),
+        bootstrap_token="bootstrap-secret",
+    )
+    service.runner_heartbeat(
+        first.runner_id,
+        RunnerHeartbeat(status="READY", load=5),
+        runner_token=first.token,
+    )
+    service.runner_heartbeat(
+        second.runner_id,
+        RunnerHeartbeat(status="READY", load=0),
+        runner_token=second.token,
+    )
+
+    selected = service.select_ready_runner(set(RUNNER_CAPABILITIES))
+    assert selected is not None
+    assert selected.runner_id == second.runner_id
