@@ -2,7 +2,7 @@
 
 本目录是 AgentSupport 项目的 agent 实验场：**agent 产出内容（实验、证据、门户 preview）记录在项目仓库**。
 
-Lab 的**框架**（文档规范、词汇表、ADR、薄规则）位于 `ai-coding-configs/.dev/lab/`，不在本目录重复维护。
+Lab 的**框架**（文档规范、词汇表、ADR、薄规则）位于 `.dev/private/lab/`，不在本目录重复维护。
 
 ## 快速开始
 
@@ -28,7 +28,7 @@ python -m http.server 8000 --directory .dev\lab
 └─ LICENSE                    # Temporal MIT（随实验记录）
 ```
 
-框架（规范/词汇表/ADR）在 `ai-coding-configs/.dev/lab/`，门户已用相对链接指向。
+框架（规范/词汇表/ADR）在 `.dev/private/lab/`，门户已用相对链接指向。
 
 ## 实验索引
 
