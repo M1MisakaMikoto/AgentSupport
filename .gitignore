@@ -13,9 +13,3 @@ dist/
 workspace-data/
 .tmp/
 .docker-runtime-workspace/
-
-# .dev 分离规则在 .git/info/exclude（与 harness 共享工作区，避免规则互相泄漏）
-.dev/public/lab/**/__pycache__/
-
-# harness 仓库 git 目录（与项目仓库混在同一目录）
-/.git-harness/
