@@ -358,7 +358,7 @@ def _run_summarize() -> None:
                 last_error = "no draft produced"
                 time.sleep(2)
                 continue
-            draft = drafts[-1]
+            draft = max(drafts, key=lambda d: d["created_at"])
             STATE.summary["progress"] = "validating"
             STATE.summary["skill_id"] = draft["skill_id"]
             resp = client.post(
