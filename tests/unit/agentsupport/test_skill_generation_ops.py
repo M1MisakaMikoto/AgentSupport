@@ -140,6 +140,22 @@ async def test_generate_skill_unwraps_json_string_result(tmp_path):
     assert draft.frontmatter["name"] == "fix-n-plus-one"
 
 
+async def test_generate_skill_unwraps_fenced_json_result(tmp_path):
+    """Real models often wrap the JSON envelope in a ```json code block."""
+    fenced = "```json\n" + json.dumps({"skill_markdown": SKILL_MARKDOWN}) + "\n```"
+    service = _service(
+        tmp_path,
+        result={"status": "completed", "content": fenced, "steps": 1, "usage": {}},
+    )
+    session = await _completed_session(service)
+
+    request = await service.generate_skill(session.id, tenant_id="t-1")
+
+    assert request.status == GenerationStatus.COMPLETED
+    draft = service.list_skill_drafts(tenant_id="t-1")[0]
+    assert draft.skill_id == "fix-n-plus-one"
+    assert draft.frontmatter["name"] == "fix-n-plus-one"
+
 async def test_generate_skill_requires_matching_tenant(tmp_path):
     service = _service(tmp_path)
     session = await _completed_session(service, tenant_id="t-1")

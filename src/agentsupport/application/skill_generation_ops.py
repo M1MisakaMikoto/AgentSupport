@@ -42,6 +42,11 @@ _GENERATION_PROMPT = """你是 AgentSupport 的 skill 提炼 agent。请分析�
 """
 
 
+def _strip_markdown_fence(text: str) -> str:
+    """Strip a fenced code block around JSON/SKILL.md if present."""
+    match = re.match(r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$", text, re.DOTALL)
+    return match.group(1) if match else text
+
 class SkillGenerationOpsMixin:
     """Manual generation, draft review and publication."""
 
@@ -228,10 +233,14 @@ class SkillGenerationOpsMixin:
             text = result.strip()
             if not text:
                 return None
+            # Models frequently wrap the JSON envelope in a fenced code
+            # block (```json ... ```) despite being asked for raw JSON;
+            # strip the fence before parsing so a valid envelope is kept.
+            stripped = _strip_markdown_fence(text)
             try:
-                parsed = json.loads(text)
+                parsed = json.loads(stripped)
             except json.JSONDecodeError:
-                return text if text.startswith("---") else None
+                return stripped if stripped.startswith("---") else None
             return SkillGenerationOpsMixin._extract_skill_content(parsed)
         if isinstance(result, dict):
             for key in ("skill_markdown", "skill_content", "content"):
