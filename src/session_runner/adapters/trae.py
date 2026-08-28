@@ -434,17 +434,40 @@ class TraeExecutionAdapter:
         if not execution.success:
             step_error = execution.steps[-1].error if execution.steps else None
             raise RuntimeError(step_error or execution.final_result or "Trae execution failed")
+        content = execution.final_result or self._fallback_final_content()
         result = {
             "status": "completed",
-            "content": execution.final_result,
+            "content": content,
             "steps": len(execution.steps),
         }
         usage = _usage_payload(getattr(execution, "total_tokens", None))
         if usage is not None:
             result["usage"] = usage
-        if execution.final_result:
-            self.emit("message", {"content": execution.final_result})
+        if content:
+            self.emit("message", {"content": content})
         return result
+
+    def _fallback_final_content(self) -> str:
+        """Recover text the model produced before a content-less task_done.
+
+        Trae's completion check only looks for a ``task_done`` tool call; a
+        model that answers in one turn without ``task_done`` is pushed into
+        another turn where it may call ``task_done`` with empty content,
+        discarding the real answer. Fall back to the last non-empty
+        assistant text recorded in the trajectory.
+        """
+        if not self.trajectory or not self.trajectory.is_file():
+            return ""
+        try:
+            payload = json.loads(self.trajectory.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return ""
+        for interaction in reversed(payload.get("llm_interactions") or []):
+            response = interaction.get("response") or {}
+            content = response.get("content")
+            if isinstance(content, str) and content.strip():
+                return content
+        return ""
 
     def _session_history_messages(self) -> list[Any]:
         """Turn prior session dialogue into LLM messages for this run.

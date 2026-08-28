@@ -8,6 +8,8 @@ to the agent, otherwise it only ever sees the current task.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -19,6 +21,7 @@ TASK = "我们来进行一个命令测试 当我说/close你就回复/close"
 class FakeTraeAgent:
     def __init__(self, initial: list) -> None:
         self._initial_messages = initial
+        self.final_result = "ok"
         self.new_task_calls: list[tuple[str, dict]] = []
         self.executions = 0
 
@@ -27,7 +30,9 @@ class FakeTraeAgent:
 
     async def execute_task(self):
         self.executions += 1
-        return SimpleNamespace(success=True, steps=[], final_result="ok", total_tokens=None)
+        return SimpleNamespace(
+            success=True, steps=[], final_result=self.final_result, total_tokens=None
+        )
 
 
 class FakeAgentWrapper:
@@ -91,6 +96,60 @@ def test_session_history_messages_maps_dialogue_and_skips_noise() -> None:
     assert messages[0].content == TASK
     assert messages[1].role == "assistant"
     assert "/close" in messages[1].content
+
+
+def test_fallback_recovers_last_nonempty_assistant_text(tmp_path) -> None:
+    traj = tmp_path / "traj.json"
+    traj.write_text(
+        json.dumps({"llm_interactions": [
+            {"response": {"content": "", "finish_reason": "tool_use"}},
+            {"response": {"content": "---\nname: my-skill\ndescription: x\n---"}},
+        ]}),
+        encoding="utf-8",
+    )
+    request = MagicMock()
+    request.context_bundle = {"task": "t", "recent_events": []}
+    adapter = _adapter(request, FakeTraeAgent(initial=[object()]))
+    adapter.trajectory = traj
+
+    assert "name: my-skill" in adapter._fallback_final_content()
+
+
+def test_run_uses_fallback_when_final_result_empty(tmp_path) -> None:
+    traj = tmp_path / "traj.json"
+    traj.write_text(
+        json.dumps({"llm_interactions": [
+            {"response": {"content": "---\nname: my-skill\ndescription: x\n---"}}
+        ]}),
+        encoding="utf-8",
+    )
+    request = MagicMock()
+    request.context_bundle = {"task": "t", "recent_events": []}
+    trae_agent = FakeTraeAgent(initial=[object()])
+    trae_agent.final_result = ""
+    adapter = _adapter(request, trae_agent)
+    adapter.trajectory = traj
+
+    result = asyncio.run(adapter.run())
+
+    assert result["content"] == "---\nname: my-skill\ndescription: x\n---"
+    assert result["status"] == "completed"
+
+def test_run_keeps_original_final_result_when_present(tmp_path) -> None:
+    traj = tmp_path / "traj.json"
+    traj.write_text(
+        json.dumps({"llm_interactions": [{"response": {"content": "stale text"}}]}),
+        encoding="utf-8",
+    )
+    request = MagicMock()
+    request.context_bundle = {"task": "t", "recent_events": []}
+    trae_agent = FakeTraeAgent(initial=[object()])
+    adapter = _adapter(request, trae_agent)
+    adapter.trajectory = traj
+
+    result = asyncio.run(adapter.run())
+
+    assert result["content"] == "ok"
 
 
 def test_session_history_messages_empty_without_events() -> None:
