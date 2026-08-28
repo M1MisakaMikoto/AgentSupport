@@ -43,6 +43,10 @@ Swagger UI（`/docs`）顶部内嵌本参考全文（`docs/api/agentsupport-api.
 | `GET` | `/skills` | [7.2](#72-get-skills) |
 | `GET` | `/skills/{skill_id}` | [7.3](#73-get-skillsskill_id) |
 | `DELETE` | `/skills/{skill_id}` | [7.4](#74-delete-skillsskill_id) |
+| `POST` | `/sessions/{session_id}/skills/generate` | [7.5](#75-post-sessionssession_idskillsgenerate) |
+| `GET` | `/sessions/{session_id}/skills/generations/{generation_id}` | [7.6](#76-get-sessionssession_idskillsgenerationsgeneration_id) |
+| `GET` | `/skill-drafts` | [7.7](#77-get-skill-drafts) |
+| `POST` | `/skill-drafts/{draft_id}/review` | [7.8](#78-post-skill-draftsdraft_idreview) |
 | `POST` | `/mcp-servers` | [8.1](#81-post-mcp-servers) |
 | `GET` | `/mcp-servers` | [8.2](#82-get-mcp-servers) |
 | `GET` | `/mcp-servers/{server_id}` | [8.3](#83-get-mcp-serversserver_id) |
@@ -580,6 +584,41 @@ file=@SKILL.md
 **成功响应 `204`**（无内容）。
 
 **错误**：`404 SKILL_NOT_FOUND`。
+
+### 7.5 POST /sessions/{session_id}/skills/generate
+
+对指定 session 手动发起 skill 生成：平台把该 session 的历史事件序列化为上下文，通过 agent 执行生成
+标准 `SKILL.md`（frontmatter 至少含 `name` / `description`），结果落为待审核草稿（`skill_drafts`）。
+是否"跑通"由发起人自行判断，平台不做自动判定。
+
+**路径参数**：`session_id`（UUID）。
+**请求头**：`X-Tenant-Id`（可选）：调用方租户；与 session 的 `tenant_id` 不一致时返回 404。
+**成功响应 `201`**：生成请求对象（`id` / `session_id` / `conversation_id` / `tenant_id` / `project_id` /
+`status` / `error` / `created_at` / `completed_at`）。`status` 为 `completed` 时草稿已可查
+（内联模式同步完成；Temporal 模式下通过 7.6 轮询）。
+**错误**：`404 SESSION_NOT_FOUND`（session 不存在或租户不匹配）。
+
+### 7.6 GET /sessions/{session_id}/skills/generations/{generation_id}
+
+查询生成状态；对未终态请求会先尝试回收 agent 运行结果（`run.completed` → 校验 frontmatter → 落草稿）。
+`generation_id` 必须属于该 session，否则 404。
+**错误**：`404 GENERATION_NOT_FOUND`。
+
+### 7.7 GET /skill-drafts
+
+列出待审核草稿。
+**查询参数**：`tenant_id`（可选）、`status`（可选：`draft` / `review` / `published` / `rejected`）、
+`limit`（1–1000）、`offset`。
+草稿对象含 `id` / `skill_id` / `tenant_id` / `project_id` / `status` / `frontmatter` /
+`source_session_id` / `created_at` / `reviewed_at` / `review_note`。
+
+### 7.8 POST /skill-drafts/{draft_id}/review
+
+人工审核：`approve` 将 SKILL.md 按 tenant 命名空间发布到 skill 库（之后可被同租户会话勾选注入）；
+`reject` 标记拒绝。发布前不影响现有 skill 注入链路。
+**请求体**：`decision`（`approve` | `reject`，必填）、`note`（可选）。
+**请求头**：`X-Tenant-Id`（可选）：与草稿 tenant 不一致时返回 404。
+**错误**：`404 DRAFT_NOT_FOUND`、`409 DRAFT_NOT_REVIEWABLE`（已终态）、`422 DRAFT_REVIEW_INVALID`。
 
 ## 8. MCP Server API
 

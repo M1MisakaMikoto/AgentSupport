@@ -26,6 +26,12 @@ from .project import (
     project_config_from_definition,
 )
 from .session import Session
+from .skill_generation import (
+    DraftStatus,
+    GenerationStatus,
+    SkillDraft,
+    SkillGenerationRequest,
+)
 from .workspace import Workspace
 
 __all__ = [
@@ -34,7 +40,9 @@ __all__ = [
     "Checkpoint",
     "ContextBundle",
     "Conversation",
+    "DraftStatus",
     "ExecutionState",
+    "GenerationStatus",
     "McpServer",
     "Organization",
     "OutboxNotification",
@@ -48,9 +56,12 @@ __all__ = [
     "ProjectConfig",
     "RunProjection",
     "Session",
+    "SkillDraft",
+    "SkillGenerationRequest",
     "User",
     "Workspace",
     "default_project_config",
     "project_config_from_definition",
     "utc_now",
 ]
+

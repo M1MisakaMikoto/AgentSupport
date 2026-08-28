@@ -82,7 +82,9 @@ class SessionOpsMixin:
         auto_created: dict[str, Any] | None = None,
     ) -> Session:
         if config is not None and config.skills:
-            self._validate_skill_ids([skill.skill_id for skill in config.skills])
+            self._validate_skill_ids(
+                [skill.skill_id for skill in config.skills], tenant_id=tenant_id
+            )
         if config is not None and config.resources.mcp_refs:
             self._validate_mcp_refs(config.resources.mcp_refs)
         workspace = self._resolve_workspace(
@@ -181,7 +183,9 @@ class SessionOpsMixin:
                     workspace.root_path,
                     session.lease_epoch,
                     session.workspace_id,
-                    self.skill_provider.read_only_mounts(self._skills_for_session(session)),
+                    self.skill_provider.read_only_mounts(
+                        self._skills_for_session(session), tenant_id=session.tenant_id
+                    ),
                     runtime_operation_id=operation_id,
                 ),
                 timeout=self.config.runtime_start_timeout_seconds,
@@ -214,3 +218,5 @@ class SessionOpsMixin:
         if self.repository:
             self.repository.save_session(session)
         return True
+
+

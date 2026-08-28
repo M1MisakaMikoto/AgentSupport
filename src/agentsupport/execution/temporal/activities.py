@@ -157,8 +157,12 @@ def _build_run_request(
             "conversation_id": str(conversation.id),
             "workspace_ref": "/workspace",
             "recent_events": recent_events,
-            "skill_manifest": ctx.skill_provider.manifest(skills),
-            "skills": ctx.skill_provider.skill_prompt_entries(skills),
+            "skill_manifest": ctx.skill_provider.manifest(
+                skills, tenant_id=session.tenant_id
+            ),
+            "skills": ctx.skill_provider.skill_prompt_entries(
+                skills, tenant_id=session.tenant_id
+            ),
             "tool_policy": tool_policy,
             "mcp_refs": _resolve_mcp_refs(request.get("mcp_refs") or [], ctx),
         },
@@ -376,3 +380,5 @@ async def fail_run(payload: dict) -> dict:
     )
     await _make_sink(repository, conversation)(event)
     return {"status": "failed", "run_id": request["run_id"]}
+
+

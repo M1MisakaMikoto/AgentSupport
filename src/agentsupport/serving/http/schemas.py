@@ -1,6 +1,7 @@
 """HTTP request schemas for the v0.2 public API (execution resources only)."""
 
 import json
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -145,3 +146,35 @@ __all__ = [
     "SessionCreate",
     "WorkspaceCreate",
 ]
+
+
+class SkillDraftReviewRequest(BaseModel):
+    decision: Literal["approve", "reject"]
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class SkillDraftResponse(BaseModel):
+    id: UUID
+    skill_id: str
+    tenant_id: str | None
+    project_id: str | None
+    status: str
+    frontmatter: dict[str, Any]
+    source_session_id: UUID
+    created_at: datetime
+    reviewed_at: datetime | None = None
+    review_note: str | None = None
+
+
+class SkillGenerationResponse(BaseModel):
+    id: UUID
+    session_id: UUID
+    conversation_id: UUID | None = None
+    tenant_id: str | None = None
+    project_id: str | None = None
+    status: str
+    error: str | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+
+

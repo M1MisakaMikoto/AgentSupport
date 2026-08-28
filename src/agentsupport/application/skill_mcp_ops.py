@@ -50,11 +50,13 @@ class SkillMcpOpsMixin:
             raise ServiceError("SKILL_NOT_FOUND", "skill does not exist", 404)
 
 
-    def _validate_skill_ids(self, skill_ids: list[str]) -> None:
+    def _validate_skill_ids(
+        self, skill_ids: list[str], *, tenant_id: str | None = None
+    ) -> None:
         if not skill_ids:
             return
         try:
-            self.skill_provider.resolve(skill_ids)
+            self.skill_provider.resolve(skill_ids, tenant_id=tenant_id)
         except (FileNotFoundError, ValueError) as exc:
             raise ServiceError("SKILL_NOT_FOUND", str(exc), 404) from exc
 
@@ -200,3 +202,5 @@ class SkillMcpOpsMixin:
                 }
             )
         return resolved
+
+

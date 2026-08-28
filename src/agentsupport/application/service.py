@@ -19,6 +19,8 @@ from ..domain import (
     Conversation,
     McpServer,
     Session,
+    SkillDraft,
+    SkillGenerationRequest,
     Workspace,
 )
 from .checkpoint_ops import CheckpointOpsMixin
@@ -43,6 +45,7 @@ from .ports import (
 from .runner_ops import RunnerOpsMixin
 from .runner_registry import InMemoryRunnerRegistry
 from .session_ops import SessionOpsMixin
+from .skill_generation_ops import SkillGenerationOpsMixin
 from .skill_mcp_ops import SkillMcpOpsMixin
 from .workspace_ops import WorkspaceOpsMixin
 
@@ -63,6 +66,7 @@ class AgentSupportService(
     RunnerOpsMixin,
     CheckpointOpsMixin,
     EventOpsMixin,
+    SkillGenerationOpsMixin,
 ):
     """AgentSupport application service composed from domain operation mixins."""
 
@@ -89,6 +93,8 @@ class AgentSupportService(
         self.sessions: dict[UUID, Session] = {}
         self.conversations: dict[UUID, Conversation] = {}
         self.checkpoints: dict[UUID, Checkpoint] = {}
+        self.skill_generations: dict[UUID, SkillGenerationRequest] = {}
+        self.skill_drafts: dict[UUID, SkillDraft] = {}
         self.events_store = events_store
         self.event_notifier = event_notifier
         self.workspace_provider = workspace_provider
@@ -377,3 +383,5 @@ class AgentSupportService(
             "idempotency_records": len(stale_idempotency),
             "unreferenced_checkpoints": len(stale_checkpoints),
         }
+
+

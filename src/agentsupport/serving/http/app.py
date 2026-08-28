@@ -26,6 +26,7 @@ from .routes import (
     operations_router,
     registrations_router,
     resources_router,
+    skill_generations_router,
     skills_router,
 )
 
@@ -117,6 +118,7 @@ def create_app(
     app.include_router(interactions_router)
     app.include_router(mcp_servers_router)
     app.include_router(registrations_router)
+    app.include_router(skill_generations_router)
     app.include_router(skills_router)
     app.mount(
         "/debug",
@@ -127,3 +129,4 @@ def create_app(
 
 
 app = create_app()
+

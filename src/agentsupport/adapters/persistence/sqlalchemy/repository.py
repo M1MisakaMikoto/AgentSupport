@@ -27,6 +27,8 @@ from ....domain import (
     ProjectConfig,
     RunProjection,
     Session,
+    SkillDraft,
+    SkillGenerationRequest,
     Workspace,
 )
 from .models import (
@@ -41,6 +43,8 @@ from .models import (
     RunnerRegistrationRow,
     RuntimeOperationRow,
     SessionRow,
+    SkillDraftRow,
+    SkillGenerationRequestRow,
     WorkspaceRow,
     WorkspaceWriteLeaseRow,
 )
@@ -1354,3 +1358,177 @@ class PostgresRepository:
                     )
                 ).rowcount
         return result
+
+    # ------------------------------------------------------------------
+    # Skill generation: requests and drafts
+    # ------------------------------------------------------------------
+
+    def create_skill_generation_request(
+        self, request: SkillGenerationRequest
+    ) -> SkillGenerationRequest:
+        with self.transaction() as db:
+            db.add(
+                SkillGenerationRequestRow(
+                    id=str(request.id),
+                    session_id=str(request.session_id),
+                    conversation_id=(
+                        str(request.conversation_id) if request.conversation_id else None
+                    ),
+                    tenant_id=request.tenant_id,
+                    project_id=request.project_id,
+                    status=request.status.value,
+                    error=request.error,
+                    created_at=request.created_at,
+                    completed_at=request.completed_at,
+                )
+            )
+            return request
+
+    def get_skill_generation_request(
+        self, request_id: UUID, *, db: DbSession | None = None
+    ) -> SkillGenerationRequest | None:
+        if db is None:
+            with self.transaction() as tx:
+                return self.get_skill_generation_request(request_id, db=tx)
+        row = db.get(SkillGenerationRequestRow, str(request_id))
+        if row is None:
+            return None
+        return self._generation_from_row(row)
+
+    def list_skill_generation_requests(
+        self,
+        *,
+        tenant_id: str | None = None,
+        status: str | None = None,
+    ) -> list[SkillGenerationRequest]:
+        with self.transaction() as db:
+            statement = select(SkillGenerationRequestRow)
+            if tenant_id is not None:
+                statement = statement.where(
+                    SkillGenerationRequestRow.tenant_id == tenant_id
+                )
+            if status is not None:
+                statement = statement.where(SkillGenerationRequestRow.status == status)
+            rows = db.execute(
+                statement.order_by(SkillGenerationRequestRow.created_at)
+            ).scalars()
+            return [self._generation_from_row(row) for row in rows]
+
+    def update_skill_generation_request(
+        self, request: SkillGenerationRequest
+    ) -> SkillGenerationRequest:
+        with self.transaction() as db:
+            row = db.get(SkillGenerationRequestRow, str(request.id))
+            if row is None:
+                return request
+            row.conversation_id = (
+                str(request.conversation_id) if request.conversation_id else None
+            )
+            row.status = request.status.value
+            row.error = request.error
+            row.completed_at = request.completed_at
+            return request
+
+    def create_skill_draft(self, draft: SkillDraft) -> SkillDraft:
+        with self.transaction() as db:
+            db.add(
+                SkillDraftRow(
+                    id=str(draft.id),
+                    skill_id=draft.skill_id,
+                    tenant_id=draft.tenant_id,
+                    project_id=draft.project_id,
+                    source_session_id=str(draft.source_session_id),
+                    source_conversation_id=str(draft.source_conversation_id),
+                    generation_id=str(draft.generation_id),
+                    status=draft.status.value,
+                    skill_content=draft.skill_content,
+                    frontmatter=draft.frontmatter,
+                    created_at=draft.created_at,
+                    reviewed_at=draft.reviewed_at,
+                    review_note=draft.review_note,
+                )
+            )
+            return draft
+
+    def get_skill_draft(
+        self, draft_id: UUID, *, db: DbSession | None = None
+    ) -> SkillDraft | None:
+        if db is None:
+            with self.transaction() as tx:
+                return self.get_skill_draft(draft_id, db=tx)
+        row = db.get(SkillDraftRow, str(draft_id))
+        if row is None:
+            return None
+        return self._draft_from_row(row)
+
+    def list_skill_drafts(
+        self,
+        *,
+        tenant_id: str | None = None,
+        status: str | None = None,
+        generation_id: UUID | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[SkillDraft]:
+        with self.transaction() as db:
+            statement = select(SkillDraftRow)
+            if tenant_id is not None:
+                statement = statement.where(SkillDraftRow.tenant_id == tenant_id)
+            if status is not None:
+                statement = statement.where(SkillDraftRow.status == status)
+            if generation_id is not None:
+                statement = statement.where(
+                    SkillDraftRow.generation_id == str(generation_id)
+                )
+            statement = statement.order_by(SkillDraftRow.created_at.desc())
+            if offset:
+                statement = statement.offset(offset)
+            if limit is not None:
+                statement = statement.limit(limit)
+            rows = db.execute(statement).scalars()
+            return [self._draft_from_row(row) for row in rows]
+
+    def update_skill_draft(self, draft: SkillDraft) -> SkillDraft:
+        with self.transaction() as db:
+            row = db.get(SkillDraftRow, str(draft.id))
+            if row is None:
+                return draft
+            row.status = draft.status.value
+            row.reviewed_at = draft.reviewed_at
+            row.review_note = draft.review_note
+            return draft
+
+    @staticmethod
+    def _draft_from_row(row: SkillDraftRow) -> SkillDraft:
+        return SkillDraft(
+            id=UUID(row.id),
+            skill_id=row.skill_id,
+            tenant_id=row.tenant_id,
+            project_id=row.project_id,
+            source_session_id=UUID(row.source_session_id),
+            source_conversation_id=UUID(row.source_conversation_id),
+            generation_id=UUID(row.generation_id),
+            status=row.status,
+            skill_content=row.skill_content,
+            frontmatter=row.frontmatter,
+            created_at=row.created_at,
+            reviewed_at=row.reviewed_at,
+            review_note=row.review_note,
+        )
+
+    @staticmethod
+    def _generation_from_row(row: SkillGenerationRequestRow) -> SkillGenerationRequest:
+        return SkillGenerationRequest(
+            id=UUID(row.id),
+            session_id=UUID(row.session_id),
+            conversation_id=UUID(row.conversation_id) if row.conversation_id else None,
+            tenant_id=row.tenant_id,
+            project_id=row.project_id,
+            status=row.status,
+            error=row.error,
+            created_at=row.created_at,
+            completed_at=row.completed_at,
+        )
+
+
+

@@ -81,6 +81,43 @@ class ConversationEventRow(Base):
     runner_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class SkillDraftRow(Base):
+    __tablename__ = "skill_drafts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    skill_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    source_session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_conversation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    generation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    skill_content: Mapped[str] = mapped_column(Text, nullable=False)
+    frontmatter: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SkillGenerationRequestRow(Base):
+    __tablename__ = "skill_generation_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    conversation_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+    tenant_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    project_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
 class McpServerRow(Base):
     __tablename__ = "mcp_servers"
     server_id: Mapped[str] = mapped_column(String(120), primary_key=True)
@@ -328,3 +365,4 @@ if __name__ == "__main__":
     from ....bootstrap.settings import settings
 
     create_schema(settings.database_url)
+

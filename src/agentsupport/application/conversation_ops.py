@@ -67,8 +67,6 @@ class ConversationOpsMixin:
         mcp_refs: list[dict[str, Any]] | None = None,
         auto_created: dict[str, Any] | None = None,
     ) -> Conversation:
-        if skills is not None:
-            self._validate_skill_ids([skill.skill_id for skill in skills])
         if mcp_refs is not None:
             self._validate_mcp_refs(mcp_refs)
         session = None if self.temporal_mode else self.sessions.get(session_id)
@@ -86,6 +84,10 @@ class ConversationOpsMixin:
                 idempotency_key=None,
                 session_id=session_id,
                 auto_created=auto_created,
+            )
+        if skills is not None:
+            self._validate_skill_ids(
+                [skill.skill_id for skill in skills], tenant_id=session.tenant_id
             )
         if parent_conversation_id:
             parent = None if self.temporal_mode else self.conversations.get(parent_conversation_id)
@@ -289,8 +291,12 @@ class ConversationOpsMixin:
                     event.model_dump(mode="json")
                     for event in self.events_store.list(conversation.id)
                 ],
-                "skill_manifest": self.skill_provider.manifest(conversation_skills),
-                "skills": self.skill_provider.skill_prompt_entries(conversation_skills),
+                "skill_manifest": self.skill_provider.manifest(
+                    conversation_skills, tenant_id=session.tenant_id
+                ),
+                "skills": self.skill_provider.skill_prompt_entries(
+                    conversation_skills, tenant_id=session.tenant_id
+                ),
                 "tool_policy": tool_policy,
                 "mcp_refs": self._resolve_mcp_refs(conversation.mcp_refs, session),
             },
@@ -457,3 +463,6 @@ class ConversationOpsMixin:
             if checkpoint:
                 self.checkpoints[checkpoint.checkpoint_id] = checkpoint
         return checkpoint
+
+
+
