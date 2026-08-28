@@ -421,10 +421,15 @@ class TraeExecutionAdapter:
 
     async def run(self) -> dict[str, Any]:
         await self._initialize_agent()
-        execution = await self.agent.run(
-            self.request.context_bundle.get("task", ""),
-            {"project_path": str(self.workspace)},
-        )
+        task = self.request.context_bundle.get("task", "")
+        self.agent.agent.new_task(task, {"project_path": str(self.workspace)})
+        history = self._session_history_messages()
+        if history:
+            # A conversation is one exchange; a session is the collection of
+            # many exchanges. Insert earlier rounds' dialogue in front of the
+            # current task message so the agent sees the full session history.
+            self.agent.agent._initial_messages[1:1] = history
+        execution = await self.agent.agent.execute_task()
         self._emit_trajectory()
         if not execution.success:
             step_error = execution.steps[-1].error if execution.steps else None
@@ -440,6 +445,36 @@ class TraeExecutionAdapter:
         if execution.final_result:
             self.emit("message", {"content": execution.final_result})
         return result
+
+    def _session_history_messages(self) -> list[Any]:
+        """Turn prior session dialogue into LLM messages for this run.
+
+        The control plane aggregates earlier conversations' instructions and
+        assistant replies into ``context_bundle.recent_events``; without this,
+        the agent would only ever see the current task.
+        """
+        bundle = getattr(self.request, "context_bundle", None)
+        if isinstance(bundle, dict):
+            events = bundle.get("recent_events") or []
+        else:
+            events = getattr(bundle, "recent_events", None) or []
+        if not events:
+            return []
+
+        _ensure_vendored_trae_path()
+        from trae_agent.utils.llm_clients.llm_basics import LLMMessage
+
+        messages: list[Any] = []
+        for event in events:
+            if not isinstance(event, dict) or event.get("type") != "message":
+                continue
+            payload = event.get("payload") or {}
+            role = payload.get("role") or "assistant"
+            content = payload.get("content")
+            if role not in ("user", "assistant") or not content:
+                continue
+            messages.append(LLMMessage(role=role, content=str(content)))
+        return messages
 
     async def resume(self, checkpoint: Any, decision: ApprovalDecision) -> dict[str, Any]:
         await self._initialize_agent()

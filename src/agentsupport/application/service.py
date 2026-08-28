@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from agent_runner_contracts.checkpoint import RECENT_EVENTS_LIMIT
 from agent_runner_contracts.events import EventEnvelope
 
 from ..domain import (
@@ -236,6 +237,59 @@ class AgentSupportService(
     # ------------------------------------------------------------------
     # Session configuration resolution (config travels with the session)
     # ------------------------------------------------------------------
+
+    def _session_recent_events(
+        self,
+        session: Session,
+        conversation: Conversation,
+        *,
+        limit: int = RECENT_EVENTS_LIMIT,
+    ) -> list[dict[str, Any]]:
+        """Aggregate the session-wide conversation history for a run request.
+
+        A conversation is one exchange; a session is the collection of many
+        exchanges. Agents therefore see the tool-call history inside the
+        current conversation plus the dialogue history of earlier
+        conversations, mirroring how chat/agent products carry context.
+        """
+        if self.temporal_mode and self.repository:
+            conversations = self.repository.list_conversations(session_id=session.id)
+            events = self.repository.list_session_events(session.id)
+        else:
+            conversations = [
+                conv for conv in self.conversations.values() if conv.session_id == session.id
+            ]
+            events = sorted(
+                (
+                    event
+                    for conv in conversations
+                    for event in self.events_store.list(conv.id)
+                ),
+                key=lambda event: event.occurred_at,
+            )
+        # Earlier rounds' instructions live on the conversation rows, not the
+        # event stream; inject them as user messages so the agent sees the
+        # full dialogue history of the session.
+        prior = sorted(
+            (conv for conv in conversations if conv.id != conversation.id),
+            key=lambda conv: conv.created_at,
+        )
+        injected = [
+            {
+                "type": "message",
+                "payload": {"content": conv.task, "role": "user"},
+                "source": "agentsupport",
+                "conversation_id": str(conv.id),
+                "occurred_at": conv.created_at.isoformat(),
+            }
+            for conv in prior
+        ]
+        merged = sorted(
+            injected + [event.model_dump(mode="json") for event in events],
+            key=lambda event: event.get("occurred_at") or "",
+        )
+        return merged[-limit:]
+
 
     def _skills_for_session(self, session: Session) -> list[str]:
         if session.config and not session.config.is_empty():

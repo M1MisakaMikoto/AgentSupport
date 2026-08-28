@@ -108,15 +108,25 @@ async def test_run_passes_neutral_extra_args_without_issue(tmp_path):
 
     class FakeAgent:
         def __init__(self):
-            self.agent = SimpleNamespace(tools=[], _tool_caller=None)
-
-        async def run(self, task, extra_args):
-            captured["task"] = task
-            captured["extra_args"] = extra_args
-            return SimpleNamespace(success=True, final_result="ok", steps=[1])
+            self.agent = SimpleNamespace(
+                tools=[], _tool_caller=None, _initial_messages=[object()]
+            )
 
     def factory(settings, request, trajectory):
-        return FakeAgent()
+        fake = FakeAgent()
+
+        def new_task(task, extra_args):
+            captured["task"] = task
+            captured["extra_args"] = extra_args
+
+        async def execute_task():
+            return SimpleNamespace(
+                success=True, final_result="ok", steps=[1], total_tokens=None
+            )
+
+        fake.agent.new_task = new_task
+        fake.agent.execute_task = execute_task
+        return fake
 
     request = SimpleNamespace(
         run_id=uuid4(),

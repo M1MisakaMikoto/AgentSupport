@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 
 from temporalio import activity
 
+from agent_runner_contracts.checkpoint import RECENT_EVENTS_LIMIT
 from agent_runner_contracts.events import EventEnvelope
 
 from ...adapters.persistence.sqlalchemy.repository import PostgresRepository
@@ -140,10 +141,28 @@ def _build_run_request(
 
     skills = request.get("skills") or []
     tool_policy = request.get("tool_policy") or {}
-    recent_events = [
-        event.model_dump(mode="json")
-        for event in ctx.repository.list_events(conversation.id)
+    session_conversations = ctx.repository.list_conversations(session_id=session.id)
+    injected_instructions = [
+        {
+            "type": "message",
+            "payload": {"content": conv.task, "role": "user"},
+            "source": "agentsupport",
+            "conversation_id": str(conv.id),
+            "occurred_at": conv.created_at.isoformat(),
+        }
+        for conv in sorted(
+            (c for c in session_conversations if c.id != conversation.id),
+            key=lambda c: c.created_at,
+        )
     ]
+    recent_events = sorted(
+        injected_instructions
+        + [
+            event.model_dump(mode="json")
+            for event in ctx.repository.list_session_events(session.id)
+        ],
+        key=lambda event: event.get("occurred_at") or "",
+    )[-RECENT_EVENTS_LIMIT:]
     return {
         "run_id": str(conversation.run.run_id),
         "conversation_id": str(conversation.id),

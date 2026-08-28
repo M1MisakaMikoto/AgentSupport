@@ -287,10 +287,7 @@ class ConversationOpsMixin:
                 "task": conversation.task,
                 "conversation_id": str(conversation.id),
                 "workspace_ref": workspace_ref,
-                "recent_events": [
-                    event.model_dump(mode="json")
-                    for event in self.events_store.list(conversation.id)
-                ],
+                "recent_events": self._session_recent_events(session, conversation),
                 "skill_manifest": self.skill_provider.manifest(
                     conversation_skills, tenant_id=session.tenant_id
                 ),
