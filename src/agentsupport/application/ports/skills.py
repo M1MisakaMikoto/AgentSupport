@@ -13,7 +13,6 @@ class SkillProvider(Protocol):
         skill_ids: list[str],
         *,
         tenant_id: str | None = None,
-        max_chars: int = 20000,
     ) -> list[dict[str, Any]]: ...
 
     def read_only_mounts(

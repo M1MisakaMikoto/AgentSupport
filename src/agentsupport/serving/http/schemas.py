@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from ...domain import ConversationMode
+
 #: Upper bound for free-text task payloads. Long enough for real prompts,
 #: bounded so a caller cannot push unbounded text into the database and into
 #: every downstream system prompt.
@@ -84,6 +86,7 @@ class ConversationCreate(BaseModel):
     workspace_id: UUID | None = None
     skills: list[ConfigSkillInput] | None = None
     mcp_refs: list[dict[str, Any]] | None = None
+    mode: ConversationMode | None = None
 
 
 class McpServerCreate(BaseModel):

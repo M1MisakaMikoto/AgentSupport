@@ -9,11 +9,7 @@ import json
 from typing import Any
 from uuid import UUID
 
-from agent_runner_contracts.checkpoint import (
-    RECENT_EVENTS_LIMIT,
-    tool_policy_hash,
-    tool_versions_hash,
-)
+from agent_runner_contracts.checkpoint import tool_policy_hash, tool_versions_hash
 from agent_runner_contracts.events import EventEnvelope
 from agent_runner_contracts.tools import ToolBatch
 
@@ -52,7 +48,7 @@ class CheckpointOpsMixin:
                 pending_tool_calls = list(pending_interaction.get("pending_tool_calls", []))
                 tool_batch_hash = pending_interaction.get("tool_batch_hash")
         raw_tool_policy = pending_interaction.get("tool_policy", {}) if pending_interaction else {}
-        tool_policy: dict[str, Any] = self._tool_policy_for_session(session)
+        tool_policy: dict[str, Any] = self._tool_policy_for_conversation(conversation, session)
         tool_policy.update(raw_tool_policy)
         tool_policy["reason"] = reason
         if pending_tool_calls:
@@ -72,7 +68,7 @@ class CheckpointOpsMixin:
             recent_events=[
                 event.model_dump(mode="json")
                 for event in self.events_store.list(conversation.id)
-            ][-RECENT_EVENTS_LIMIT:],
+            ],
             tool_policy=tool_policy,
         )
         context_hash = hashlib.sha256(

@@ -15,6 +15,7 @@ from ..domain import (
     TERMINAL_STATES,
     Checkpoint,
     Conversation,
+    ConversationMode,
     ExecutionState,
     PresetSkill,
     Session,
@@ -66,6 +67,7 @@ class ConversationOpsMixin:
         skills: list[PresetSkill] | None = None,
         mcp_refs: list[dict[str, Any]] | None = None,
         auto_created: dict[str, Any] | None = None,
+        mode: ConversationMode | None = None,
     ) -> Conversation:
         if mcp_refs is not None:
             self._validate_mcp_refs(mcp_refs)
@@ -101,6 +103,7 @@ class ConversationOpsMixin:
             "session_id": session_id,
             "task": task,
             "parent_conversation_id": parent_conversation_id,
+            "mode": (mode or ConversationMode.DEFAULT).value,
         }
         existing = self._idempotent("conversation", idempotency_key, payload)
         if existing:
@@ -111,6 +114,7 @@ class ConversationOpsMixin:
             parent_conversation_id=parent_conversation_id,
             skills=skills,
             mcp_refs=mcp_refs,
+            mode=mode or ConversationMode.DEFAULT,
         )
         if self.temporal_mode:
             if self.temporal is None:
@@ -216,7 +220,7 @@ class ConversationOpsMixin:
             "workspace_id": str(session.workspace_id),
             "task": conversation.task,
             "skills": skills,
-            "tool_policy": self._tool_policy_for_session(session),
+            "tool_policy": self._tool_policy_for_conversation(conversation, session),
             "mcp_refs": (
                 [dict(item) for item in conversation.mcp_refs]
                 if conversation.mcp_refs is not None
@@ -273,7 +277,7 @@ class ConversationOpsMixin:
             used_registered = True
         if used_registered or (runner_endpoint and not self.config.core_runner_url):
             workspace_ref = "/workspace"
-        tool_policy = self._tool_policy_for_session(session)
+        tool_policy = self._tool_policy_for_conversation(conversation, session)
         conversation_skills = self._skills_for_conversation(conversation, session)
         request = {
             "run_id": str(conversation.run.run_id),

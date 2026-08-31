@@ -1,14 +1,16 @@
 """Unit tests for skill generation operations (state machine, review, tenants)."""
 
 import json
+from pathlib import Path
 from uuid import UUID
 
 import pytest
 
 from agent_runner_contracts.events import EventEnvelope
 from agentsupport.application.service import ServiceError
+from agentsupport.application.skill_generation_ops import _GENERATION_PROMPT
 from agentsupport.config import Settings
-from agentsupport.domain import DraftStatus, GenerationStatus
+from agentsupport.domain import ConversationMode, DraftStatus, GenerationStatus
 from agentsupport.services import AgentSupportService
 from agentsupport.skills import LocalSkillProvider
 
@@ -117,6 +119,16 @@ async def test_generate_skill_creates_draft_and_completes(tmp_path):
     assert draft.project_id == "p-1"
     assert draft.frontmatter["name"] == "fix-n-plus-one"
     assert draft.source_session_id == session.id
+
+
+async def test_generate_skill_conversation_uses_silent_mode(tmp_path):
+    service = _service(tmp_path)
+    session = await _completed_session(service)
+
+    request = await service.generate_skill(session.id, tenant_id="t-1")
+
+    conversation = service.get_conversation(request.conversation_id)
+    assert conversation.mode == ConversationMode.SILENT
 
 
 async def test_generate_skill_unwraps_json_string_result(tmp_path):
@@ -257,6 +269,82 @@ async def test_review_twice_conflicts(tmp_path):
     with pytest.raises(ServiceError) as exc:
         service.review_skill_draft(draft.id, tenant_id="t-1", decision="reject")
     assert exc.value.status_code == 409
+
+
+def test_generation_prompt_carries_output_format_positive_example():
+    """输出格式以正例呈现（正文用省略号占位），且不含任何截断标记。"""
+
+    assert "skill_markdown" in _GENERATION_PROMPT
+    assert "example-skill" in _GENERATION_PROMPT
+    assert "# 目标\\n..." in _GENERATION_PROMPT
+    assert "只输出 JSON" in _GENERATION_PROMPT
+    assert "已截断" not in _GENERATION_PROMPT
+
+
+async def test_generate_skill_writes_full_events_to_workspace_file(tmp_path):
+    service = _service(tmp_path)
+    session = await _completed_session(service)
+    event_count = len(service.session_events(session.id))
+    assert event_count > 0
+
+    request = await service.generate_skill(session.id, tenant_id="t-1")
+
+    assert request.status == GenerationStatus.COMPLETED
+    workspace = service.get_workspace(session.workspace_id)
+    event_file = (
+        Path(workspace.root_path)
+        / ".agentsupport"
+        / f"skill-generation-{request.id}"
+        / "events.jsonl"
+    )
+    assert event_file.is_file()
+    lines = event_file.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == event_count
+    assert all(line.strip() for line in lines)
+    # 事件文件必须为 ASCII 安全 JSON：Windows 上工具默认按 GBK 解码，
+    # 非 ASCII 内容会导致 agent 读文件失败（真实链路发现）。
+    raw = event_file.read_bytes()
+    assert all(byte < 128 for byte in raw)
+    task = service.get_conversation(request.conversation_id).task
+    assert "## 事件文件" in task
+    assert f".agentsupport/skill-generation-{request.id}/events.jsonl" in task
+    assert "已截断" not in task
+    assert "…（事件过长已截断）" not in task
+
+
+async def test_generate_skill_never_truncates_long_event_history(tmp_path):
+    service = _service(tmp_path)
+    session = await _completed_session(service)
+    conversation = next(
+        conv
+        for conv in service.conversations.values()
+        if conv.session_id == session.id
+    )
+    # 制造远超旧 80K 阈值的完整事件流，验证写入文件时不截断。
+    for _ in range(1500):
+        service._append(
+            conversation,
+            "message",
+            {"content": "x" * 200, "role": "assistant"},
+        )
+    event_count = len(service.session_events(session.id))
+    assert event_count > 1500
+
+    request = await service.generate_skill(session.id, tenant_id="t-1")
+
+    assert request.status == GenerationStatus.COMPLETED
+    workspace = service.get_workspace(session.workspace_id)
+    event_file = (
+        Path(workspace.root_path)
+        / ".agentsupport"
+        / f"skill-generation-{request.id}"
+        / "events.jsonl"
+    )
+    lines = event_file.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == event_count
+    task = service.get_conversation(request.conversation_id).task
+    assert "已截断" not in task
+    assert "…（事件过长已截断）" not in task
 
 
 async def test_review_requires_matching_tenant(tmp_path):

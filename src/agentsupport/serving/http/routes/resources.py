@@ -199,6 +199,7 @@ async def create_conversation(
         ),
         mcp_refs=body.mcp_refs,
         auto_created=auto_created,
+        mode=body.mode,
     )
     return _created(conversation, auto_created)
 

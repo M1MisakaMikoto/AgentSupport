@@ -10,24 +10,26 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from ..domain import (
     TERMINAL_STATES,
     Conversation,
+    ConversationMode,
     DraftStatus,
     ExecutionState,
     GenerationStatus,
+    Session,
     SkillDraft,
     SkillGenerationRequest,
 )
 from .common import ServiceError
 
-#: Upper bound for the generated task prompt (matches MAX_TASK_CHARS).
-MAX_GENERATION_TASK_CHARS = 100_000
-#: Event digest budget inside the prompt; keeps long sessions bounded.
-MAX_EVENT_DIGEST_CHARS = 80_000
+#: 事件文件在 session 工作区内的相对路径（runner 挂载工作区，agent 可读）。
+_GENERATION_EVENT_DIR = ".agentsupport"
+_GENERATION_EVENT_FILE = "events.jsonl"
 
 _GENERATION_PROMPT = """你是 AgentSupport 的 skill 提炼 agent。请分析下方给定的 session 历史事件，
 提炼该 session 中 agent 在指导下或探索下跑通的业务路径，产出一份可复用的标准 SKILL.md。
@@ -37,6 +39,12 @@ _GENERATION_PROMPT = """你是 AgentSupport 的 skill 提炼 agent。请分析�
 2. SKILL.md 必须以 frontmatter 开头，至少包含 name（kebab-case 英文短名）和 description（一段话说明适用场景）。
 3. 正文建议分区：目标 / 步骤 / 关键命令与工具 / 边界条件。
 4. 只总结事件历史中真实出现过的路径，不要编造。
+
+## 输出格式示例（正例）
+
+期望输出：
+
+{"skill_markdown": "---\\nname: example-skill\\ndescription: 适用于某类任务的标准处理路径\\n---\\n\\n# 目标\\n...\\n\\n# 步骤\\n...\\n\\n# 关键命令与工具\\n...\\n\\n# 边界条件\\n..."}
 
 只输出 JSON，不要输出其他内容。
 """
@@ -59,21 +67,26 @@ class SkillGenerationOpsMixin:
         session = self.get_session(session_id)
         self._check_generation_tenant(session.tenant_id, tenant_id)
         events = self.session_events(session_id)
-        task = _GENERATION_PROMPT + "\n\n## session 历史事件\n\n" + self._render_event_digest(events)
-        if len(task) > MAX_GENERATION_TASK_CHARS:
-            task = task[:MAX_GENERATION_TASK_CHARS] + "\n\n（历史事件过长，已截断）"
+        request = SkillGenerationRequest(
+            session_id=session_id,
+            tenant_id=session.tenant_id,
+            project_id=session.project_id,
+        )
+        event_path = self._write_event_file(session, request.id, events)
+        task = (
+            _GENERATION_PROMPT
+            + "\n\n## 事件文件\n\n"
+            + f"完整 session 历史事件已写入工作区文件：`{event_path}`\n"
+            + "请先用文件工具读取该文件的全部内容，再按要求提炼 SKILL.md。"
+        )
         conversation = await self.create_conversation(
             session_id,
             task,
             workspace_id=session.workspace_id,
             skills=None,
+            mode=ConversationMode.SILENT,
         )
-        request = SkillGenerationRequest(
-            session_id=session_id,
-            conversation_id=conversation.id,
-            tenant_id=session.tenant_id,
-            project_id=session.project_id,
-        )
+        request.conversation_id = conversation.id
         self._persist_generation(request)
         self._finalize_generation(request)
         return request
@@ -157,26 +170,44 @@ class SkillGenerationOpsMixin:
         if caller_tenant is not None and owner_tenant != caller_tenant:
             raise ServiceError("SESSION_NOT_FOUND", "session does not exist", 404)
 
-    @staticmethod
-    def _render_event_digest(events: list[Any]) -> str:
-        rows = [
-            json.dumps(
-                {
-                    "seq": event.seq,
-                    "type": event.type,
-                    "payload": event.payload,
-                    "source": event.source,
-                    "occurred_at": event.occurred_at.isoformat(),
-                },
-                ensure_ascii=False,
-                default=str,
-            )
-            for event in events
-        ]
-        digest = "\n".join(rows)
-        if len(digest) > MAX_EVENT_DIGEST_CHARS:
-            digest = digest[:MAX_EVENT_DIGEST_CHARS] + "\n…（事件过长已截断）"
-        return digest
+    def _write_event_file(
+        self,
+        session: Session,
+        request_id: UUID,
+        events: list[Any],
+    ) -> str:
+        """把 session 事件历史完整写入工作区文件，供 agent 自行读取。
+
+        runner 会把 session 工作区挂载进容器，因此 agent 用文件工具即可读到
+        全部事件；事件不做截断、不抽样、不降级。返回工作区相对路径（POSIX），
+        该路径写进生成任务的 prompt。
+        """
+        workspace = self.get_workspace(session.workspace_id)
+        rel_path = (
+            Path(_GENERATION_EVENT_DIR)
+            / f"skill-generation-{request_id}"
+            / _GENERATION_EVENT_FILE
+        )
+        target = Path(workspace.root_path) / rel_path
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("w", encoding="utf-8") as handle:
+                for event in events:
+                    row = {
+                        "seq": event.seq,
+                        "type": event.type,
+                        "payload": event.payload,
+                        "source": event.source,
+                        "occurred_at": event.occurred_at.isoformat(),
+                    }
+                    handle.write(json.dumps(row, ensure_ascii=True, default=str) + "\n")
+        except OSError as exc:
+            raise ServiceError(
+                "GENERATION_EVENT_FILE_FAILED",
+                f"failed to write session events to workspace: {exc}",
+                500,
+            ) from exc
+        return rel_path.as_posix()
 
     def _finalize_pending_generations(self, tenant_id: str | None = None) -> None:
         requests = self._list_generations(tenant_id=tenant_id, status="pending")
@@ -344,4 +375,3 @@ def _slugify_skill_id(name: str) -> str:
     if not slug or not re.match(r"^[A-Za-z0-9]", slug):
         slug = "generated-skill"
     return slug
-

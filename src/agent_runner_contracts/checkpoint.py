@@ -8,13 +8,6 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-#: Bound for ``context_bundle.recent_events`` in persisted checkpoints. The
-#: full event history is already stored in ``conversation_events``; duplicating
-#: every event into every checkpoint makes checkpoint rows grow linearly with
-#: the conversation length. Checkpoints only need the recent window for
-#: resume-time context reconstruction.
-RECENT_EVENTS_LIMIT = 200
-
 
 class ContextBundle(BaseModel):
     task: str

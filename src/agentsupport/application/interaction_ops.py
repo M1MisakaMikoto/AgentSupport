@@ -115,7 +115,9 @@ class InteractionOpsMixin:
                     checkpoint,
                     lease_epoch=self.sessions[conversation.session_id].lease_epoch,
                     expected_tool_policy_hash=tool_policy_hash(
-                        self._tool_policy_for_session(self.sessions[conversation.session_id])
+                        self._tool_policy_for_conversation(
+                            conversation, self.sessions[conversation.session_id]
+                        )
                     ),
                 )
             except ValueError as exc:
@@ -236,7 +238,9 @@ class InteractionOpsMixin:
                     checkpoint,
                     lease_epoch=self.sessions[conversation.session_id].lease_epoch,
                     expected_tool_policy_hash=tool_policy_hash(
-                        self._tool_policy_for_session(self.sessions[conversation.session_id])
+                        self._tool_policy_for_conversation(
+                            conversation, self.sessions[conversation.session_id]
+                        )
                     ),
                 )
             except ValueError as exc:

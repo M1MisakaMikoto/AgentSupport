@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import sys
 from collections.abc import Callable
@@ -24,6 +25,8 @@ from agent_runner_contracts.tools import (
 EventEmitter = Callable[[str, dict[str, Any]], None]
 WaitingCallback = Callable[[dict[str, Any], ToolBatch, int], None]
 AgentFactory = Callable[["TraeRuntimeSettings", Any, Path], Any]
+
+logger = logging.getLogger(__name__)
 
 
 SIDE_EFFECT_TOOLS = {
@@ -226,29 +229,50 @@ class TraeToolGatewayBridge:
         emit: EventEmitter,
         on_waiting: WaitingCallback,
         next_step: Callable[[], int],
+        workspace_root: Path | None = None,
     ) -> None:
         self.delegate = delegate
         self.emit = emit
         self.on_waiting = on_waiting
         self.next_step = next_step
+        self.mode = str(raw_policy.get("mode") or "default")
+        self.workspace_root = workspace_root
         configured = {
             item["name"]: ToolDescriptor.model_validate(item)
             for item in raw_policy.get("tools", [])
         }
+        if self.mode == "no_approval":
+            # 无审批模式：全部工具可用（含 bash），无工作区限制。
+            allowed = set(tool_names)
+            approvals: set[str] = set()
+            force_no_approval = True
+        elif self.mode == "silent":
+            # 静默模式：仅工作区白名单工具、路径受限、无审批。
+            allowed = set(raw_policy.get("allowed_tools", [])) & set(tool_names)
+            approvals = set()
+            force_no_approval = True
+        else:
+            allowed = set(raw_policy.get("allowed_tools", tool_names))
+            approvals = set(
+                raw_policy.get(
+                    "approval_required_tools",
+                    SIDE_EFFECT_TOOLS.intersection(allowed),
+                )
+            )
+            force_no_approval = False
         descriptors = [
             configured.get(
                 name,
                 ToolDescriptor(
                     name=name,
-                    requires_approval=name in SIDE_EFFECT_TOOLS or name.startswith("mcp."),
+                    requires_approval=(
+                        (not force_no_approval)
+                        and (name in SIDE_EFFECT_TOOLS or name.startswith("mcp."))
+                    ),
                 ),
             )
             for name in tool_names
         ]
-        allowed = set(raw_policy.get("allowed_tools", tool_names))
-        approvals = set(
-            raw_policy.get("approval_required_tools", SIDE_EFFECT_TOOLS.intersection(allowed))
-        )
         self.control_plane = ToolGatewayControlPlane(descriptors)
         self.policy = ToolGatewayPolicy(
             allowed_tools=allowed,
@@ -329,7 +353,36 @@ class TraeToolGatewayBridge:
                 return self._rejected(calls, "tool batch rejected by user")
             if decision != ApprovalDecision.APPROVE_ONCE:
                 raise RuntimeError("tool batch approval decision is missing")
+        if self.mode == "silent":
+            sandboxed = {
+                call.call_id: problem
+                for call in batch.calls
+                if (problem := self._sandbox_problem(call)) is not None
+            }
+            if sandboxed:
+                results: list[Any] = []
+                for call in batch.calls:
+                    problem = sandboxed.get(call.call_id)
+                    if problem is not None:
+                        self._warn_sandbox(call, problem)
+                        results.append(
+                            _trae_tool_result(
+                                call_id=call.call_id,
+                                tool_id=getattr(call, "id", None),
+                                name=call.name,
+                                success=False,
+                                error=f"silent mode sandbox: {problem}",
+                            )
+                        )
+                    else:
+                        results.extend(
+                            await getattr(self.delegate, method)([call])
+                        )
+                return self._store_results(results)
         results = await getattr(self.delegate, method)(calls)
+        return self._store_results(results)
+
+    def _store_results(self, results: list[Any]) -> list[Any]:
         unique_results: list[Any] = []
         for result in results:
             cached = self._results.get(result.call_id)
@@ -349,6 +402,38 @@ class TraeToolGatewayBridge:
             )
         self._clear_pending()
         return unique_results
+
+    def _sandbox_problem(self, call: Any) -> str | None:
+        """静默模式下校验工作区边界；越界返回原因，未越界返回 None。"""
+
+        if call.name not in ("str_replace_based_edit_tool", "json_edit_tool"):
+            return None
+        arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        path = arguments.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return None
+        if self.workspace_root is None:
+            return None
+        try:
+            resolved = Path(path).resolve()
+            root = self.workspace_root.resolve()
+        except OSError as exc:
+            return f"invalid path {path!r}: {exc}"
+        if not (resolved == root or resolved.is_relative_to(root)):
+            return f"path outside workspace: {path}"
+        return None
+
+    def _warn_sandbox(self, call: Any, problem: str) -> None:
+        message = f"silent mode sandbox rejected tool {call.name}: {problem}"
+        logger.warning(message)
+        self.emit(
+            "run.warning",
+            {
+                "code": "SANDBOX_REJECTED",
+                "kind": "sandbox",
+                "message": message,
+            },
+        )
 
     def _rejected(self, calls: list[Any], reason: str) -> list[Any]:
         results = [
@@ -434,7 +519,19 @@ class TraeExecutionAdapter:
         if not execution.success:
             step_error = execution.steps[-1].error if execution.steps else None
             raise RuntimeError(step_error or execution.final_result or "Trae execution failed")
-        content = execution.final_result or self._fallback_final_content()
+        content = execution.final_result or ""
+        if not content:
+            content = self._fallback_final_content()
+            if content:
+                self._warn_content_degradation(
+                    "fallback",
+                    "final result was empty; recovered the last non-empty assistant text",
+                )
+            else:
+                self._warn_content_degradation(
+                    "empty",
+                    "final result is empty and no fallback text is available",
+                )
         result = {
             "status": "completed",
             "content": content,
@@ -468,6 +565,25 @@ class TraeExecutionAdapter:
             if isinstance(content, str) and content.strip():
                 return content
         return ""
+
+    def _warn_content_degradation(self, kind: str, detail: str) -> None:
+        """Log and emit a prominent warning whenever content is degraded."""
+
+        message = f"run content degradation ({kind}): {detail}"
+        logger.warning(
+            "run_id=%s conversation_id=%s %s",
+            self.request.run_id,
+            self.request.conversation_id,
+            message,
+        )
+        self.emit(
+            "run.warning",
+            {
+                "code": "CONTENT_DEGRADATION",
+                "kind": kind,
+                "message": message,
+            },
+        )
 
     def _session_history_messages(self) -> list[Any]:
         """Turn prior session dialogue into LLM messages for this run.
@@ -560,11 +676,24 @@ class TraeExecutionAdapter:
         if not execution.success:
             step_error = execution.steps[-1].error if execution.steps else None
             raise RuntimeError(step_error or execution.final_result or "Trae resume failed")
-        if execution.final_result:
-            self.emit("message", {"content": execution.final_result})
+        content = execution.final_result or ""
+        if not content:
+            content = self._fallback_final_content()
+            if content:
+                self._warn_content_degradation(
+                    "fallback",
+                    "resume final result was empty; recovered the last non-empty assistant text",
+                )
+            else:
+                self._warn_content_degradation(
+                    "empty",
+                    "resume final result is empty and no fallback text is available",
+                )
+        if content:
+            self.emit("message", {"content": content})
         result = {
             "status": "completed",
-            "content": execution.final_result,
+            "content": content,
             "steps": len(execution.steps),
             "resumed": True,
         }
@@ -601,6 +730,7 @@ class TraeExecutionAdapter:
             self.emit,
             self._waiting,
             self._next_step,
+            workspace_root=self.workspace,
         )
         mcp_names = {name for name in tool_names if name.startswith("mcp.")}
         if mcp_names:

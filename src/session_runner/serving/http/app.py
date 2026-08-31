@@ -13,7 +13,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
 
 from agent_runner_contracts.checkpoint import (
-    RECENT_EVENTS_LIMIT,
     Checkpoint,
     ContextBundle,
     tool_policy_hash,
@@ -398,12 +397,7 @@ def create_runner_app(
         state = runs.get(run_id)
         if not state:
             raise HTTPException(404, "run not found")
-        recent_limit = int(
-            os.getenv("SESSION_RUNNER_CHECKPOINT_RECENT_EVENTS", str(RECENT_EVENTS_LIMIT))
-        )
-        recent_events = [
-            event.model_dump(mode="json") for event in state.events[-recent_limit:]
-        ]
+        recent_events = [event.model_dump(mode="json") for event in state.events]
         tool_policy = dict(state.request.tool_policy)
         if state.pending_interaction:
             tool_policy.update(state.pending_interaction.get("tool_policy", {}))

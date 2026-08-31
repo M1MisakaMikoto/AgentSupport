@@ -58,23 +58,18 @@ def test_provider_overwrite_updates_content_hash(tmp_path):
     assert first["content_hash"] != second["content_hash"]
 
 
-def test_provider_skill_prompt_entries_carries_content_and_truncates(tmp_path):
+def test_provider_skill_prompt_entries_carries_full_content_without_truncation(tmp_path):
     provider = LocalSkillProvider(tmp_path / "skills")
     long_skill = "# Review\n" + ("x" * 5000)
     provider.install_skill("review", {"SKILL.md": long_skill.encode()})
 
-    entries = provider.skill_prompt_entries(["review"], max_chars=100)
+    entries = provider.skill_prompt_entries(["review"])
 
     assert len(entries) == 1
     assert entries[0]["skill_id"] == "review"
     assert entries[0]["mount_path"] == "/opt/agent-skills/review"
-    assert entries[0]["truncated"] is True
-    assert entries[0]["content"].startswith("# Review\n")
-    assert "已截断" in entries[0]["content"]
-
-    short = provider.skill_prompt_entries(["review"], max_chars=20000)
-    assert short[0]["truncated"] is False
-    assert short[0]["content"] == long_skill
+    assert entries[0]["content"] == long_skill
+    assert "truncated" not in entries[0]
 
 
 @pytest.mark.parametrize(

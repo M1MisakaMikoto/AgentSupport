@@ -1,6 +1,6 @@
 """AgentSupport domain models and coordination state."""
 
-from .conversation import Conversation
+from .conversation import Conversation, ConversationMode
 from .execution import (
     TERMINAL_STATES,
     Checkpoint,
@@ -40,6 +40,7 @@ __all__ = [
     "Checkpoint",
     "ContextBundle",
     "Conversation",
+    "ConversationMode",
     "DraftStatus",
     "ExecutionState",
     "GenerationStatus",

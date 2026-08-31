@@ -15,7 +15,6 @@ MAX_UPLOAD_SIZE = 2 * 1024 * 1024
 MAX_ENTRY_SIZE = 2 * 1024 * 1024
 MAX_UNPACKED_SIZE = 10 * 1024 * 1024
 MAX_ENTRY_COUNT = 200
-MAX_SKILL_PROMPT_CHARS = 20000
 
 
 class SkillManifestEntry(BaseModel):
@@ -71,22 +70,17 @@ class LocalSkillProvider:
         skill_ids: list[str],
         *,
         tenant_id: str | None = None,
-        max_chars: int = MAX_SKILL_PROMPT_CHARS,
     ) -> list[dict[str, Any]]:
-        """Return enabled skills with their SKILL.md content for prompt injection."""
+        """Return enabled skills with their full SKILL.md content for prompt injection."""
 
         entries: list[dict[str, Any]] = []
         for skill_id in skill_ids:
             entry, source = self._resolve_one(skill_id, tenant_id=tenant_id)
             content = (source / "SKILL.md").read_text(encoding="utf-8", errors="replace")
-            truncated = len(content) > max_chars
-            if truncated:
-                content = content[:max_chars] + "\n…（内容过长已截断）"
             entries.append(
                 {
                     **entry.model_dump(mode="json"),
                     "content": content,
-                    "truncated": truncated,
                 }
             )
         return entries

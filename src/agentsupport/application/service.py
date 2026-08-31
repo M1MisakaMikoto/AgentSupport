@@ -12,12 +12,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from agent_runner_contracts.checkpoint import RECENT_EVENTS_LIMIT
 from agent_runner_contracts.events import EventEnvelope
 
 from ..domain import (
     Checkpoint,
     Conversation,
+    ConversationMode,
     McpServer,
     Session,
     SkillDraft,
@@ -51,6 +51,9 @@ from .skill_mcp_ops import SkillMcpOpsMixin
 from .workspace_ops import WorkspaceOpsMixin
 
 logger = logging.getLogger(__name__)
+
+#: 静默模式工作区白名单：仅工作区文件工具，不含 bash。
+SILENT_MODE_TOOLS = ("str_replace_based_edit_tool", "json_edit_tool", "task_done")
 
 #: Soft ceiling for in-flight in-process event notifications. A slow notifier
 #: (e.g. a wedged Redis connection) would otherwise accumulate one task per
@@ -242,8 +245,6 @@ class AgentSupportService(
         self,
         session: Session,
         conversation: Conversation,
-        *,
-        limit: int = RECENT_EVENTS_LIMIT,
     ) -> list[dict[str, Any]]:
         """Aggregate the session-wide conversation history for a run request.
 
@@ -288,7 +289,7 @@ class AgentSupportService(
             injected + [event.model_dump(mode="json") for event in events],
             key=lambda event: event.get("occurred_at") or "",
         )
-        return merged[-limit:]
+        return merged
 
 
     def _skills_for_session(self, session: Session) -> list[str]:
@@ -311,6 +312,29 @@ class AgentSupportService(
             if policy.get("allowed_tools") or policy.get("approval_required_tools"):
                 return policy
         return self._tool_policy()
+
+
+    def _tool_policy_for_conversation(
+        self,
+        conversation: Conversation,
+        session: Session,
+    ) -> dict[str, Any]:
+        """按对话模式调整运行工具策略。
+
+        - default：沿用会话策略。
+        - no_approval：无审批、不限工具（含 bash）、无工作区限制。
+        - silent：静默模式，仅工作区白名单工具、路径受限、无审批。
+        """
+        policy = dict(self._tool_policy_for_session(session))
+        mode = conversation.mode
+        if mode == ConversationMode.NO_APPROVAL:
+            policy["approval_required_tools"] = []
+            policy["mode"] = mode.value
+        elif mode == ConversationMode.SILENT:
+            policy["allowed_tools"] = list(SILENT_MODE_TOOLS)
+            policy["approval_required_tools"] = []
+            policy["mode"] = mode.value
+        return policy
 
 
     # ------------------------------------------------------------------
@@ -437,5 +461,3 @@ class AgentSupportService(
             "idempotency_records": len(stale_idempotency),
             "unreferenced_checkpoints": len(stale_checkpoints),
         }
-
-

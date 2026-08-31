@@ -425,6 +425,7 @@ GET /sessions?workspace_id=<uuid>&tenant_id=t-1&project_id=p-2
 | `workspace_id` | UUID | 否 | 仅当 Session 不存在且 auto-create 开启时用于决定新 Session 的 Workspace |
 | `skills` | object[] | 否 | 本次对话激活的 skill 列表（`skill_id` + `enabled`）；缺省继承 Session 配置；显式传空数组表示本次不启用任何 skill |
 | `mcp_refs` | object[] | 否 | 本次对话激活的 MCP server 引用（`{"server_id": "..."}`）；缺省继承 Session 配置；显式传空数组表示本次不启用任何 MCP |
+| `mode` | string | 否 | 单次对话执行模式：`default`（默认）/ `no_approval`（无审批，全工具无工作区限制）/ `silent`（静默模式：仅工作区内工具与路径、无审批，供静默任务使用） |
 
 ```http
 POST /sessions/3cb62872-d517-40e6-92ec-d50045e40b26/conversations
@@ -587,9 +588,10 @@ file=@SKILL.md
 
 ### 7.5 POST /sessions/{session_id}/skills/generate
 
-对指定 session 手动发起 skill 生成：平台把该 session 的历史事件序列化为上下文，通过 agent 执行生成
-标准 `SKILL.md`（frontmatter 至少含 `name` / `description`），结果落为待审核草稿（`skill_drafts`）。
-是否"跑通"由发起人自行判断，平台不做自动判定。
+对指定 session 手动发起 skill 生成：平台把该 session 的历史事件**完整**写入该 session 工作区文件
+（`<workspace>/.agentsupport/skill-generation-<id>/events.jsonl`），由 agent 通过文件工具读取后
+生成标准 `SKILL.md`（frontmatter 至少含 `name` / `description`），结果落为待审核草稿（`skill_drafts`）。
+事件历史不做截断或降级；是否"跑通"由发起人自行判断，平台不做自动判定。
 
 **路径参数**：`session_id`（UUID）。
 **请求头**：`X-Tenant-Id`（可选）：调用方租户；与 session 的 `tenant_id` 不一致时返回 404。

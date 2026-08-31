@@ -129,11 +129,33 @@ def test_run_uses_fallback_when_final_result_empty(tmp_path) -> None:
     trae_agent.final_result = ""
     adapter = _adapter(request, trae_agent)
     adapter.trajectory = traj
+    emitted: list[tuple[str, dict]] = []
+    adapter.emit = lambda event_type, payload: emitted.append((event_type, payload))
 
     result = asyncio.run(adapter.run())
 
     assert result["content"] == "---\nname: my-skill\ndescription: x\n---"
     assert result["status"] == "completed"
+    warnings = [payload for event_type, payload in emitted if event_type == "run.warning"]
+    assert warnings and warnings[0]["code"] == "CONTENT_DEGRADATION"
+    assert warnings[0]["kind"] == "fallback"
+
+
+def test_run_emits_warning_when_content_empty_and_no_fallback() -> None:
+    request = MagicMock()
+    request.context_bundle = {"task": "t", "recent_events": []}
+    trae_agent = FakeTraeAgent(initial=[object()])
+    trae_agent.final_result = ""
+    adapter = _adapter(request, trae_agent)
+    emitted: list[tuple[str, dict]] = []
+    adapter.emit = lambda event_type, payload: emitted.append((event_type, payload))
+
+    result = asyncio.run(adapter.run())
+
+    assert result["content"] == ""
+    assert result["status"] == "completed"
+    warnings = [payload for event_type, payload in emitted if event_type == "run.warning"]
+    assert warnings and warnings[0]["kind"] == "empty"
 
 def test_run_keeps_original_final_result_when_present(tmp_path) -> None:
     traj = tmp_path / "traj.json"
