@@ -52,8 +52,16 @@ from .workspace_ops import WorkspaceOpsMixin
 
 logger = logging.getLogger(__name__)
 
-#: 静默模式工作区白名单：仅工作区文件工具，不含 bash。
-SILENT_MODE_TOOLS = ("str_replace_based_edit_tool", "json_edit_tool", "task_done")
+#: 静默模式工作区白名单：仅工作区文件/文档工具，不含 bash。
+SILENT_MODE_TOOLS = (
+    "str_replace_based_edit_tool",
+    "json_edit_tool",
+    "word_edit_tool",
+    "excel_edit_tool",
+    "pdf_tool",
+    "document_convert_tool",
+    "task_done",
+)
 
 #: Soft ceiling for in-flight in-process event notifications. A slow notifier
 #: (e.g. a wedged Redis connection) would otherwise accumulate one task per
@@ -226,6 +234,10 @@ class AgentSupportService(
                 "bash",
                 "str_replace_based_edit_tool",
                 "json_edit_tool",
+                "word_edit_tool",
+                "excel_edit_tool",
+                "pdf_tool",
+                "document_convert_tool",
                 "sequentialthinking",
                 "task_done",
             ],
@@ -233,6 +245,10 @@ class AgentSupportService(
                 "bash",
                 "str_replace_based_edit_tool",
                 "json_edit_tool",
+                "word_edit_tool",
+                "excel_edit_tool",
+                "pdf_tool",
+                "document_convert_tool",
             ],
         }
 

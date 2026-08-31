@@ -33,6 +33,17 @@ SIDE_EFFECT_TOOLS = {
     "bash",
     "json_edit_tool",
     "str_replace_based_edit_tool",
+    "word_edit_tool",
+    "excel_edit_tool",
+    "pdf_tool",
+    "document_convert_tool",
+}
+
+DOCUMENT_TOOL_NAMES = {
+    "word_edit_tool",
+    "excel_edit_tool",
+    "pdf_tool",
+    "document_convert_tool",
 }
 
 
@@ -161,6 +172,9 @@ def _skill_prompt_section(bundle: Any) -> str | None:
 
 def _default_agent_factory(settings: TraeRuntimeSettings, request: Any, trajectory: Path) -> Any:
     _ensure_vendored_trae_path()
+    from session_runner.tools.document_tools import register_document_tools
+
+    register_document_tools()
     from trae_agent.agent.agent import Agent
     from trae_agent.utils.config import Config
 
@@ -406,21 +420,30 @@ class TraeToolGatewayBridge:
     def _sandbox_problem(self, call: Any) -> str | None:
         """静默模式下校验工作区边界；越界返回原因，未越界返回 None。"""
 
-        if call.name not in ("str_replace_based_edit_tool", "json_edit_tool"):
+        if call.name not in DOCUMENT_TOOL_NAMES | {"str_replace_based_edit_tool", "json_edit_tool"}:
             return None
         arguments = call.arguments if isinstance(call.arguments, dict) else {}
-        path = arguments.get("path")
-        if not isinstance(path, str) or not path.strip():
-            return None
+        path_keys = (
+            ("input_path", "output_path")
+            if call.name == "document_convert_tool"
+            else ("path",)
+        )
         if self.workspace_root is None:
             return None
-        try:
-            resolved = Path(path).resolve()
-            root = self.workspace_root.resolve()
-        except OSError as exc:
-            return f"invalid path {path!r}: {exc}"
-        if not (resolved == root or resolved.is_relative_to(root)):
-            return f"path outside workspace: {path}"
+        root = self.workspace_root.resolve()
+        for key in path_keys:
+            path = arguments.get(key)
+            if not isinstance(path, str) or not path.strip():
+                continue
+            try:
+                candidate = Path(path)
+                if not candidate.is_absolute():
+                    candidate = self.workspace_root / candidate
+                resolved = candidate.resolve()
+            except OSError as exc:
+                return f"invalid path {path!r}: {exc}"
+            if not (resolved == root or resolved.is_relative_to(root)):
+                return f"path outside workspace: {path}"
         return None
 
     def _warn_sandbox(self, call: Any, problem: str) -> None:

@@ -188,7 +188,8 @@ class SkillGenerationOpsMixin:
             / f"skill-generation-{request_id}"
             / _GENERATION_EVENT_FILE
         )
-        target = Path(workspace.root_path) / rel_path
+        target_root = Path(self.config.runner_workspace_root or workspace.root_path)
+        target = target_root / rel_path
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("w", encoding="utf-8") as handle:

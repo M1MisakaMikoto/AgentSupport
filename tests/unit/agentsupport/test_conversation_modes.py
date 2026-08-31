@@ -9,7 +9,15 @@ from agentsupport.config import Settings
 from agentsupport.domain import ConversationMode
 from agentsupport.services import AgentSupportService
 
-SILENT_TOOLS = ["str_replace_based_edit_tool", "json_edit_tool", "task_done"]
+SILENT_TOOLS = [
+    "str_replace_based_edit_tool",
+    "json_edit_tool",
+    "word_edit_tool",
+    "excel_edit_tool",
+    "pdf_tool",
+    "document_convert_tool",
+    "task_done",
+]
 
 
 class CapturingCore:

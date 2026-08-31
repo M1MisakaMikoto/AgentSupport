@@ -1,0 +1,28 @@
+{
+  "total": 3,
+  "succeeded": 3,
+  "failed": 0,
+  "success_rate": 100.0,
+  "attempt_hits": {
+    "once": 3,
+    "retry": 0,
+    "unknown": 0
+  },
+  "round_seconds": {
+    "min": 9.0,
+    "median": 21.1,
+    "p95": 34.5,
+    "max": 36.1,
+    "n": 12
+  },
+  "generation_seconds": {
+    "min": 57.1,
+    "median": 84.1,
+    "p95": 270.9,
+    "max": 291.6,
+    "n": 3
+  },
+  "unique_skill_ids": 3,
+  "frontmatter_ok": 3,
+  "failures": []
+}

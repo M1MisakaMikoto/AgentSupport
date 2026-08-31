@@ -14,6 +14,7 @@ from session_runner.adapters.trae import TraeToolGatewayBridge
 
 TOOLS = ["bash", "str_replace_based_edit_tool", "json_edit_tool", "task_done"]
 WHITELIST = ["str_replace_based_edit_tool", "json_edit_tool", "task_done"]
+DOC_TOOLS = ["word_edit_tool", "excel_edit_tool", "pdf_tool", "document_convert_tool"]
 
 
 class FakeDelegate:
@@ -34,12 +35,12 @@ class FakeDelegate:
         return None
 
 
-def _make_bridge(policy: dict, workspace_root):
+def _make_bridge(policy: dict, workspace_root, tool_names=None):
     emitted: list[tuple[str, dict]] = []
     delegate = FakeDelegate()
     bridge = TraeToolGatewayBridge(
         delegate,
-        list(TOOLS),
+        list(tool_names if tool_names is not None else TOOLS),
         policy,
         lambda event_type, payload: emitted.append((event_type, payload)),
         lambda *args, **kwargs: None,
@@ -112,3 +113,115 @@ def test_default_mode_keeps_side_effect_approval(tmp_path):
     call = _call("str_replace_based_edit_tool", str(tmp_path / "events.jsonl"))
 
     assert _authorize(bridge, call) == AuthorizationStatus.REQUIRES_APPROVAL
+
+
+def test_silent_mode_sandboxes_document_tools(tmp_path):
+    tool_names = list(TOOLS) + list(DOC_TOOLS)
+    bridge, delegate, emitted = _make_bridge(
+        {
+            "mode": "silent",
+            "allowed_tools": list(WHITELIST) + list(DOC_TOOLS),
+            "approval_required_tools": [],
+        },
+        workspace_root=tmp_path,
+        tool_names=tool_names,
+    )
+    call = _call("word_edit_tool", str(tmp_path.parent / "outside.docx"))
+
+    results = asyncio.run(bridge.sequential_tool_call([call]))
+
+    assert not results[0].success
+    assert "outside workspace" in (results[0].error or "")
+    assert delegate.executed == []
+    warnings = [payload for t, payload in emitted if t == "run.warning"]
+    assert warnings and warnings[0]["code"] == "SANDBOX_REJECTED"
+
+
+def test_default_mode_requires_approval_for_document_tools(tmp_path):
+    tool_names = list(TOOLS) + list(DOC_TOOLS)
+    bridge, _, _ = _make_bridge(
+        {"allowed_tools": list(TOOLS) + list(DOC_TOOLS), "approval_required_tools": []},
+        workspace_root=tmp_path,
+        tool_names=tool_names,
+    )
+    call = _call("excel_edit_tool", str(tmp_path / "data.xlsx"))
+
+    assert _authorize(bridge, call) == AuthorizationStatus.REQUIRES_APPROVAL
+
+
+def test_silent_mode_sandboxes_convert_tool_output(tmp_path):
+    tool_names = list(TOOLS) + list(DOC_TOOLS)
+    bridge, delegate, _ = _make_bridge(
+        {
+            "mode": "silent",
+            "allowed_tools": list(WHITELIST) + list(DOC_TOOLS),
+            "approval_required_tools": [],
+        },
+        workspace_root=tmp_path,
+        tool_names=tool_names,
+    )
+    call = ToolCall(
+        call_id="c1",
+        name="document_convert_tool",
+        arguments={
+            "command": "docx_to_pdf",
+            "input_path": str(tmp_path / "in.docx"),
+            "output_path": str(tmp_path.parent / "out.pdf"),
+        },
+    )
+
+    results = asyncio.run(bridge.sequential_tool_call([call]))
+
+    assert not results[0].success
+    assert "outside workspace" in (results[0].error or "")
+    assert delegate.executed == []
+
+
+def test_silent_mode_allows_relative_workspace_path(tmp_path):
+    tool_names = list(TOOLS) + list(DOC_TOOLS)
+    bridge, delegate, _ = _make_bridge(
+        {
+            "mode": "silent",
+            "allowed_tools": list(WHITELIST) + list(DOC_TOOLS),
+            "approval_required_tools": [],
+        },
+        workspace_root=tmp_path,
+        tool_names=tool_names,
+    )
+    call = ToolCall(
+        call_id="c1",
+        name="str_replace_based_edit_tool",
+        arguments={
+            "command": "view",
+            "path": ".agentsupport/skill-generation-abc/events.jsonl",
+        },
+    )
+
+    results = asyncio.run(bridge.sequential_tool_call([call]))
+
+    assert results[0].success
+    assert len(delegate.executed) == 1
+
+
+def test_silent_mode_rejects_relative_path_escaping_workspace(tmp_path):
+    tool_names = list(TOOLS) + list(DOC_TOOLS)
+    bridge, delegate, _ = _make_bridge(
+        {
+            "mode": "silent",
+            "allowed_tools": list(WHITELIST) + list(DOC_TOOLS),
+            "approval_required_tools": [],
+        },
+        workspace_root=tmp_path,
+        tool_names=tool_names,
+    )
+    call = ToolCall(
+        call_id="c1",
+        name="str_replace_based_edit_tool",
+        arguments={"command": "view", "path": "../outside.jsonl"},
+    )
+
+    results = asyncio.run(bridge.sequential_tool_call([call]))
+
+    assert not results[0].success
+    assert "outside workspace" in (results[0].error or "")
+    assert delegate.executed == []

@@ -47,6 +47,10 @@ def test_session_without_config_uses_deployment_defaults(service):
         "bash",
         "str_replace_based_edit_tool",
         "json_edit_tool",
+        "word_edit_tool",
+        "excel_edit_tool",
+        "pdf_tool",
+        "document_convert_tool",
         "sequentialthinking",
         "task_done",
     ]

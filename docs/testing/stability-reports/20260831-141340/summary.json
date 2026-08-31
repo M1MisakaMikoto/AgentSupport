@@ -1,0 +1,37 @@
+{
+  "total": 3,
+  "succeeded": 1,
+  "failed": 2,
+  "success_rate": 33.3,
+  "attempt_hits": {
+    "once": 0,
+    "retry": 1,
+    "unknown": 0
+  },
+  "round_seconds": {
+    "min": 9.0,
+    "median": 19.6,
+    "p95": 45.8,
+    "max": 54.1,
+    "n": 12
+  },
+  "generation_seconds": {
+    "min": 649.3,
+    "median": 805.7,
+    "p95": 1165.9,
+    "max": 1205.9,
+    "n": 3
+  },
+  "unique_skill_ids": 1,
+  "frontmatter_ok": 1,
+  "failures": [
+    {
+      "run": 2,
+      "error": "generation run ended with FAILED"
+    },
+    {
+      "run": 3,
+      "error": "generation run ended with FAILED"
+    }
+  ]
+}

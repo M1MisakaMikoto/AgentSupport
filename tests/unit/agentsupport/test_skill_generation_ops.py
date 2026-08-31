@@ -80,11 +80,12 @@ class _FakeRuntimeDriver:
         return None
 
 
-def _service(tmp_path, *, result=None, skills_root=None):
+def _service(tmp_path, *, result=None, skills_root=None, runner_workspace_root=None):
     service = AgentSupportService(
         Settings(
             workspace_root=tmp_path / "workspaces",
             skills_root=skills_root or tmp_path / "skills",
+            runner_workspace_root=runner_workspace_root,
         )
     )
     service.core_runtime = _CompletedCore(
@@ -110,6 +111,20 @@ async def test_generate_skill_creates_draft_and_completes(tmp_path):
     assert request.status == GenerationStatus.COMPLETED
     assert request.conversation_id is not None
     assert request.tenant_id == "t-1"
+
+
+async def test_generate_skill_writes_events_to_runner_workspace_root(tmp_path):
+    runner_root = tmp_path / "runner-workspace"
+    service = _service(tmp_path, runner_workspace_root=runner_root)
+    session = await _completed_session(service)
+
+    request = await service.generate_skill(session.id, tenant_id="t-1")
+
+    event_files = list(runner_root.rglob("events.jsonl"))
+    assert event_files, "events.jsonl not written under runner_workspace_root"
+    assert str(request.id) in event_files[0].as_posix()
+    control_plane_files = list((tmp_path / "workspaces").rglob("events.jsonl"))
+    assert not control_plane_files, "events.jsonl must not be written to control-plane workspace"
     drafts = service.list_skill_drafts(tenant_id="t-1")
     assert len(drafts) == 1
     draft = drafts[0]

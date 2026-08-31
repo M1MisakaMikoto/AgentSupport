@@ -34,6 +34,7 @@ $env:PYTHONPATH = 'src'
 $env:AGENTSUPPORT_PERSISTENCE_MODE = 'memory'; $env:AGENTSUPPORT_EXECUTION_MODE = 'inline'; $env:AGENTSUPPORT_RUNTIME_DRIVER = 'memory'
 $env:AGENTSUPPORT_CORE_RUNNER_URL = 'http://127.0.0.1:8080'; $env:AGENTSUPPORT_CORE_RUNNER_TIMEOUT_SECONDS = '900'
 $env:AGENTSUPPORT_WORKSPACE_ROOT = Join-Path $proj 'workspace-data'
+$env:AGENTSUPPORT_RUNNER_WORKSPACE_ROOT = 'D:\workspace'
 $env:AGENTSUPPORT_SKILLS_ROOT = Join-Path $proj 'skills'
 $env:AGENTSUPPORT_AUTO_CREATE_SCHEMA = 'false'; $env:AGENTSUPPORT_ENABLED_SKILLS = ''
 Start-Process -FilePath (Join-Path $proj '.venv\Scripts\python.exe') -ArgumentList @($launcher) -WorkingDirectory $proj -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir 'api.out.log') -RedirectStandardError (Join-Path $logDir 'api.err.log')

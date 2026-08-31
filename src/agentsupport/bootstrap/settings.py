@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     core_runner_url: str | None = None
     core_runner_timeout_seconds: float = 300.0
     core_runner_workspace_root: Path | None = None
+    #: Runner-side execution workspace root. When set, generation event files
+    #: are written here instead of the control-plane workspace root, so an
+    #: agent running against a non-mounted local workspace can read them.
+    runner_workspace_root: Path | None = None
     workspace_root: Path = Path("workspace-data")
     # Temporal execution mode (phase 0 prototype). Requires a Temporal server
     # reachable at temporal_host and a shared persistence backend.

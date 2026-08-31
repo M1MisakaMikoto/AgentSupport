@@ -144,6 +144,10 @@ def default_project_config(
             "bash",
             "str_replace_based_edit_tool",
             "json_edit_tool",
+            "word_edit_tool",
+            "excel_edit_tool",
+            "pdf_tool",
+            "document_convert_tool",
             "sequentialthinking",
             "task_done",
         ],
@@ -151,6 +155,10 @@ def default_project_config(
             "bash",
             "str_replace_based_edit_tool",
             "json_edit_tool",
+            "word_edit_tool",
+            "excel_edit_tool",
+            "pdf_tool",
+            "document_convert_tool",
         ],
     }
     return ProjectConfig(

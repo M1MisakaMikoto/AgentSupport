@@ -30,36 +30,48 @@ APPROVE_INTERVAL = 1.0
 ROUNDS = [
     (
         "round1-create",
-        "你是 shop 项目的新手开发，正在听导师指导。导师第一个任务：在 workspace 用文件编辑工具创建 shop.py，"
-        "实现 list_orders()：返回 3 个订单，每个订单通过 get_user(user_id) 查询用户（写成循环内逐行查询，模拟 N+1）。"
-        "创建完成后调用 task_done 结束，并回复文件路径。 禁止使用 bash 命令；文件操作只能使用 "
-        "str_replace_based_edit_tool 或 json_edit_tool。",
+        (
+            "你是办公室文档专员，正在听导师指导。导师第一个任务：在 workspace 用文档工具创建三个文件：\n"
+            "1. report.docx：标题『季度销售报告』，3 个段落（背景简介、数据说明、结论预告）；\n"
+            "2. data.xlsx：工作表名为 Sales，表头 Product/Qty/Price，3 行数据（A: 3, 100；B: 5, 200；C: 2, 150）；\n"
+            "3. summary.pdf：标题『季度销售摘要』，2 个要点段落。\n"
+            "创建完成后调用 task_done 结束，并回复三个文件路径。 禁止使用 bash 命令；文件操作只能使用 "
+            "word_edit_tool、excel_edit_tool、pdf_tool 或 document_convert_tool。"
+        ),
     ),
     (
-        "round2-fix-nplus1",
-        "导师看了你的代码，指出问题：循环内每次 get_user 都是一条查询，3 个订单会执行 1+3 条 SQL，这是典型的 N+1。"
-        "导师指导：先收集所有 user_id 为集合，用一次 get_users(ids) 批量查询取回全部用户，再在内存中按 id 回填。"
-        "请用文件编辑工具改写 shop.py，完成后 task_done 并回复关键改动。 禁止使用 bash 命令；文件操作只能使用 "
-        "str_replace_based_edit_tool 或 json_edit_tool。",
+        "round2-modify",
+        (
+            "导师看了三个文件，提出修改要求：\n"
+            "1. 给 report.docx 追加一段结论：『本季度总销量 10 件，总销售额 1250 元。』；\n"
+            "2. 在 data.xlsx 的 Sales 表追加一行：['D', 1, 300]；\n"
+            "3. 用 excel_edit_tool 的 read 回读 data.xlsx，核对最后一行内容。\n"
+            "完成后 task_done 并回复关键改动。 禁止使用 bash 命令；文件操作只能使用 "
+            "word_edit_tool、excel_edit_tool、pdf_tool 或 document_convert_tool。"
+        ),
     ),
     (
-        "round3-verify",
-        "导师指导：给 shop.py 增加 query_log 计数器和断言函数 verify_no_n_plus_one()："
-        "断言 list_orders() 执行期间的 SQL 查询次数不超过 2（1 次列表查询 + 1 次批量用户查询）。"
-        "实现后 task_done，回复断言逻辑（不要运行 bash）。 禁止使用 bash 命令；文件操作只能使用 "
-        "str_replace_based_edit_tool 或 json_edit_tool。",
+        "round3-convert",
+        (
+            "导师要求：用 document_convert_tool 的 docx_to_pdf 把 report.docx 转换为 report.pdf，"
+            "输出到同一目录。完成后 task_done 并回复输出文件路径。 禁止使用 bash 命令；文件操作只能使用 "
+            "word_edit_tool、excel_edit_tool、pdf_tool 或 document_convert_tool。"
+        ),
     ),
     (
         "round4-summary",
-        "导师最后指导：把这次修复经验整理成 3 条可复用规则（如何识别 N+1、批量加载、回填映射），"
-        "直接回复即可，task_done 结束。 禁止使用 bash 命令。",
+        (
+            "导师最后指导：把这次文档操作经验整理成 3 条可复用规则（工具选择、回读核对、转换注意点），"
+            "直接回复即可，task_done 结束。 禁止使用 bash 命令。"
+        ),
     ),
 ]
 
 ACTIVATE_TASK = (
-    "你是一名独立开发者。{file} 中的 list_items() 存在严重的 N+1 查询性能问题，"
-    "请修复它并保持接口行为不变（不改变返回结构）。文件操作只能使用 str_replace_based_edit_tool "
-    "或 json_edit_tool，禁止 bash。完成后 task_done 并简述你做了什么。"
+    "你是一名办公室文档专员。{file} 的 Sales 表只有明细行，缺少合计行。"
+    "请用 excel_edit_tool 在最后一行下方追加合计行：Qty 列求和、Amount 列求和"
+    "（Amount = Qty × Price），不要改动明细行。文件操作只能使用 word_edit_tool、excel_edit_tool、"
+    "pdf_tool 或 document_convert_tool，禁止 bash。完成后 task_done 并简述你做了什么。"
 )
 
 app = FastAPI(title="AgentSupport Skill Demo")
@@ -281,23 +293,20 @@ def _run_generation() -> None:
         STATE.error = str(exc)
 
 
-def _seed_orders(path: str) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(
-            "query_log = []\n\n"
-            "def get_product(product_id):\n"
-            '    query_log.append("SELECT * FROM products WHERE id=%s" % product_id)\n'
-            '    return {"id": product_id, "name": "p" + str(product_id)}\n\n'
-            "def list_items():\n"
-            '    items = [{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}]\n'
-            "    for item in items:\n"
-            '        item["product"] = get_product(item["id"])\n'
-            "    return items\n"
-        )
+def _seed_sales_xlsx(path: str) -> None:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sales"
+    sheet.append(["Product", "Qty", "Price", "Amount"])
+    for product, qty, price in (("A", 3, 100), ("B", 5, 200), ("C", 2, 150)):
+        sheet.append([product, qty, price, qty * price])
+    workbook.save(path)
 
 
 def _run_activation_case(label: str, file_name: str, skill_id: str | None) -> dict[str, Any]:
-    _seed_orders(rf"D:\workspace\{file_name}")
+    _seed_sales_xlsx(rf"D:\workspace\{file_name}")
     workspace = _post("/workspaces", {"name": f"demo-{label}"}, tenant=TENANT)
     session = _post(
         "/sessions",
@@ -309,17 +318,27 @@ def _run_activation_case(label: str, file_name: str, skill_id: str | None) -> di
         body["skills"] = [{"skill_id": skill_id, "enabled": True}]
     conv = _post(f"/sessions/{session['id']}/conversations", body)
     _wait_terminal(conv["id"], timeout=1200)
-    with open(rf"D:\workspace\{file_name}", encoding="utf-8") as fh:
-        code = fh.read()
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(rf"D:\workspace\{file_name}")
+    sheet = workbook["Sales"]
+    rows = list(sheet.iter_rows(values_only=True))
+    data_rows = rows[1:]
+    last = rows[-1] if rows else None
+    if last and str(last[0]) == "合计":
+        data_rows = rows[1:-1]
+    qty_total = sum(row[1] for row in data_rows if isinstance(row[1], (int, float)))
+    amount_total = sum(row[3] for row in data_rows if isinstance(row[3], (int, float)))
     summary = _round_summary(conv["id"])
     return {
         "label": label,
         "state": summary["state"],
         "approvals": len([a for a in STATE.approvals if a.get("label") == label]),
         "usage": summary["usage"],
-        "final_len": len(code),
-        "final_has_batch": "get_products" in code or "IN (" in code,
-        "final_still_loop": code.count("get_product(") > 1,
+        "final_rows": len(rows),
+        "final_has_total": bool(last) and str(last[0]) == "合计",
+        "final_qty_total": qty_total,
+        "final_amount_total": amount_total,
     }
 
 
