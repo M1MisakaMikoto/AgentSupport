@@ -1,51 +1,283 @@
+# AgentSupport deployment manifests aligned with docker-compose.yml services.
+# Apply order: namespace -> secrets -> this file -> migrate-job (first run).
+# Temporal is managed externally (Temporal Cloud or provisioned server); the
+# temporal-worker below connects to AGENTSUPPORT_TEMPORAL_HOST.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentsupport-workspace
+  namespace: agentsupport
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentsupport-skills
+  namespace: agentsupport
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 1Gi
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: agentsupport-worker
   namespace: agentsupport
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: agentsupport-runtime-manager
+  name: agentsupport-api
   namespace: agentsupport
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "services", "persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "delete", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: agentsupport-runtime-manager
-  namespace: agentsupport
-subjects:
-  - kind: ServiceAccount
-    name: agentsupport-worker
-    namespace: agentsupport
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: agentsupport-runtime-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: agentsupport-api}
+  template:
+    metadata:
+      labels: {app: agentsupport-api}
+    spec:
+      serviceAccountName: agentsupport-worker
+      containers:
+        - name: api
+          image: agentsupport-api:latest
+          command: ["uvicorn", "agentsupport.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          env:
+            - {name: AGENTSUPPORT_DATABASE_URL, valueFrom: {secretKeyRef: {name: agentsupport-secrets, key: AGENTSUPPORT_DATABASE_URL}}}
+            - {name: AGENTSUPPORT_PERSISTENCE_MODE, value: "postgres"}
+            - {name: AGENTSUPPORT_AUTO_CREATE_SCHEMA, value: "false"}
+            - {name: AGENTSUPPORT_EXECUTION_MODE, value: "temporal"}
+            - {name: AGENTSUPPORT_TEMPORAL_HOST, value: "temporal"}
+            - {name: AGENTSUPPORT_TEMPORAL_NAMESPACE, value: "default"}
+            - {name: AGENTSUPPORT_TEMPORAL_TASK_QUEUE, value: "agentsupport"}
+            - {name: AGENTSUPPORT_REDIS_URL, value: "redis://redis:6379/0"}
+            - {name: AGENTSUPPORT_CORE_RUNNER_URL, value: "http://runner:8080"}
+            - {name: AGENTSUPPORT_CORE_RUNNER_TIMEOUT_SECONDS, value: "300"}
+            - {name: AGENTSUPPORT_CORE_RUNNER_WORKSPACE_ROOT, value: "/workspace-data"}
+            - {name: AGENTSUPPORT_WORKSPACE_ROOT, value: "/workspace-data"}
+            - {name: AGENTSUPPORT_SKILLS_ROOT, value: "/app/src/skills"}
+            - {name: AGENTSUPPORT_RUNNER_TOKEN, valueFrom: {secretKeyRef: {name: agentsupport-secrets, key: AGENTSUPPORT_RUNNER_TOKEN}}}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace-data}
+            - {name: skills, mountPath: /app/src/skills}
+          readinessProbe:
+            httpGet: {path: /ready, port: 8000}
+            initialDelaySeconds: 5
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: agentsupport-workspace}
+        - name: skills
+          persistentVolumeClaim: {claimName: agentsupport-skills}
 ---
 apiVersion: v1
-kind: ConfigMap
+kind: Service
 metadata:
-  name: agentsupport-config
+  name: api
   namespace: agentsupport
-data:
-  AGENTSUPPORT_PERSISTENCE_MODE: postgres
-  AGENTSUPPORT_AUTO_CREATE_SCHEMA: "false"
-  AGENTSUPPORT_EXECUTION_MODE: temporal
-  AGENTSUPPORT_TEMPORAL_HOST: temporal:7233
-  AGENTSUPPORT_TEMPORAL_NAMESPACE: default
-  AGENTSUPPORT_TEMPORAL_TASK_QUEUE: agentsupport
-  AGENTSUPPORT_RUNTIME_DRIVER: kubernetes
-  AGENTSUPPORT_KUBERNETES_NAMESPACE: agentsupport
-  AGENTSUPPORT_RUNNER_IMAGE: agentsupport-runner:dev
-  AGENTSUPPORT_KUBERNETES_RUNNER_SECRET_NAME: agentsupport-runner-secrets
-  AGENTSUPPORT_MAX_ACTIVE_SESSIONS: "100"
-  AGENTSUPPORT_REDIS_URL: redis://redis:6379/0
+spec:
+  selector: {app: agentsupport-api}
+  ports:
+    - {port: 8000, targetPort: 8000}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agentsupport-api
+  namespace: agentsupport
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agentsupport-api
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner
+  namespace: agentsupport
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: runner}
+  template:
+    metadata:
+      labels: {app: runner}
+    spec:
+      containers:
+        - name: runner
+          image: agentsupport-api:latest
+          command: ["uvicorn", "session_runner.main:app", "--host", "0.0.0.0", "--port", "8080"]
+          env:
+            - {name: SESSION_RUNNER_MODE, value: "trae"}
+            - {name: SESSION_RUNNER_TOKEN, valueFrom: {secretKeyRef: {name: agentsupport-secrets, key: AGENTSUPPORT_RUNNER_TOKEN}}}
+            - {name: SESSION_RUNNER_ENDPOINT, value: "http://runner:8080"}
+            - {name: SESSION_RUNNER_PROVIDER, value: "trae"}
+            - {name: SESSION_RUNNER_HEARTBEAT_SECONDS, value: "10"}
+            - {name: AGENTSUPPORT_CONTROL_PLANE_URL, value: "http://api:8000"}
+            - {name: SESSION_RUNNER_TRAE_CONFIG, value: "/app/src/session_runner/trae_config.yaml"}
+            - {name: SESSION_RUNNER_WORKSPACE_ROOTS, value: "/workspace-data"}
+            - {name: TRAE_API_KEY, valueFrom: {secretKeyRef: {name: agentsupport-runner-secrets, key: TRAE_API_KEY}}}
+            - {name: TRAE_PROVIDER, value: "anthropic"}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace-data}
+            - {name: skills, mountPath: /app/src/skills}
+          readinessProbe:
+            httpGet: {path: /ready, port: 8080}
+            initialDelaySeconds: 5
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: agentsupport-workspace}
+        - name: skills
+          persistentVolumeClaim: {claimName: agentsupport-skills}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: runner
+  namespace: agentsupport
+spec:
+  selector: {app: runner}
+  ports:
+    - {port: 8080, targetPort: 8080}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: runner
+  namespace: agentsupport
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: runner
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-worker
+  namespace: agentsupport
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: temporal-worker}
+  template:
+    metadata:
+      labels: {app: temporal-worker}
+    spec:
+      containers:
+        - name: worker
+          image: agentsupport-api:latest
+          command: ["python", "-m", "agentsupport.execution.temporal.worker"]
+          env:
+            - {name: AGENTSUPPORT_PERSISTENCE_MODE, value: "postgres"}
+            - {name: AGENTSUPPORT_EXECUTION_MODE, value: "temporal"}
+            - {name: AGENTSUPPORT_DATABASE_URL, valueFrom: {secretKeyRef: {name: agentsupport-secrets, key: AGENTSUPPORT_DATABASE_URL}}}
+            - {name: AGENTSUPPORT_TEMPORAL_HOST, value: "temporal"}
+            - {name: AGENTSUPPORT_TEMPORAL_NAMESPACE, value: "default"}
+            - {name: AGENTSUPPORT_TEMPORAL_TASK_QUEUE, value: "agentsupport"}
+            - {name: AGENTSUPPORT_CORE_RUNNER_URL, value: "http://runner:8080"}
+            - {name: AGENTSUPPORT_CORE_RUNNER_WORKSPACE_ROOT, value: "/workspace-data"}
+            - {name: AGENTSUPPORT_WORKSPACE_ROOT, value: "/workspace-data"}
+            - {name: AGENTSUPPORT_SKILLS_ROOT, value: "/app/src/skills"}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace-data}
+            - {name: skills, mountPath: /app/src/skills}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: agentsupport-workspace}
+        - name: skills
+          persistentVolumeClaim: {claimName: agentsupport-skills}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-publisher
+  namespace: agentsupport
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: event-publisher}
+  template:
+    metadata:
+      labels: {app: event-publisher}
+    spec:
+      containers:
+        - name: publisher
+          image: agentsupport-api:latest
+          command: ["python", "-m", "agentsupport.event_publisher"]
+          env:
+            - {name: AGENTSUPPORT_DATABASE_URL, valueFrom: {secretKeyRef: {name: agentsupport-secrets, key: AGENTSUPPORT_DATABASE_URL}}}
+            - {name: AGENTSUPPORT_PERSISTENCE_MODE, value: "postgres"}
+            - {name: AGENTSUPPORT_AUTO_CREATE_SCHEMA, value: "false"}
+            - {name: AGENTSUPPORT_REDIS_URL, value: "redis://redis:6379/0"}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reconciler
+  namespace: agentsupport
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: reconciler}
+  template:
+    metadata:
+      labels: {app: reconciler}
+    spec:
+      containers:
+        - name: reconciler
+          image: agentsupport-api:latest
+          command: ["python", "-m", "agentsupport.reconciler"]
+          env:
+            - {name: AGENTSUPPORT_DATABASE_URL, valueFrom: {secretKeyRef: {name: agentsupport-secrets, key: AGENTSUPPORT_DATABASE_URL}}}
+            - {name: AGENTSUPPORT_PERSISTENCE_MODE, value: "postgres"}
+            - {name: AGENTSUPPORT_AUTO_CREATE_SCHEMA, value: "false"}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: retention
+  namespace: agentsupport
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: retention}
+  template:
+    metadata:
+      labels: {app: retention}
+    spec:
+      containers:
+        - name: retention
+          image: agentsupport-api:latest
+          command: ["python", "-m", "agentsupport.retention"]
+          env:
+            - {name: AGENTSUPPORT_DATABASE_URL, valueFrom: {secretKeyRef: {name: agentsupport-secrets, key: AGENTSUPPORT_DATABASE_URL}}}
+            - {name: AGENTSUPPORT_PERSISTENCE_MODE, value: "postgres"}
+            - {name: AGENTSUPPORT_AUTO_CREATE_SCHEMA, value: "false"}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -63,14 +295,16 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
-          args: ["redis-server", "--appendonly", "yes"]
-          ports: [{name: redis, containerPort: 6379}]
-          readinessProbe: {tcpSocket: {port: redis}, periodSeconds: 5}
+          args: ["--appendonly", "yes"]
+          ports:
+            - {containerPort: 6379}
+          volumeMounts:
+            - {name: data, mountPath: /data}
           resources:
-            requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 500m, memory: 256Mi}
-          volumeMounts: [{name: data, mountPath: /data}]
-      volumes: [{name: data, emptyDir: {}}]
+            requests: {cpu: 100m, memory: 128Mi}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: agentsupport-redis}
 ---
 apiVersion: v1
 kind: Service
@@ -79,130 +313,114 @@ metadata:
   namespace: agentsupport
 spec:
   selector: {app: redis}
-  ports: [{name: redis, port: 6379, targetPort: redis}]
+  ports:
+    - {port: 6379, targetPort: 6379}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentsupport-redis
+  namespace: agentsupport
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agentsupport-api
+  name: postgres
   namespace: agentsupport
 spec:
-  replicas: 2
+  replicas: 1
   selector:
-    matchLabels: {app: agentsupport-api}
+    matchLabels: {app: postgres}
   template:
     metadata:
-      labels: {app: agentsupport-api}
+      labels: {app: postgres}
     spec:
       containers:
-        - name: api
-          image: agentsupport-api:latest
-          command: ["uvicorn", "agentsupport.main:app", "--host", "0.0.0.0", "--port", "8000"]
-          envFrom:
-            - configMapRef: {name: agentsupport-config}
-            - secretRef: {name: agentsupport-secrets}
-          ports: [{name: http, containerPort: 8000}]
-          readinessProbe: {httpGet: {path: /ready, port: http}, periodSeconds: 5}
-          resources:
-            requests: {cpu: 100m, memory: 128Mi}
-            limits: {cpu: "1", memory: 1Gi}
+        - name: postgres
+          image: postgres:16
+          env:
+            - {name: POSTGRES_USER, value: "agent"}
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: agentsupport-secrets, key: POSTGRES_PASSWORD}}}
+            - {name: POSTGRES_DB, value: "agentsupport"}
+          ports:
+            - {containerPort: 5432}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "agent", "-d", "agentsupport"]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: agentsupport-postgres}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: agentsupport-api
+  name: postgres
   namespace: agentsupport
 spec:
-  selector: {app: agentsupport-api}
-  ports: [{name: http, port: 80, targetPort: http}]
-apiVersion: apps/v1
-kind: Deployment
+  selector: {app: postgres}
+  ports:
+    - {port: 5432, targetPort: 5432}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
 metadata:
-  name: agentsupport-event-publisher
+  name: agentsupport-postgres
   namespace: agentsupport
 spec:
-  replicas: 2
-  selector:
-    matchLabels: {app: agentsupport-event-publisher}
-  template:
-    metadata:
-      labels: {app: agentsupport-event-publisher}
-    spec:
-      containers:
-        - name: publisher
-          image: agentsupport-api:latest
-          command: ["python", "-m", "agentsupport.event_publisher"]
-          envFrom:
-            - configMapRef: {name: agentsupport-config}
-            - secretRef: {name: agentsupport-secrets}
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agentsupport-reconciler
+  name: demo
   namespace: agentsupport
 spec:
-  replicas: 2
+  replicas: 1
   selector:
-    matchLabels: {app: agentsupport-reconciler}
+    matchLabels: {app: demo}
   template:
     metadata:
-      labels: {app: agentsupport-reconciler}
+      labels: {app: demo}
     spec:
-      serviceAccountName: agentsupport-worker
       containers:
-        - name: reconciler
+        - name: demo
           image: agentsupport-api:latest
-          command: ["python", "-m", "agentsupport.reconciler"]
-          envFrom:
-            - configMapRef: {name: agentsupport-config}
-            - secretRef: {name: agentsupport-secrets}
+          command: ["python", "demo/demo_server.py"]
+          env:
+            - {name: AGENTSUPPORT_DEMO_HOST, value: "0.0.0.0"}
+            - {name: AGENTSUPPORT_DEMO_PORT, value: "8900"}
+            - {name: AGENTSUPPORT_DEMO_CONTROL_URL, value: "http://api:8000"}
+            - {name: AGENTSUPPORT_DEMO_RUNNER_URL, value: "http://runner:8080"}
+            - {name: AGENTSUPPORT_WORKSPACE_ROOT, value: "/workspace-data"}
+            - {name: AGENTSUPPORT_RUNNER_WORKSPACE_ROOT, value: "/workspace-data"}
+            - {name: AGENTSUPPORT_SKILLS_ROOT, value: "/app/src/skills"}
+          ports:
+            - {containerPort: 8900}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace-data}
+            - {name: skills, mountPath: /app/src/skills}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: {claimName: agentsupport-workspace}
+        - name: skills
+          persistentVolumeClaim: {claimName: agentsupport-skills}
 ---
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
+apiVersion: v1
+kind: Service
 metadata:
-  name: agentsupport-api
+  name: demo
   namespace: agentsupport
 spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: agentsupport-api
-  minReplicas: 2
-  maxReplicas: 20
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target: {type: Utilization, averageUtilization: 65}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: agentsupport-internal-ingress
-  namespace: agentsupport
-spec:
-  podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/managed-by
-        operator: In
-        values: [agentsupport]
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - podSelector: {}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: redis-internal-ingress
-  namespace: agentsupport
-spec:
-  podSelector:
-    matchLabels: {app: redis}
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - podSelector: {}
-      ports:
-        - {protocol: TCP, port: 6379}
+  selector: {app: demo}
+  ports:
+    - {port: 8900, targetPort: 8900}

@@ -128,7 +128,7 @@ cases:
 ```yaml
 dataset_id: <uuid>
 runner:
-  mode: deterministic | trae
+  mode: trae
   version: 0.1.0
   tool_versions_hash: <tool_versions_hash>   # 复用 checkpoint 契约
 model:

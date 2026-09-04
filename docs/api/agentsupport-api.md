@@ -904,7 +904,7 @@ agentsupport_outbox_pending 0
 [
   {
     "runner_id": "3d9e1c2a-...",
-    "type": "deterministic",
+    "type": "trae",
     "version": "0.1.0",
     "capabilities": ["run", "input", "checkpoint", "cancel", "events", "resume"],
     "status": "READY"
@@ -968,7 +968,7 @@ Runner 启动时注册自身。
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `provider` | string | 是 | 提供方标识（如 `trae`、`deterministic`） |
+| `provider` | string | 是 | 提供方标识（当前为 `trae`） |
 | `endpoint` | string | 是 | Runner 私有 API 可达地址 |
 | `version` | string | 否 | 版本，默认 `0.1.0` |
 | `capabilities` | string[] | 否 | 能力：`run` / `input` / `checkpoint` / `cancel` / `events` / `resume` |
@@ -979,7 +979,7 @@ POST /runners/register
 X-Runner-Token: <shared-bootstrap-token>
 
 {
-  "provider": "deterministic",
+  "provider": "trae",
   "endpoint": "http://runner:8080",
   "version": "0.1.0",
   "capabilities": ["run", "input", "checkpoint", "cancel", "events", "resume"]

@@ -121,10 +121,11 @@ Runner 自注册（内部契约）使用共享 token：
 | `AGENTSUPPORT_CONTROL_PLANE_URL` | 空 | Runner 注册目标地址 |
 | `SESSION_RUNNER_ENDPOINT` | 空 | Runner 自报可达地址 |
 
-在开发 Runner 的 HTTP 契约时，可以用确定性模式单独启动私有 Runner：
+Runner 只有一个产品形态：`SESSION_RUNNER_MODE=trae`（运行真实 trae agent）。
+本地单独启动 Runner 前需先配置 `TRAE_*` 模型凭据：
 
 ```powershell
-$env:SESSION_RUNNER_MODE="deterministic"
+$env:SESSION_RUNNER_MODE="trae"
 .venv\Scripts\python.exe -m uvicorn session_runner.main:app --port 8080
 ```
 
@@ -183,14 +184,7 @@ WSL 文件系统，避免 DrvFS 元数据限制。
 Compose 栈包含 API 网关、PostgreSQL、Redis、数据库迁移任务、API、Worker、Reconciler、
 Event Publisher 和 Session Runner。
 
-无需模型访问的确定性执行：
-
-```powershell
-$env:SESSION_RUNNER_MODE="deterministic"
-docker compose up -d --build
-```
-
-Trae 执行需要先配置模型提供方，再启动栈：
+栈需要先配置模型提供方再启动（Runner 为 trae 形态，不存在无模型执行模式）：
 
 ```powershell
 $env:SESSION_RUNNER_MODE="trae"
@@ -264,13 +258,12 @@ $env:TRAE_API_KEY="<api-key>"
 | 变量 | 用途 |
 | --- | --- |
 | `AGENTSUPPORT_PERSISTENCE_MODE` | `memory` 或 `postgres` 持久化 |
-| `AGENTSUPPORT_EXECUTION_MODE` | `inline` 或 `temporal` 执行 |
+| `AGENTSUPPORT_EXECUTION_MODE` | 执行模式，仅支持 `temporal` |
 | `AGENTSUPPORT_DATABASE_URL` | SQLAlchemy PostgreSQL URL |
 | `AGENTSUPPORT_REDIS_URL` | 可选的 Redis 事件通知 URL |
 | `AGENTSUPPORT_TEMPORAL_HOST` | Temporal 服务地址（temporal 模式） |
 | `AGENTSUPPORT_TEMPORAL_NAMESPACE` | Temporal namespace（默认 `default`） |
 | `AGENTSUPPORT_TEMPORAL_TASK_QUEUE` | Temporal task queue（默认 `agentsupport`） |
-| `AGENTSUPPORT_RUNTIME_DRIVER` | `memory`、`docker_cli` 或 `kubernetes` 运行时 |
 | `AGENTSUPPORT_WORKSPACE_ROOT` | 工作区数据目录 |
 | `AGENTSUPPORT_MAX_ACTIVE_SESSIONS` | 并发活跃 Session 上限 |
 | `AGENTSUPPORT_MAX_QUEUED_CONVERSATIONS` | Conversation 队列上限 |
@@ -281,7 +274,7 @@ $env:TRAE_API_KEY="<api-key>"
 | `AGENTSUPPORT_EVAL_AUTO_INTERACTION` | 评估层自动代答 human gate（默认 false；开启后 waiting 的 case 自动提交 `EVAL_AUTO_INPUT`） |
 | `AGENTSUPPORT_EVAL_AUTO_INPUT` | 自动代答的输入值（默认 `continue`） |
 | `AGENTSUPPORT_EVAL_AUTO_ANSWER_LIMIT` | 单个 case 自动代答次数上限（默认 10） |
-| `SESSION_RUNNER_MODE` | `deterministic` 或 `trae` Runner 模式 |
+| `SESSION_RUNNER_MODE` | Runner 模式，仅支持 `trae` |
 | `TRAE_PROVIDER` | 模型提供方实现 |
 | `TRAE_MODEL`、`TRAE_MODEL_BASE_URL`、`TRAE_API_KEY` | Runner 模型配置 |
 
@@ -351,18 +344,18 @@ $env:AGENTSUPPORT_AUTO_CREATE_SCHEMA="false"
 
 ## 分布式运行
 
-API 和 Worker 进程无状态，可以独立扩缩容。PostgreSQL 是任务、事件、命令、检查点和租约的事实来源；
-Redis 仅加速订阅者唤醒。
+API、Runner 池与支撑进程无状态，可独立扩缩容：Runner 常驻 N 个，注册表按心跳与负载
+选择空闲者派活，可动态扩容到 N+M（compose `--scale runner=...`，Kubernetes 用 HPA）。
+PostgreSQL 是工作区/会话/对话、事件、注册与检查点的事实来源；Redis 仅加速订阅者唤醒。
 
 ```powershell
-$env:SESSION_RUNNER_MODE="deterministic"
-docker compose up -d --build --scale api=2 --scale worker=3
+docker compose up -d --build --scale runner=3
 Invoke-WebRequest -UseBasicParsing http://localhost:8000/ready
 Invoke-WebRequest -UseBasicParsing http://localhost:8000/metrics
 ```
 
-Worker 使用带过期时间的认领（expiring claims）和栅栏纪元（fence epochs）。暂停的 Run 会释放
-执行容量，替换的 Runner 会从已验证的检查点继续。
+每次运行由 Temporal `RunSessionWorkflow` 驱动：Signal 代替命令队列，事件历史承担检查点
+职责；暂停/恢复、取消、幂等与崩溃恢复由 Temporal 原生提供。
 
 ## Kubernetes
 
@@ -378,8 +371,8 @@ kubectl -n agentsupport wait --for=condition=complete job/agentsupport-db-migrat
 kubectl apply -f deploy/kubernetes/agentsupport.yaml
 ```
 
-在应用 `deploy/kubernetes/keda-worker.yaml` 之前先安装 KEDA。没有 KEDA 时，配置固定的 Worker
-副本数。Workspace PVC 需要兼容 `ReadWriteOnce` 的 StorageClass。
+Runner 以 Deployment + HPA 运行（清单内默认 2→8 副本）。Workspace 与 Skill 卷需要支持
+`ReadWriteMany` 的 StorageClass，供 API、Runner 与 demo 共享。
 
 ## 生产注意事项
 
