@@ -217,6 +217,48 @@
   </div>
 </footer>
 
+<div class="overlay" id="genBench" style="display:none" onclick="if(event.target===this)closeBench()">
+  <div class="bench">
+    <div class="bench-head">
+      <span class="gp-dot" id="gpDot"></span>
+      <div class="bench-title">Skill 生成工作台 <span class="gid" id="gpGenId">连接中…</span></div>
+      <div class="bench-steps" id="gpSteps"></div>
+      <span class="gp-state" id="gpState">准备中…</span>
+      <button class="chip" id="btnBenchClose" title="收起到后台，生成不中断">收起到后台</button>
+    </div>
+    <div class="bench-body">
+      <div class="bench-side">
+        <div class="bench-side-title">运行过程 <span class="bench-side-hint">与原会话隔离 · 只读引用历史</span></div>
+        <div class="gp-log" id="gpLog"></div>
+      </div>
+      <div class="bench-main">
+        <div class="bench-status" id="benchStatus">
+          <span class="bench-spin"></span><span id="benchStatusText">准备中…</span>
+        </div>
+        <div id="gpAsk" class="hidden">
+          <div class="gp-ask-title">请确认要总结成 Skill 的内容</div>
+          <div class="gp-question" id="gpQuestion"></div>
+          <div class="gp-ask-row">
+            <textarea id="gpCorr" class="gp-corr" rows="2" placeholder="如果范围不完全对，在这里写纠正意见"></textarea>
+            <div class="gp-ask-btns">
+              <button class="chip" id="btnGpCorr">按纠正继续</button>
+              <button class="chip gp-ok-btn" id="btnGpAgree">同意，按此生成</button>
+            </div>
+          </div>
+          <div class="gp-ask-err hidden" id="gpAskErr"></div>
+        </div>
+        <div id="gpResult" class="hidden">
+          <span class="gp-ok">✅ 生成完成，草稿已入库</span>
+          <span class="hint">skill：<b id="gpSkillId"></b></span>
+          <span class="file-ref" id="gpFileRef" title=""></span>
+          <button class="chip" id="btnGpDraft">查看草稿</button>
+        </div>
+        <pre id="gpDraft" class="hidden"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 const inner = $("inner");
@@ -754,48 +796,6 @@ loadSkills();
   <div class="modal file-modal">
     <div class="modal-head"><b>文件预览</b><button class="chip" onclick="closeFilePreview()">关闭</button></div>
     <div class="modal-body" id="fileBody"></div>
-  </div>
-</div>
-
-<div class="overlay" id="genBench" style="display:none" onclick="if(event.target===this)closeBench()">
-  <div class="bench">
-    <div class="bench-head">
-      <span class="gp-dot" id="gpDot"></span>
-      <div class="bench-title">Skill 生成工作台 <span class="gid" id="gpGenId">连接中…</span></div>
-      <div class="bench-steps" id="gpSteps"></div>
-      <span class="gp-state" id="gpState">准备中…</span>
-      <button class="chip" id="btnBenchClose" title="收起到后台，生成不中断">收起到后台</button>
-    </div>
-    <div class="bench-body">
-      <div class="bench-side">
-        <div class="bench-side-title">运行过程 <span class="bench-side-hint">与原会话隔离 · 只读引用历史</span></div>
-        <div class="gp-log" id="gpLog"></div>
-      </div>
-      <div class="bench-main">
-        <div class="bench-status" id="benchStatus">
-          <span class="bench-spin"></span><span id="benchStatusText">准备中…</span>
-        </div>
-        <div id="gpAsk" class="hidden">
-          <div class="gp-ask-title">请确认要总结成 Skill 的内容</div>
-          <div class="gp-question" id="gpQuestion"></div>
-          <div class="gp-ask-row">
-            <textarea id="gpCorr" class="gp-corr" rows="2" placeholder="如果范围不完全对，在这里写纠正意见"></textarea>
-            <div class="gp-ask-btns">
-              <button class="chip" id="btnGpCorr">按纠正继续</button>
-              <button class="chip gp-ok-btn" id="btnGpAgree">同意，按此生成</button>
-            </div>
-          </div>
-          <div class="gp-ask-err hidden" id="gpAskErr"></div>
-        </div>
-        <div id="gpResult" class="hidden">
-          <span class="gp-ok">✅ 生成完成，草稿已入库</span>
-          <span class="hint">skill：<b id="gpSkillId"></b></span>
-          <span class="file-ref" id="gpFileRef" title=""></span>
-          <button class="chip" id="btnGpDraft">查看草稿</button>
-        </div>
-        <pre id="gpDraft" class="hidden"></pre>
-      </div>
-    </div>
   </div>
 </div>
 
