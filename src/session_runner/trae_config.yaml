@@ -11,6 +11,7 @@ agents:
       - excel_edit_tool
       - pdf_tool
       - document_convert_tool
+      - ask_user
       - task_done
 
 allow_mcp_servers: []

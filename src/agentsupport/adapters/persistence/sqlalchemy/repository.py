@@ -20,6 +20,7 @@ from ....domain import (
     Checkpoint,
     ContextBundle,
     Conversation,
+    ConversationMode,
     ExecutionState,
     McpServer,
     OutboxNotification,
@@ -350,7 +351,6 @@ class PostgresRepository:
             config=ProjectConfig.model_validate(row.config) if row.config else None,
             lease_epoch=row.lease_epoch,
             active_run_id=UUID(row.active_run_id) if row.active_run_id else None,
-            active_container_id=active.container_id if active else None,
         )
 
     def list_sessions(
@@ -393,7 +393,6 @@ class PostgresRepository:
                         config=ProjectConfig.model_validate(row.config) if row.config else None,
                         lease_epoch=row.lease_epoch,
                         active_run_id=UUID(row.active_run_id) if row.active_run_id else None,
-                        active_container_id=lease.container_id if lease else None,
                     )
                 )
             return result
@@ -486,6 +485,7 @@ class PostgresRepository:
                     else None
                 ),
                 task=conversation.task,
+                mode=conversation.mode.value,
                 skills=(
                     [skill.model_dump(mode="json") for skill in conversation.skills]
                     if conversation.skills is not None
@@ -529,6 +529,7 @@ class PostgresRepository:
                 UUID(row.parent_conversation_id) if row.parent_conversation_id else None
             ),
             task=row.task,
+            mode=ConversationMode(row.mode) if row.mode else ConversationMode.DEFAULT,
             skills=(
                 [PresetSkill.model_validate(item) for item in row.skills]
                 if row.skills is not None

@@ -5,7 +5,7 @@
 
 import json
 import os
-from typing import override
+from typing import Callable, override
 
 import anthropic
 from anthropic.types.tool_union_param import TextEditor20250429
@@ -39,6 +39,7 @@ class AnthropicClient(BaseLLMClient):
         self.client: anthropic.Anthropic = anthropic.Anthropic(**client_options)
         self.message_history: list[anthropic.types.MessageParam] = []
         self.system_message: str | anthropic.NotGiven = anthropic.NOT_GIVEN
+        self.on_text_delta: Callable[[str], None] | None = None
 
     @override
     def set_chat_history(self, messages: list[LLMMessage]) -> None:
@@ -79,6 +80,36 @@ class AnthropicClient(BaseLLMClient):
             top_k=model_config.top_k,
         )
 
+    def _create_anthropic_response_stream(
+        self,
+        model_config: ModelConfig,
+        tool_schemas: list[anthropic.types.ToolUnionParam] | anthropic.NotGiven,
+    ) -> anthropic.types.Message:
+        """Create a streamed Anthropic response, forwarding text deltas live.
+
+        The final message (including tool_use blocks) is reconstructed by the
+        SDK so downstream parsing stays identical to the batch path.
+        """
+        with self.client.messages.stream(
+            model=model_config.model,
+            messages=self.message_history,
+            max_tokens=model_config.max_tokens,
+            system=self.system_message,
+            tools=tool_schemas,
+            temperature=model_config.temperature,
+            top_p=model_config.top_p,
+            top_k=model_config.top_k,
+        ) as stream:
+            for event in stream:
+                if event.type != "content_block_delta":
+                    continue
+                delta_type = getattr(event.delta, "type", None)
+                delta_text = getattr(event.delta, "text", None)
+                if delta_type == "text_delta" and delta_text:
+                    if self.on_text_delta is not None:
+                        self.on_text_delta(delta_text)
+            return stream.get_final_message()
+
     @override
     def chat(
         self,
@@ -102,9 +133,16 @@ class AnthropicClient(BaseLLMClient):
         if tools:
             tool_schemas = [self._build_tool_schema(tool) for tool in tools]
 
-        # Apply retry decorator to the API call
+        # Apply retry decorator to the API call. When a streaming consumer is
+        # attached (on_text_delta), use the streaming variant so text deltas are
+        # forwarded in real time; otherwise keep the original batch call.
+        response_factory = (
+            self._create_anthropic_response_stream
+            if self.on_text_delta is not None
+            else self._create_anthropic_response
+        )
         retry_decorator = retry_with(
-            func=self._create_anthropic_response,
+            func=response_factory,
             provider_name=self.retry_provider_name,
             max_retries=model_config.max_retries,
         )

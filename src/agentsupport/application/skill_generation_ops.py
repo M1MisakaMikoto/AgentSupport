@@ -35,10 +35,20 @@ _GENERATION_PROMPT = """你是 AgentSupport 的 skill 提炼 agent。请分析�
 提炼该 session 中 agent 在指导下或探索下跑通的业务路径，产出一份可复用的标准 SKILL.md。
 
 要求：
-1. 输出必须是 JSON 对象，唯一字段为 skill_markdown，值为完整的 SKILL.md 文本。
-2. SKILL.md 必须以 frontmatter 开头，至少包含 name（kebab-case 英文短名）和 description（一段话说明适用场景）。
-3. 正文建议分区：目标 / 步骤 / 关键命令与工具 / 边界条件。
-4. 只总结事件历史中真实出现过的路径，不要编造。
+1. 先用文件工具读取事件文件的全部内容；提炼出你准备总结进 SKILL 的范围：
+   · 场景（做什么任务时适用）
+   · 边界（不覆盖什么）
+   · 失败教训（事件里出现过的关键教训）
+2. 在写入任何文件之前，必须调用一次 ask_user 工具确认意图，question 参数用中文完整列出
+   上面三条内容；调用前不得创建或修改任何文件，ask_user 必须单独调用。
+3. 用户回复为「同意，按此范围生成」时，按确认的范围继续；回复为其他文本时，
+   把用户文本当作纠正意见，按其调整范围后再继续；纠正后可直接继续，无需再次确认。
+4. 确认后写出 SKILL.md，输出必须是 JSON 对象，唯一字段为 skill_markdown，
+   值为完整的 SKILL.md 文本。
+5. SKILL.md 必须以 frontmatter 开头，至少包含 name（kebab-case 英文短名）和 description
+   （一段话说明适用场景）。
+6. 正文建议分区：目标 / 步骤 / 关键命令与工具 / 边界条件。
+7. 只总结事件历史中真实出现过的路径，不要编造。
 
 ## 输出格式示例（正例）
 
@@ -48,6 +58,13 @@ _GENERATION_PROMPT = """你是 AgentSupport 的 skill 提炼 agent。请分析�
 
 只输出 JSON，不要输出其他内容。
 """
+
+ASK_USER_TOOL = "ask_user"
+
+
+def is_skill_generation_task(task: str | None) -> bool:
+    """Whether ``task`` is a control-plane skill-generation run task."""
+    return bool(task and task.startswith(_GENERATION_PROMPT))
 
 
 def _strip_markdown_fence(text: str) -> str:

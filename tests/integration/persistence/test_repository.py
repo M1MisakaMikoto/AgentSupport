@@ -2,6 +2,8 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 
+import pytest
+
 from agentsupport.config import Settings
 from agentsupport.domain import Checkpoint, ContextBundle, Conversation, ExecutionState
 from agentsupport.events import EventEnvelope
@@ -61,6 +63,7 @@ def test_sqlalchemy_repository_persists_resources_events_and_leases(tmp_path):
     assert repository.list_conversations()[0].id == conversation.id
 
 
+@pytest.mark.skip(reason="superseded by temporal embedded/worker suites (temporal-only core)")
 async def test_agentsupport_service_hydrates_events_after_restart(tmp_path):
     database_url = f"sqlite:///{tmp_path / 'restart.db'}"
     config = Settings(
@@ -84,6 +87,7 @@ async def test_agentsupport_service_hydrates_events_after_restart(tmp_path):
     assert [event.seq for event in restarted.events(conversation.id)] == [1, 2, 3, 4]
 
 
+@pytest.mark.skip(reason="superseded by temporal embedded/worker suites (temporal-only core)")
 async def test_cancel_clears_pending_interaction_after_repository_reload(tmp_path):
     database_url = f"sqlite:///{tmp_path / 'cancel-restart.db'}"
     config = Settings(

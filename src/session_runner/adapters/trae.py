@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from agent_runner_contracts.checkpoint import tool_policy_hash, tool_versions_hash
 from agent_runner_contracts.tools import (
@@ -45,6 +46,23 @@ DOCUMENT_TOOL_NAMES = {
     "pdf_tool",
     "document_convert_tool",
 }
+
+ASK_USER_TOOL = "ask_user"
+
+#: 生成会话在 ask_user 被确认前只允许这些只读动作。
+PRE_ASK_READ_COMMANDS = frozenset({"view", "read", "show", "list", "get"})
+
+#: ask_user 确认前会被拦截的动作（写文件工具 + 结束标记）。
+PRE_ASK_BLOCKED_TOOLS = (
+    "bash",
+    "str_replace_based_edit_tool",
+    "json_edit_tool",
+    "word_edit_tool",
+    "excel_edit_tool",
+    "pdf_tool",
+    "document_convert_tool",
+    "task_done",
+)
 
 
 @dataclass(frozen=True)
@@ -170,11 +188,38 @@ def _skill_prompt_section(bundle: Any) -> str | None:
     return "\n\n".join(lines)
 
 
+FILE_REFERENCE_PROMPT = """# 文件引用格式
+当你在回复中列出或提及工作区内的文件时，每个文件用以下格式（不要用反引号包裹）：
+[[file:绝对路径|显示名]]
+- 绝对路径是文件在磁盘上的真实绝对路径（以工具返回的实际路径为准），例如 {example}
+- 显示名可省略：[[file:绝对路径]]"""
+
+
+def _file_reference_section(bundle: Any) -> str | None:
+    """Core (non-skill) file-reference-format instruction, gated by flag."""
+    if isinstance(bundle, dict):
+        flag = bool(bundle.get("file_ref_format"))
+        workspace_ref = bundle.get("workspace_ref")
+    else:
+        flag = bool(getattr(bundle, "file_ref_format", False))
+        workspace_ref = getattr(bundle, "workspace_ref", None)
+    if not flag:
+        return None
+    if workspace_ref:
+        base = str(workspace_ref).rstrip("/\\")
+        example = f"[[file:{base}/report.docx|report.docx]]"
+    else:
+        example = "[[file:/workspace-data/<会话工作区>/report.docx|report.docx]]"
+    return FILE_REFERENCE_PROMPT.format(example=example)
+
+
 def _default_agent_factory(settings: TraeRuntimeSettings, request: Any, trajectory: Path) -> Any:
     _ensure_vendored_trae_path()
     from session_runner.tools.document_tools import register_document_tools
+    from session_runner.tools.question_tool import register_question_tool
 
     register_document_tools()
+    register_question_tool()
     from trae_agent.agent.agent import Agent
     from trae_agent.utils.config import Config
 
@@ -297,7 +342,10 @@ class TraeToolGatewayBridge:
         self.pending_calls: list[Any] = []
         self.pending_method: str | None = None
         self._decision: asyncio.Future[ApprovalDecision] | None = None
+        self._answer: asyncio.Future[str] | None = None
         self._results: dict[str, Any] = {}
+        self.ask_gate = ASK_USER_TOOL in self.policy.allowed_tools
+        self.ask_answered = False
 
     async def close_tools(self) -> Any:
         return await self.delegate.close_tools()
@@ -312,6 +360,11 @@ class TraeToolGatewayBridge:
         if self._decision is None or self._decision.done():
             raise RuntimeError("Trae run is not waiting for tool approval")
         self._decision.set_result(decision)
+
+    def submit_answer(self, answer: str) -> None:
+        if self._answer is None or self._answer.done():
+            raise RuntimeError("Trae run is not waiting for a user question")
+        self._answer.set_result(str(answer))
 
     async def execute_restored(
         self, calls: list[Any], method: str, decision: ApprovalDecision
@@ -367,6 +420,22 @@ class TraeToolGatewayBridge:
                 return self._rejected(calls, "tool batch rejected by user")
             if decision != ApprovalDecision.APPROVE_ONCE:
                 raise RuntimeError("tool batch approval decision is missing")
+        if any(call.name == ASK_USER_TOOL for call in batch.calls):
+            return await self._ask_user(batch, calls, method)
+        if self.ask_gate and not self.ask_answered:
+            blocked = [
+                call
+                for call in batch.calls
+                if self._blocked_before_ask(call)
+            ]
+            if blocked:
+                names = ", ".join(sorted({call.name for call in blocked}))
+                return self._rejected(
+                    calls,
+                    "写文件/结束动作被拦截：请先单独调用 ask_user 把准备总结的场景、"
+                    "边界与失败教训发给用户确认；用户回复后才能继续。已拦截："
+                    + names,
+                )
         if self.mode == "silent":
             sandboxed = {
                 call.call_id: problem
@@ -395,6 +464,91 @@ class TraeToolGatewayBridge:
                 return self._store_results(results)
         results = await getattr(self.delegate, method)(calls)
         return self._store_results(results)
+
+    def _blocked_before_ask(self, call: Any) -> bool:
+        """Whether a call must wait until the user answered the ask_user gate."""
+
+        name = call.name
+        if name not in PRE_ASK_BLOCKED_TOOLS:
+            return False
+        if name == "task_done":
+            return True
+        arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        command = str(arguments.get("command") or "")
+        return command not in PRE_ASK_READ_COMMANDS
+
+    async def _ask_user(
+        self,
+        batch: ToolBatch,
+        calls: list[Any],
+        method: str,
+    ) -> list[Any]:
+        """Pause at a durable human gate and return the user's answer as the tool result."""
+
+        if len(batch.calls) != 1:
+            raise RuntimeError(
+                "ask_user must be called alone; retry with a single ask_user call"
+            )
+        call = batch.calls[0]
+        arguments = dict(call.arguments or {})
+        question = str(arguments.get("question") or "").strip()
+        if not question:
+            return self._store_results(
+                [
+                    _trae_tool_result(
+                        call_id=call.call_id,
+                        tool_id=getattr(call, "id", None),
+                        name=call.name,
+                        success=False,
+                        error=(
+                            "ask_user 缺少 question 参数：请用中文完整列出你准备总结的"
+                            "场景、边界与失败教训后重试，不要省略该参数。"
+                        ),
+                    )
+                ]
+            )
+        interaction_id = uuid4().hex
+        self.pending_batch = batch
+        self.pending_calls = calls
+        self.pending_method = method
+        self._answer = asyncio.get_running_loop().create_future()
+        interaction = {
+            "interaction_id": interaction_id,
+            "kind": "question",
+            "question": question,
+            "tool_batch_hash": batch.batch_hash,
+            "tool_batch": batch.model_dump(mode="json"),
+            "pending_tool_calls": [
+                {
+                    "call_id": getattr(item, "call_id", None),
+                    "name": getattr(item, "name", None),
+                    "arguments": dict(getattr(item, "arguments", {}) or {}),
+                }
+                for item in calls
+            ],
+            "tool_policy": {
+                "allowed_tools": sorted(self.policy.allowed_tools),
+                "approval_required_tools": sorted(self.policy.approval_required_tools),
+                "tools": [
+                    item.model_dump(mode="json")
+                    for item in self.control_plane.describe_tools()
+                ],
+            },
+            "tool_method": method,
+            "next_step": self.next_step(),
+        }
+        self.emit("interaction.requested", interaction)
+        self.on_waiting(interaction, batch, interaction["next_step"])
+        answer = await self._answer
+        self.ask_answered = True
+        result = _trae_tool_result(
+            call_id=call.call_id,
+            tool_id=getattr(call, "id", None),
+            name=call.name,
+            success=True,
+            result=f"用户回复：{answer}",
+        )
+        return self._store_results([result])
 
     def _store_results(self, results: list[Any]) -> list[Any]:
         unique_results: list[Any] = []
@@ -489,6 +643,7 @@ class TraeToolGatewayBridge:
         self.pending_calls = []
         self.pending_method = None
         self._decision = None
+        self._answer = None
 
 
 class TraeExecutionAdapter:
@@ -520,6 +675,11 @@ class TraeExecutionAdapter:
         if self.bridge is None:
             raise RuntimeError("Trae tool gateway is not initialized")
         self.bridge.approve(decision)
+
+    def submit_answer(self, answer: str) -> None:
+        if self.bridge is None:
+            raise RuntimeError("Trae tool gateway is not initialized")
+        self.bridge.submit_answer(answer)
 
     def checkpoint_policy(self) -> dict[str, Any]:
         return {
@@ -638,7 +798,13 @@ class TraeExecutionAdapter:
             messages.append(LLMMessage(role=role, content=str(content)))
         return messages
 
-    async def resume(self, checkpoint: Any, decision: ApprovalDecision) -> dict[str, Any]:
+    async def resume(
+        self,
+        checkpoint: Any,
+        value: Any,
+        *,
+        kind: str = "approval",
+    ) -> dict[str, Any]:
         await self._initialize_agent()
         if self.bridge is None:
             raise RuntimeError("Trae tool gateway is not initialized")
@@ -682,7 +848,35 @@ class TraeExecutionAdapter:
         )
         calls = [TraeToolCall(**call) for call in raw_calls]
         method = pending.get("tool_method", "sequential_tool_call")
-        tool_results = await self.bridge.execute_restored(calls, method, decision)
+        if kind == "question":
+            answer = str(value)
+            tool_results = [
+                _trae_tool_result(
+                    call_id=call.call_id,
+                    tool_id=getattr(call, "id", None),
+                    name=call.name,
+                    success=True,
+                    result=f"用户回复：{answer}",
+                )
+                for call in calls
+            ]
+            for tool_result in tool_results:
+                self.emit(
+                    "tool.result",
+                    {
+                        "call_id": tool_result.call_id,
+                        "name": tool_result.name,
+                        "success": True,
+                        "output": tool_result.result,
+                        "error": None,
+                    },
+                )
+            if self.bridge is not None:
+                self.bridge.ask_answered = True
+        else:
+            tool_results = await self.bridge.execute_restored(
+                calls, method, ApprovalDecision(str(value))
+            )
         messages = list(self.agent.agent.initial_messages)
         messages.extend(LLMMessage(role="user", tool_result=result) for result in tool_results)
         execution = AgentExecution(task=task, steps=[], agent_state=AgentState.RUNNING)
@@ -732,12 +926,19 @@ class TraeExecutionAdapter:
         trajectory_dir.mkdir(parents=True, exist_ok=True)
         self.trajectory = trajectory_dir / f"{self.request.run_id}.json"
         self.agent = self.agent_factory(self.settings, self.request, self.trajectory)
+        sections = []
         skill_section = _skill_prompt_section(self.request.context_bundle)
+        if skill_section:
+            sections.append(skill_section)
+        ref_section = _file_reference_section(self.request.context_bundle)
+        if ref_section:
+            sections.append(ref_section)
         trae_agent = getattr(self.agent, "agent", None)
-        if skill_section and trae_agent is not None:
+        if sections and trae_agent is not None:
             getter = getattr(trae_agent, "get_system_prompt", None)
             current = getter() if callable(getter) else getattr(trae_agent, "_system_prompt", None)
-            trae_agent._system_prompt = f"{current or ''}\n\n{skill_section}".strip()
+            extra = "\n\n".join(sections)
+            trae_agent._system_prompt = f"{current or ''}\n\n{extra}".strip()
         if self.mcp_servers_config:
             self.agent.agent.mcp_servers_config = dict(self.mcp_servers_config)
             self.agent.agent.allow_mcp_servers = list(self.mcp_servers_config)
@@ -755,10 +956,27 @@ class TraeExecutionAdapter:
             self._next_step,
             workspace_root=self.workspace,
         )
+        logger.info(
+            "bridge ready: ask_tool_available=%s ask_gate=%s allowed=%s",
+            ASK_USER_TOOL in tool_names,
+            self.bridge.ask_gate,
+            sorted(self.bridge.policy.allowed_tools),
+        )
         mcp_names = {name for name in tool_names if name.startswith("mcp.")}
         if mcp_names:
             self.bridge.policy.allowed_tools.update(mcp_names)
         self.agent.agent._tool_caller = self.bridge
+        llm_client = getattr(trae_agent, "_llm_client", None)
+        if llm_client is not None:
+            inner = getattr(llm_client, "client", llm_client)
+            if getattr(inner, "on_text_delta", None) is None:
+                inner.on_text_delta = self._emit_message_delta
+
+    def _emit_message_delta(self, delta: str) -> None:
+        """Forward one streamed text delta into the runner's in-memory event stream."""
+        if not delta:
+            return
+        self.emit("message.delta", {"delta": delta})
 
     def _next_step(self) -> int:
         if not self.trajectory or not self.trajectory.is_file():

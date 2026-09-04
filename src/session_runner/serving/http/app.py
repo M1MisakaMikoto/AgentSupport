@@ -28,7 +28,6 @@ from agent_runner_contracts.execution import (
 )
 from agent_runner_contracts.tools import (
     ApprovalDecision,
-    AuthorizationStatus,
     ToolBatch,
     ToolDescriptor,
     ToolGatewayControlPlane,
@@ -137,7 +136,7 @@ def create_runner_app(
 ) -> FastAPI:
     configure_logging()
     runs = RunRegistry()
-    mode = runner_mode or os.getenv("SESSION_RUNNER_MODE", "deterministic")
+    mode = runner_mode or os.getenv("SESSION_RUNNER_MODE", "trae")
     selected_registration = registration_client or runner_registration_client_from_env(mode=mode)
 
     @contextlib.asynccontextmanager
@@ -204,15 +203,19 @@ def create_runner_app(
     async def drive_trae(
         state: RunState,
         checkpoint: Checkpoint | None = None,
-        decision: ApprovalDecision | None = None,
+        *,
+        resume_value: Any | None = None,
+        resume_kind: str = "approval",
     ) -> None:
         try:
             assert state.trae_execution is not None
             if checkpoint is None:
                 result = await state.trae_execution.run()
             else:
-                assert decision is not None
-                result = await state.trae_execution.resume(checkpoint, decision)
+                assert resume_value is not None
+                result = await state.trae_execution.resume(
+                    checkpoint, resume_value, kind=resume_kind
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - core failures become standard events
@@ -266,7 +269,6 @@ def create_runner_app(
         runs[request.run_id] = state
         state.emit("run.started", {"conversation_id": str(request.conversation_id)})
         task = str(request.context_bundle.get("task", ""))
-        raw_batch = request.context_bundle.get("tool_batch")
         mcp_refs = request.context_bundle.get("mcp_refs") or []
         mcp_servers_config = build_mcp_server_configs(mcp_refs)
         if mode == "trae":
@@ -274,44 +276,6 @@ def create_runner_app(
             state.trae_execution = create_trae_execution(state, mcp_servers_config)
             state.background = asyncio.create_task(drive_trae(state))
             await state.status_changed.wait()
-        elif raw_batch is not None:
-            try:
-                dynamic_refs = [ref for ref in mcp_refs if isinstance(ref, dict)]
-                if dynamic_refs:
-                    try:
-                        state.mcp_provider = await build_mcp_provider(dynamic_refs)
-                    except Exception:
-                        record_mcp_connection("failed")
-                        raise
-                    record_mcp_connection(
-                        "connected" if state.mcp_provider is not None else "no_tools"
-                    )
-                state.tool_executor = _tool_executor(
-                    request, tool_handlers, state.mcp_provider or mcp_provider
-                )
-                state.tool_batch = ToolBatch.model_validate(raw_batch)
-                state.tool_authorization = state.tool_executor.authorize(state.tool_batch)
-                state.emit(
-                    "tool.authorization",
-                    state.tool_authorization.model_dump(mode="json"),
-                )
-                if state.tool_authorization.status == AuthorizationStatus.REQUIRES_APPROVAL:
-                    state.status = "WAITING_INPUT"
-                    state.pending_interaction = {
-                        "interaction_id": state.tool_authorization.approval_id,
-                        "kind": "approval",
-                        "tool_batch_hash": state.tool_batch.batch_hash,
-                        "tool_batch": state.tool_batch.model_dump(mode="json"),
-                        "tool_policy": state.request.tool_policy,
-                    }
-                    state.emit("interaction.requested", state.pending_interaction)
-                else:
-                    await _execute_tool_batch(state)
-                    await close_mcp(state)
-            except Exception as exc:  # noqa: BLE001 - tool errors become run failures
-                state.status = "FAILED"
-                state.emit("run.failed", {"code": "TOOL_GATEWAY_ERROR", "message": str(exc)})
-                await close_mcp(state)
         elif task.startswith("ask:"):
             state.status = "WAITING_INPUT"
             state.pending_interaction = {"interaction_id": uuid4().hex, "question": task[4:]}
@@ -337,6 +301,23 @@ def create_runner_app(
         if state.pending_interaction.get("kind") == "approval":
             raise HTTPException(409, "run requires approval")
         first_new_event = len(state.events)
+        if state.pending_interaction.get("kind") == "question" and state.trae_execution is not None:
+            state.status = "RUNNING"
+            state.pending_interaction = None
+            state.status_changed.clear()
+            try:
+                state.trae_execution.submit_answer(str(request.value))
+            except RuntimeError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            await state.status_changed.wait()
+            result = {
+                "run_id": run_id,
+                "status": state.status,
+                "events": state.events[first_new_event:],
+            }
+            state.remember_command(request.command_id, result)
+            await close_mcp(state)
+            return result
         state.pending_interaction = None
         state.status = "COMPLETED"
         state.emit("message", {"input": request.value})
@@ -518,26 +499,54 @@ def create_runner_app(
         resume_mcp_refs = getattr(checkpoint.context_bundle, "mcp_refs", None) or []
         resume_mcp_servers_config = build_mcp_server_configs(resume_mcp_refs)
         if mode == "trae" and checkpoint.pending_tool_calls:
-            try:
-                decision = ApprovalDecision(str(request.value))
-            except ValueError as exc:
-                raise HTTPException(422, "tool batch resume requires an approval decision") from exc
             state.emit("checkpoint.restored", {"checkpoint_id": str(checkpoint.checkpoint_id)})
             state.pending_interaction = None
             state.status = "RUNNING"
             state.status_changed.clear()
-            if state.trae_execution is not None and state.background is not None:
-                try:
-                    state.trae_execution.approve(decision)
-                except RuntimeError as exc:
-                    raise HTTPException(409, str(exc)) from exc
+            pending_kind = (checkpoint.pending_interaction or {}).get("kind")
+            if pending_kind == "question":
+                answer = str(request.value)
+                if state.trae_execution is not None and state.background is not None:
+                    try:
+                        state.trae_execution.submit_answer(answer)
+                    except RuntimeError as exc:
+                        raise HTTPException(409, str(exc)) from exc
+                else:
+                    state.trae_execution = create_trae_execution(
+                        state, resume_mcp_servers_config
+                    )
+                    state.background = asyncio.create_task(
+                        drive_trae(
+                            state,
+                            checkpoint=checkpoint,
+                            resume_value=answer,
+                            resume_kind="question",
+                        )
+                    )
             else:
-                state.trae_execution = create_trae_execution(
-                    state, resume_mcp_servers_config
-                )
-                state.background = asyncio.create_task(
-                    drive_trae(state, checkpoint=checkpoint, decision=decision)
-                )
+                try:
+                    decision = ApprovalDecision(str(request.value))
+                except ValueError as exc:
+                    raise HTTPException(
+                        422, "tool batch resume requires an approval decision"
+                    ) from exc
+                if state.trae_execution is not None and state.background is not None:
+                    try:
+                        state.trae_execution.approve(decision)
+                    except RuntimeError as exc:
+                        raise HTTPException(409, str(exc)) from exc
+                else:
+                    state.trae_execution = create_trae_execution(
+                        state, resume_mcp_servers_config
+                    )
+                    state.background = asyncio.create_task(
+                        drive_trae(
+                            state,
+                            checkpoint=checkpoint,
+                            resume_value=decision,
+                            resume_kind="approval",
+                        )
+                    )
             await state.status_changed.wait()
             result = {
                 "run_id": run_id,

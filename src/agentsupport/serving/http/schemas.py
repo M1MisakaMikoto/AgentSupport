@@ -51,6 +51,7 @@ class SessionConfigInput(BaseModel):
     tool_policy: ConfigToolPolicyInput = Field(default_factory=ConfigToolPolicyInput)
     resources: ConfigResourcesInput = Field(default_factory=ConfigResourcesInput)
     permissions: ConfigPermissionsInput = Field(default_factory=ConfigPermissionsInput)
+    file_ref_format: bool = False
 
 
 class WorkspaceCreate(BaseModel):

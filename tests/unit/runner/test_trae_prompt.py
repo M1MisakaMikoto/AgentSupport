@@ -6,6 +6,7 @@ import pytest
 from session_runner.adapters.trae import (
     TraeExecutionAdapter,
     TraeRuntimeSettings,
+    _file_reference_section,
     _resolve_system_prompt,
     _skill_prompt_section,
 )
@@ -78,6 +79,24 @@ def test_skill_prompt_section_falls_back_to_manifest():
 
 def test_skill_prompt_section_none_without_skills():
     assert _skill_prompt_section({"task": "hi"}) is None
+
+
+def test_file_reference_section_uses_real_workspace_ref_example():
+    section = _file_reference_section(
+        {
+            "file_ref_format": True,
+            "workspace_ref": "/workspace-data/w-123",
+        }
+    )
+    assert section is not None
+    assert "# 文件引用格式" in section
+    assert "[[file:/workspace-data/w-123/report.docx|report.docx]]" in section
+    assert "D:\\workspace" not in section
+
+
+def test_file_reference_section_none_without_flag():
+    assert _file_reference_section({"workspace_ref": "/workspace-data/w-123"}) is None
+    assert _file_reference_section({"file_ref_format": False}) is None
 
 
 def test_blank_context_bundle_prompt_is_ignored(tmp_path):
@@ -203,3 +222,53 @@ async def test_initialize_agent_injects_skills_into_system_prompt(tmp_path):
     assert prompt.startswith("base prompt")
     assert "## Skill: review" in prompt
     assert "输出审查报告" in prompt
+
+
+@pytest.mark.asyncio
+async def test_initialize_agent_injects_file_reference_format(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    class FakeTraeAgent:
+        def __init__(self):
+            self._system_prompt = None
+            self.tools = []
+            self._tool_caller = None
+
+        def get_system_prompt(self):
+            return self._system_prompt or "base prompt"
+
+    class FakeAgent:
+        def __init__(self):
+            self.agent = FakeTraeAgent()
+
+        async def run(self, task, extra_args):
+            return SimpleNamespace(success=True, final_result="ok", steps=[1])
+
+    def factory(settings, request, trajectory):
+        return FakeAgent()
+
+    request = SimpleNamespace(
+        run_id=uuid4(),
+        workspace_ref=str(workspace),
+        context_bundle={
+            "task": "create a file",
+            "file_ref_format": True,
+            "workspace_ref": "/workspace-data/w-123",
+        },
+        tool_policy={},
+    )
+    adapter = TraeExecutionAdapter(
+        request,
+        lambda event_type, payload=None: None,
+        lambda interaction, batch, next_step: None,
+        settings=make_settings(tmp_path),
+        agent_factory=factory,
+    )
+
+    await adapter._initialize_agent()
+
+    prompt = adapter.agent.agent._system_prompt
+    assert prompt.startswith("base prompt")
+    assert "文件引用格式" in prompt
+    assert "[[file:/workspace-data/w-123/report.docx|report.docx]]" in prompt

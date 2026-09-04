@@ -71,6 +71,7 @@ class ProjectConfig(BaseModel):
     tool_policy: PresetToolPolicy = Field(default_factory=PresetToolPolicy)
     resources: PresetResources = Field(default_factory=PresetResources)
     permissions: PresetPermissions = Field(default_factory=PresetPermissions)
+    file_ref_format: bool = False
 
     def is_empty(self) -> bool:
         return not (
@@ -81,6 +82,7 @@ class ProjectConfig(BaseModel):
             or self.resources.mcp_refs
             or self.resources.workspace_template
             or self.resources.env
+            or self.file_ref_format
         )
 
     def enabled_skill_ids(self) -> list[str]:

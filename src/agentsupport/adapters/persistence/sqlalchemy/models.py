@@ -53,6 +53,9 @@ class ConversationRow(Base):
     session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     parent_conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     task: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="default", server_default="default"
+    )
     skills: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     mcp_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     execution_state: Mapped[str] = mapped_column(String(32), nullable=False)

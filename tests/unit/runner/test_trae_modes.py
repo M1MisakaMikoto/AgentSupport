@@ -203,6 +203,135 @@ def test_silent_mode_allows_relative_workspace_path(tmp_path):
     assert len(delegate.executed) == 1
 
 
+def test_ask_user_gate_pauses_and_returns_answer(tmp_path):
+    tool_names = list(TOOLS) + ["ask_user"]
+    bridge, delegate, emitted = _make_bridge(
+        {
+            "mode": "silent",
+            "allowed_tools": list(WHITELIST) + ["ask_user"],
+            "approval_required_tools": [],
+        },
+        workspace_root=tmp_path,
+        tool_names=tool_names,
+    )
+    call = ToolCall(
+        call_id="q1",
+        name="ask_user",
+        arguments={"question": "这样总结可以吗？"},
+    )
+
+    async def scenario():
+        task = asyncio.create_task(bridge.sequential_tool_call([call]))
+        for _ in range(200):
+            if any(t == "interaction.requested" for t, _ in emitted):
+                break
+            await asyncio.sleep(0)
+        requested = [
+            payload for t, payload in emitted if t == "interaction.requested"
+        ]
+        assert requested and requested[-1]["kind"] == "question"
+        assert requested[-1]["question"] == "这样总结可以吗？"
+        bridge.submit_answer("同意，按此范围生成")
+        return await task
+
+    results = asyncio.run(scenario())
+
+    assert results[0].success
+    assert "同意，按此范围生成" in (results[0].result or "")
+    assert delegate.executed == []
+
+
+def test_ask_user_empty_question_returns_error_without_pause(tmp_path):
+    tool_names = list(TOOLS) + ["ask_user"]
+    bridge, delegate, emitted = _make_bridge(
+        {
+            "mode": "silent",
+            "allowed_tools": list(WHITELIST) + ["ask_user"],
+            "approval_required_tools": [],
+        },
+        workspace_root=tmp_path,
+        tool_names=tool_names,
+    )
+    call = ToolCall(call_id="q1", name="ask_user", arguments={})
+
+    results = asyncio.run(bridge.sequential_tool_call([call]))
+
+    assert not results[0].success
+    assert "缺少 question 参数" in (results[0].error or "")
+    assert "场景" in (results[0].error or "")
+    assert not [t for t, _ in emitted if t == "interaction.requested"]
+    assert bridge._answer is None
+    assert bridge.ask_answered is False
+    assert delegate.executed == []
+
+
+def test_ask_user_mixed_batch_fails_without_delegate_call(tmp_path):
+    tool_names = list(TOOLS) + ["ask_user"]
+    bridge, delegate, _ = _make_bridge(
+        {
+            "mode": "silent",
+            "allowed_tools": list(WHITELIST) + ["ask_user"],
+            "approval_required_tools": [],
+        },
+        workspace_root=tmp_path,
+        tool_names=tool_names,
+    )
+    calls = [
+        ToolCall(call_id="q1", name="ask_user", arguments={"question": "确认？"}),
+        _call("str_replace_based_edit_tool", str(tmp_path / "events.jsonl")),
+    ]
+
+    async def scenario():
+        try:
+            await bridge.sequential_tool_call(calls)
+        except RuntimeError as exc:
+            return str(exc)
+        return None
+
+    message = asyncio.run(scenario())
+    assert message and "ask_user must be called alone" in message
+    assert delegate.executed == []
+
+
+def test_generation_write_blocked_until_ask_user_answered(tmp_path):
+    tool_names = list(TOOLS) + ["ask_user"]
+    bridge, delegate, _ = _make_bridge(
+        {
+            "mode": "silent",
+            "allowed_tools": list(WHITELIST) + ["ask_user"],
+            "approval_required_tools": [],
+        },
+        workspace_root=tmp_path,
+        tool_names=tool_names,
+    )
+    write_call = _call("str_replace_based_edit_tool", str(tmp_path / "SKILL.md"))
+    write_call.arguments["command"] = "create"
+
+    async def run_scenario():
+        blocked = await bridge.sequential_tool_call([write_call])
+        assert not blocked[0].success
+        assert "ask_user" in (blocked[0].error or "")
+        assert delegate.executed == []
+        ask_call = ToolCall(
+            call_id="q2",
+            name="ask_user",
+            arguments={"question": "确认范围？"},
+        )
+        task = asyncio.create_task(bridge.sequential_tool_call([ask_call]))
+        for _ in range(200):
+            if bridge._answer is not None:
+                break
+            await asyncio.sleep(0)
+        bridge.submit_answer("同意，按此范围生成")
+        await task
+        assert bridge.ask_answered
+        ok = await bridge.sequential_tool_call([write_call])
+        assert ok[0].success
+        assert len(delegate.executed) == 1
+
+    asyncio.run(run_scenario())
+
+
 def test_silent_mode_rejects_relative_path_escaping_workspace(tmp_path):
     tool_names = list(TOOLS) + list(DOC_TOOLS)
     bridge, delegate, _ = _make_bridge(
