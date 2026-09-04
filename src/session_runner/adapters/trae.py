@@ -506,8 +506,8 @@ class TraeToolGatewayBridge:
                 names = ", ".join(sorted({call.name for call in blocked}))
                 return self._rejected(
                     calls,
-                    "写文件/结束动作被拦截：请先单独调用 ask_user 把准备总结的场景、"
-                    "边界与失败教训发给用户确认；用户回复后才能继续。已拦截："
+                    "写文件/结束动作被拦截：请先单独调用 ask_user 把准备总结的业务场景、"
+                    "要固化的口径/规范/方法与边界发给用户确认；用户回复后才能继续。已拦截："
                     + names,
                 )
         if self.mode == "silent":
@@ -576,7 +576,7 @@ class TraeToolGatewayBridge:
                         success=False,
                         error=(
                             "ask_user 缺少 question 参数：请用中文完整列出你准备总结的"
-                            "场景、边界与失败教训后重试，不要省略该参数。"
+                            "业务场景、要固化的口径/规范/方法与边界后重试，不要省略该参数。"
                         ),
                     )
                 ]
