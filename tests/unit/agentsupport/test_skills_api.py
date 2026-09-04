@@ -8,9 +8,8 @@ from httpx import ASGITransport, AsyncClient
 
 from agentsupport.api import create_app
 from agentsupport.application.service import ServiceError
-from agentsupport.config import Settings
-from agentsupport.services import AgentSupportService
 from agentsupport.skills import LocalSkillProvider
+from _support import make_temporal_service as _make_service
 
 
 def _zip(payload: dict[str, bytes]) -> bytes:
@@ -22,13 +21,12 @@ def _zip(payload: dict[str, bytes]) -> bytes:
 
 
 def _service(tmp_path):
-    return AgentSupportService(
-        Settings(
-            workspace_root=tmp_path / "workspaces",
-            skills_root=tmp_path / "skills",
-            enabled_skills="",
-        )
-    )
+    return _make_service(
+        tmp_path,
+        workspace_root=tmp_path / "workspaces",
+        skills_root=tmp_path / "skills",
+        enabled_skills="",
+    ).service
 
 
 def test_provider_install_list_describe_remove(tmp_path):

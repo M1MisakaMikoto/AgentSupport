@@ -12,6 +12,7 @@ from agentsupport.bootstrap.settings import Settings
 def _config(tmp_path: Path, **overrides) -> Settings:
     values = {
         "persistence_mode": "postgres",
+        "execution_mode": "temporal",
         "database_url": f"sqlite:///{tmp_path / 'db.sqlite'}",
         "auto_create_schema": True,
         "workspace_root": tmp_path / "workspace",

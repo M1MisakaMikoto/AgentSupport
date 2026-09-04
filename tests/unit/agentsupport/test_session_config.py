@@ -4,20 +4,18 @@ from uuid import uuid4
 
 import pytest
 
-from agentsupport.config import Settings
 from agentsupport.domain import PresetSkill, PresetToolPolicy, ProjectConfig
-from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_service
 
 
 @pytest.fixture
 def service(tmp_path):
-    service = AgentSupportService(
-        Settings(
-            workspace_root=tmp_path / "workspaces",
-            skills_root=tmp_path / "skills",
-            enabled_skills="debug",
-        )
-    )
+    service = _make_service(
+        tmp_path,
+        workspace_root=tmp_path / "workspaces",
+        skills_root=tmp_path / "skills",
+        enabled_skills="debug",
+    ).service
     service.create_skill("review", filename="SKILL.md", payload=b"# Review\n")
     return service
 

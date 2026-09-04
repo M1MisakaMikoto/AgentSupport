@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import os
 
-os.environ["AGENTSUPPORT_PERSISTENCE_MODE"] = "memory"
-os.environ["AGENTSUPPORT_EXECUTION_MODE"] = "inline"
+os.environ["AGENTSUPPORT_PERSISTENCE_MODE"] = "postgres"
+os.environ["AGENTSUPPORT_EXECUTION_MODE"] = "temporal"
+os.environ["AGENTSUPPORT_DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["AGENTSUPPORT_REDIS_URL"] = ""
-os.environ["AGENTSUPPORT_RUNTIME_DRIVER"] = "memory"
 os.environ["AGENTSUPPORT_AUTO_CREATE_SCHEMA"] = "true"

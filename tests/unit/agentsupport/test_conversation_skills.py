@@ -5,20 +5,18 @@ from httpx import ASGITransport, AsyncClient
 
 from agentsupport.api import create_app
 from agentsupport.application.service import ServiceError
-from agentsupport.config import Settings
 from agentsupport.domain import PresetSkill, ProjectConfig
-from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_service
 
 
 @pytest.fixture
 def service(tmp_path):
-    service = AgentSupportService(
-        Settings(
-            workspace_root=tmp_path / "workspaces",
-            skills_root=tmp_path / "skills",
-            enabled_skills="debug",
-        )
-    )
+    service = _make_service(
+        tmp_path,
+        workspace_root=tmp_path / "workspaces",
+        skills_root=tmp_path / "skills",
+        enabled_skills="debug",
+    ).service
     service.create_skill("review", filename="SKILL.md", payload=b"# Review\n")
     service.create_skill("debug", filename="SKILL.md", payload=b"# Debug\n")
     return service
@@ -55,15 +53,11 @@ async def test_conversation_skills_override_inherit_and_disable(service):
 
 @pytest.mark.asyncio
 async def test_conversation_skills_persist_and_round_trip(tmp_path):
-    service = AgentSupportService(
-        Settings(
-            database_url=f"sqlite:///{tmp_path / 'conversation.db'}",
-            persistence_mode="postgres",
-            execution_mode="inline",
-            workspace_root=tmp_path / "workspaces",
-            skills_root=tmp_path / "skills",
-        )
-    )
+    service = _make_service(
+        tmp_path,
+        workspace_root=tmp_path / "workspaces",
+        skills_root=tmp_path / "skills",
+    ).service
     service.create_skill("review", filename="SKILL.md", payload=b"# Review\n")
     workspace = service.create_workspace("ws")
     session = service.create_session(workspace.id)

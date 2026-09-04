@@ -3,14 +3,13 @@
 import pytest
 
 from agentsupport.api import create_app
-from agentsupport.config import Settings
-from agentsupport.services import AgentSupportService
 from agentsupport.serving.http.api_docs import api_reference_description
+from _support import make_temporal_service as _make_service
 
 
 @pytest.fixture
 def service(tmp_path):
-    return AgentSupportService(Settings(workspace_root=tmp_path))
+    return _make_service(tmp_path).service
 
 
 def test_openapi_description_embeds_api_reference(service):

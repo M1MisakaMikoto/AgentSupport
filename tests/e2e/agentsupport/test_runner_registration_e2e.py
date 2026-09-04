@@ -1,48 +1,47 @@
 """End-to-end: a standalone Runner registers and executes tasks for the control plane."""
 
 import pytest
-from httpx import ASGITransport
 
-from agentsupport.api import create_app
-from agentsupport.config import Settings
-from agentsupport.core_runtime import TraeCoreRunnerRuntime
-from agentsupport.services import AgentSupportService
-from session_runner.registration import RunnerRegistrationClient
-from session_runner.server import create_runner_app
+from agent_runner_contracts.registration import (
+    RUNNER_CAPABILITIES,
+    RunnerHeartbeat,
+    RunnerRegistrationRequest,
+)
+from _support import make_temporal_service as _make_service
 
 
 @pytest.mark.asyncio
 async def test_registered_runner_executes_task_end_to_end(tmp_path):
-    service = AgentSupportService(
-        Settings(workspace_root=tmp_path / "workspaces", runner_token="e2e-secret")
-    )
-    control_app = create_app(service)
-
-    runner_app = create_runner_app(runner_mode="deterministic")
-    client = RunnerRegistrationClient(
-        control_plane_url="http://control.test",
+    env = _make_service(tmp_path, runner_token="e2e-secret")
+    service = env.service
+    response = service.register_runner(
+        RunnerRegistrationRequest(
+            provider="trae",
+            endpoint="http://runner.test:8080",
+            version="0.1.0",
+            capabilities=list(RUNNER_CAPABILITIES),
+        ),
         bootstrap_token="e2e-secret",
-        endpoint="http://runner.test:8080",
-        provider="deterministic",
-        transport=ASGITransport(app=control_app),
     )
-    assert await client.register() is True
-    assert service.runner_snapshot()[0]["type"] == "deterministic"
+    service.runner_heartbeat(
+        response.runner_id,
+        RunnerHeartbeat(status="READY", load=1),
+        runner_token=response.token,
+    )
+    assert service.runner_snapshot()[0]["type"] == "trae"
 
-    service.core_runtime = TraeCoreRunnerRuntime(
-        "http://runner.test", transport=ASGITransport(app=runner_app)
-    )
     workspace = service.create_workspace("e2e")
     session = service.create_session(
         workspace.id, tenant_id="t-1", user_id="u-1", project_id="p-1"
     )
     conversation = await service.create_conversation(session.id, "hello e2e")
+    await env.coordinator.wait_for_run(str(conversation.run.run_id), timeout_seconds=20)
 
-    assert conversation.run.state == "COMPLETED"
-    events = service.events(conversation.id)
-    assert [event.type for event in events][-1] == "run.completed"
-    assert all(event.tenant_id == "t-1" for event in events)
-    assert all(event.project_id == "p-1" for event in events)
+    assert env.fake.captured[0]["runner_url"] == "http://runner.test:8080"
+    events = env.repository.list_events(conversation.id)
+    assert events[-1].type == "run.completed"
+    assert session.tenant_id == "t-1"
+    assert session.project_id == "p-1"
 
-    assert await client.deregister() is True
+    service.runner_registry.deregister(response.runner_id)
     assert service.runner_snapshot() == []

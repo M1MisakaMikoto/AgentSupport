@@ -12,7 +12,7 @@ from agentsupport.observability import context as obs_context
 from agentsupport.observability import logging as obs_logging
 from agentsupport.observability import metrics as obs_metrics
 from agentsupport.observability import tracing as obs_tracing
-from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_service
 
 
 def test_run_context_sets_and_restores_values():
@@ -74,7 +74,7 @@ def test_metrics_registry_publishes_and_renders():
 
 @pytest.mark.asyncio
 async def test_metrics_endpoint_exposes_registry(tmp_path):
-    service = AgentSupportService(Settings(workspace_root=tmp_path))
+    service = _make_service(tmp_path).service
     app = create_app(service)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         live = await client.get("/live")

@@ -6,13 +6,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from agentsupport.api import create_app
-from agentsupport.config import Settings
-from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_service
 
 
 @pytest.fixture
 def service(tmp_path):
-    return AgentSupportService(Settings(workspace_root=tmp_path))
+    return _make_service(tmp_path).service
 
 
 @pytest.mark.asyncio
@@ -88,9 +87,7 @@ async def test_list_sessions_pagination(service):
 
 @pytest.mark.asyncio
 async def test_list_default_limit_applied(tmp_path):
-    capped = AgentSupportService(
-        Settings(workspace_root=tmp_path, list_default_limit=2)
-    )
+    capped = _make_service(tmp_path, list_default_limit=2).service
     workspace = capped.create_workspace("cap")
     for _ in range(3):
         capped.create_session(workspace.id)

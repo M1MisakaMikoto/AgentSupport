@@ -8,14 +8,16 @@ from httpx import ASGITransport, AsyncClient
 from agentsupport.api import create_app
 from agentsupport.application.service import ServiceError
 from agentsupport.config import Settings
-from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_service
 
 
 @pytest.fixture
 def service(tmp_path):
-    return AgentSupportService(
-        Settings(workspace_root=tmp_path / "workspaces", enabled_skills="review")
-    )
+    return _make_service(
+        tmp_path,
+        workspace_root=tmp_path / "workspaces",
+        enabled_skills="review",
+    ).service
 
 
 def test_auto_create_defaults_to_enabled_with_narrowed_scopes(tmp_path):
@@ -33,7 +35,8 @@ def test_session_auto_creates_workspace_with_explicit_id(service):
     )
 
     assert session.workspace_id == workspace_id
-    assert service.workspaces[workspace_id].name == "demo"
+    created = service.repository.get_workspace(workspace_id)
+    assert created is not None and created.name == "demo"
     assert auto_created["workspace"]["id"] == str(workspace_id)
     assert auto_created["session"]["id"] == str(session.id)
 
@@ -43,13 +46,11 @@ def test_repeated_explicit_id_converges(service):
     first = service.create_session(workspace_id)
     second = service.create_session(workspace_id)
     assert first.workspace_id == second.workspace_id == workspace_id
-    assert len(service.list_workspaces()) == 1
+    assert len(service.repository.list_workspaces()) == 1
 
 
 def test_auto_create_disabled_keeps_404(tmp_path):
-    service = AgentSupportService(
-        Settings(workspace_root=tmp_path, auto_create_missing=False)
-    )
+    service = _make_service(tmp_path, auto_create_missing=False).service
     with pytest.raises(ServiceError) as exc:
         service.create_session(uuid4())
     assert exc.value.code == "WORKSPACE_NOT_FOUND"
@@ -80,9 +81,7 @@ async def test_conversation_without_workspace_hint_keeps_404(service):
 
 @pytest.mark.asyncio
 async def test_conversation_auto_create_disabled_keeps_404(tmp_path):
-    service = AgentSupportService(
-        Settings(workspace_root=tmp_path, auto_create_missing=False)
-    )
+    service = _make_service(tmp_path, auto_create_missing=False).service
     with pytest.raises(ServiceError) as exc:
         await service.create_conversation(uuid4(), "task", workspace_id=uuid4())
     assert exc.value.code == "SESSION_NOT_FOUND"

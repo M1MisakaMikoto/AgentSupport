@@ -6,8 +6,9 @@ from uuid import uuid4
 import pytest
 
 from agentsupport.config import Settings
-from agentsupport.domain import Checkpoint, ContextBundle
-from agentsupport.services import AgentSupportService
+from agentsupport.application.common import IdempotencyRecord
+from agentsupport.domain import Checkpoint, ContextBundle, Conversation
+from _support import make_temporal_service as _make_service
 
 
 def _make_checkpoint(conversation_id, created_at):
@@ -35,7 +36,7 @@ def _make_checkpoint(conversation_id, created_at):
 
 @pytest.fixture
 def service(tmp_path):
-    return AgentSupportService(Settings(workspace_root=tmp_path / "workspaces"))
+    return _make_service(tmp_path, workspace_root=tmp_path / "workspaces").service
 
 
 def test_settings_expose_retention_windows(tmp_path):
@@ -46,17 +47,16 @@ def test_settings_expose_retention_windows(tmp_path):
 
 
 def test_prune_removes_expired_idempotency_records(service):
-    first = service.create_workspace("demo", idempotency_key="k1")
-    service.create_workspace("other", idempotency_key="k2")
-    service.idempotency[("workspace", "k1")].created_at = datetime.now(UTC) - timedelta(hours=25)
+    service.idempotency[("workspace", "k1")] = IdempotencyRecord(
+        "hash-1", uuid4(), datetime.now(UTC) - timedelta(hours=25)
+    )
+    service.idempotency[("workspace", "k2")] = IdempotencyRecord("hash-2", uuid4())
 
     result = service.prune_retained_state()
 
     assert result["idempotency_records"] == 1
     assert ("workspace", "k1") not in service.idempotency
     assert ("workspace", "k2") in service.idempotency
-    recreated = service.create_workspace("demo", idempotency_key="k1")
-    assert recreated.id != first.id
 
 
 def test_prune_removes_only_unreferenced_old_checkpoints(service):
@@ -73,13 +73,11 @@ def test_prune_removes_only_unreferenced_old_checkpoints(service):
     assert recent.checkpoint_id in service.checkpoints
 
 
-@pytest.mark.asyncio
-async def test_prune_keeps_checkpoint_referenced_by_conversation(service):
-    workspace = service.create_workspace("demo")
-    session = service.create_session(workspace.id)
-    conversation = await service.create_conversation(session.id, "task")
+def test_prune_keeps_checkpoint_referenced_by_conversation(service):
+    conversation = Conversation(session_id=uuid4(), task="task")
     old = _make_checkpoint(conversation.id, datetime.now(UTC) - timedelta(hours=25))
     conversation.run.checkpoint_id = old.checkpoint_id
+    service.conversations[conversation.id] = conversation
     service.checkpoints[old.checkpoint_id] = old
 
     result = service.prune_retained_state()

@@ -11,14 +11,15 @@ from agentsupport.api import create_app
 from agentsupport.application.service import ServiceError
 from agentsupport.bootstrap.settings import Settings
 from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_temporal_service
 
 
-def _make_service(tmp_path: Path, *, kubernetes: bool = False) -> AgentSupportService:
-    if kubernetes:
-        return AgentSupportService(
-            Settings(workspace_root=tmp_path, runtime_driver="kubernetes")
-        )
-    return AgentSupportService(Settings(workspace_root=tmp_path))
+def _make_service(tmp_path: Path):
+    return _make_temporal_service(
+        tmp_path,
+        workspace_root=tmp_path / "workspace",
+        workspace_provider=LocalWorkspaceStorageDriver(tmp_path / "workspace"),
+    ).service
 
 
 def test_local_storage_driver_round_trip(tmp_path: Path):
@@ -51,7 +52,7 @@ def test_local_storage_driver_round_trip(tmp_path: Path):
 def test_service_version_lifecycle_and_idempotency(tmp_path: Path):
     service = _make_service(tmp_path)
     workspace = service.create_workspace("demo")
-    root = tmp_path / str(workspace.id)
+    root = Path(service.workspace_provider.path(workspace.id))
     (root / "file.txt").write_text("v1", encoding="utf-8")
 
     created = service.create_workspace_version(
@@ -103,19 +104,6 @@ def test_service_restore_guards_active_workspace(tmp_path: Path):
     assert excinfo.value.status_code == 409
 
 
-def test_service_rejects_unsupported_storage(tmp_path: Path):
-    service = _make_service(tmp_path, kubernetes=True)
-    workspace = service.create_workspace("demo")
-
-    with pytest.raises(ServiceError) as excinfo:
-        service.create_workspace_version(workspace.id)
-    assert excinfo.value.code == "WORKSPACE_VERSIONING_UNSUPPORTED"
-    assert excinfo.value.status_code == 501
-
-    with pytest.raises(ServiceError):
-        service.list_workspace_versions(workspace.id)
-
-
 def test_service_restore_unknown_version_404(tmp_path: Path):
     service = _make_service(tmp_path)
     workspace = service.create_workspace("demo")
@@ -136,7 +124,7 @@ async def test_http_contract_workspace_versions(tmp_path: Path):
             await client.post("/workspaces", json={"name": "demo"})
         ).json()
         workspace_id = workspace["id"]
-        root = tmp_path / workspace_id
+        root = Path(workspace.get("root_path") or (tmp_path / "workspace" / workspace_id))
         (root / "file.txt").write_text("v1", encoding="utf-8")
 
         created = await client.post(

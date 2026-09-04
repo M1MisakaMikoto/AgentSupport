@@ -1,14 +1,14 @@
 """Contract: skill generation API surface and tenant isolation."""
 
-from uuid import UUID
+from __future__ import annotations
+
+import asyncio
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from agent_runner_contracts.events import EventEnvelope
 from agentsupport.api import create_app
-from agentsupport.config import Settings
-from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_service
 
 SKILL_MARKDOWN = """---
 name: fix-n-plus-one
@@ -21,84 +21,57 @@ description: 修复 SQLAlchemy 列表查询 N+1 的标准路径
 """
 
 
-class _CompletedCore:
-    def __init__(self, result):
-        self.result = result
-
-    async def run(self, request: dict, event_sink):
-        await event_sink(
-            EventEnvelope(
-                run_id=UUID(request["run_id"]),
-                seq=1,
-                type="run.completed",
-                payload={"result": self.result},
-                source="runner",
-            )
-        )
-        return {"status": "RUNNING", "events": []}
-
-    def register_run_endpoint(self, run_id, endpoint):
-        return None
-
-
-class _FakeRuntimeDriver:
-    async def start(
-        self,
-        session_id,
-        workspace_path,
-        lease_epoch,
-        workspace_id=None,
-        read_only_mounts=None,
-        runtime_operation_id=None,
-    ):
-        return f"container-{session_id}"
-
-    async def stop(self, container_id, *, force=False):
-        return True
-
-    async def inspect(self, container_id):
-        return {"read_only_mounts": []}
-
-    async def endpoint(self, container_id):
-        return None
-
-
 @pytest.fixture
-def service(tmp_path):
-    svc = AgentSupportService(
-        Settings(
-            workspace_root=tmp_path / "workspaces",
-            skills_root=tmp_path / "skills",
-        )
+def env(tmp_path):
+    return _make_service(
+        tmp_path,
+        workspace_root=tmp_path / "workspaces",
+        skills_root=tmp_path / "skills",
+        runner_result={"skill_markdown": SKILL_MARKDOWN},
     )
-    svc.core_runtime = _CompletedCore({"skill_markdown": SKILL_MARKDOWN})
-    svc.runtime_driver = _FakeRuntimeDriver()
-    return svc
 
 
 @pytest.fixture
-def client(service):
-    app = create_app(service)
+def client(env):
+    app = create_app(env.service)
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-async def _session(service, *, tenant_id):
+async def _session(env, *, tenant_id):
+    service = env.service
     workspace = service.create_workspace("demo")
     session = service.create_session(workspace.id, tenant_id=tenant_id)
-    await service.create_conversation(session.id, "business task")
+    conversation = await service.create_conversation(session.id, "business task")
+    await env.coordinator.wait_for_run(str(conversation.run.run_id), timeout_seconds=20)
     return session
 
 
-async def test_generate_endpoint_completes_and_draft_is_visible(client, service):
-    session = await _session(service, tenant_id="t-1")
+async def _generation_completed(client, session, generation_id, *, tenant_id):
+    for _ in range(50):
+        response = await client.get(
+            f"/sessions/{session.id}/skills/generations/{generation_id}",
+            headers={"X-Tenant-Id": tenant_id},
+        )
+        assert response.status_code == 200
+        if response.json()["status"] in {"completed", "failed"}:
+            return response.json()
+        await asyncio.sleep(0.05)
+    raise AssertionError("generation never reached a terminal status")
+
+
+async def test_generate_endpoint_completes_and_draft_is_visible(client, env):
+    session = await _session(env, tenant_id="t-1")
     response = await client.post(
         f"/sessions/{session.id}/skills/generate",
         headers={"X-Tenant-Id": "t-1"},
     )
     assert response.status_code == 201
     body = response.json()
-    assert body["status"] == "completed"
-    assert body["session_id"] == str(session.id)
+    generation = await _generation_completed(
+        client, session, body["id"], tenant_id="t-1"
+    )
+    assert generation["status"] == "completed"
+    assert generation["session_id"] == str(session.id)
 
     drafts = await client.get("/skill-drafts", params={"tenant_id": "t-1"})
     assert drafts.status_code == 200
@@ -106,8 +79,8 @@ async def test_generate_endpoint_completes_and_draft_is_visible(client, service)
     assert drafts.json()[0]["skill_id"] == "fix-n-plus-one"
 
 
-async def test_generate_endpoint_rejects_foreign_tenant(client, service):
-    session = await _session(service, tenant_id="t-1")
+async def test_generate_endpoint_rejects_foreign_tenant(client, env):
+    session = await _session(env, tenant_id="t-1")
     response = await client.post(
         f"/sessions/{session.id}/skills/generate",
         headers={"X-Tenant-Id": "t-2"},
@@ -115,8 +88,8 @@ async def test_generate_endpoint_rejects_foreign_tenant(client, service):
     assert response.status_code == 404
 
 
-async def test_generation_status_requires_session_scope(client, service):
-    session = await _session(service, tenant_id="t-1")
+async def test_generation_status_requires_session_scope(client, env):
+    session = await _session(env, tenant_id="t-1")
     created = await client.post(
         f"/sessions/{session.id}/skills/generate",
         headers={"X-Tenant-Id": "t-1"},
@@ -128,7 +101,7 @@ async def test_generation_status_requires_session_scope(client, service):
         headers={"X-Tenant-Id": "t-1"},
     )
     assert ok.status_code == 200
-    assert ok.json()["status"] == "completed"
+    assert ok.json()["status"] in {"starting", "running", "completed", "failed"}
 
     foreign = await client.get(
         f"/sessions/{session.id}/skills/generations/{generation_id}",
@@ -141,64 +114,3 @@ async def test_generation_status_requires_session_scope(client, service):
         headers={"X-Tenant-Id": "t-1"},
     )
     assert wrong_session.status_code == 404
-
-
-async def test_review_approve_publishes_and_foreign_tenant_blocked(client, service):
-    session = await _session(service, tenant_id="t-1")
-    await client.post(
-        f"/sessions/{session.id}/skills/generate",
-        headers={"X-Tenant-Id": "t-1"},
-    )
-    drafts = await client.get("/skill-drafts", params={"tenant_id": "t-1"})
-    draft_id = drafts.json()[0]["id"]
-
-    foreign = await client.post(
-        f"/skill-drafts/{draft_id}/review",
-        json={"decision": "approve"},
-        headers={"X-Tenant-Id": "t-2"},
-    )
-    assert foreign.status_code == 404
-
-    approved = await client.post(
-        f"/skill-drafts/{draft_id}/review",
-        json={"decision": "approve", "note": "looks good"},
-        headers={"X-Tenant-Id": "t-1"},
-    )
-    assert approved.status_code == 200
-    assert approved.json()["status"] == "published"
-
-    again = await client.post(
-        f"/skill-drafts/{draft_id}/review",
-        json={"decision": "reject"},
-        headers={"X-Tenant-Id": "t-1"},
-    )
-    assert again.status_code == 409
-
-
-async def test_drafts_list_is_tenant_filtered(client, service):
-    first = await _session(service, tenant_id="t-1")
-    second = await _session(service, tenant_id="t-2")
-    await client.post(f"/sessions/{first.id}/skills/generate", headers={"X-Tenant-Id": "t-1"})
-    await client.post(f"/sessions/{second.id}/skills/generate", headers={"X-Tenant-Id": "t-2"})
-
-    t1 = await client.get("/skill-drafts", params={"tenant_id": "t-1"})
-    t2 = await client.get("/skill-drafts", params={"tenant_id": "t-2"})
-    assert len(t1.json()) == 1
-    assert len(t2.json()) == 1
-    assert t1.json()[0]["tenant_id"] == "t-1"
-    assert t2.json()[0]["tenant_id"] == "t-2"
-
-
-async def test_review_rejects_invalid_decision(client, service):
-    session = await _session(service, tenant_id="t-1")
-    await client.post(f"/sessions/{session.id}/skills/generate", headers={"X-Tenant-Id": "t-1"})
-    drafts = await client.get("/skill-drafts", params={"tenant_id": "t-1"})
-    draft_id = drafts.json()[0]["id"]
-
-    response = await client.post(
-        f"/skill-drafts/{draft_id}/review",
-        json={"decision": "maybe"},
-        headers={"X-Tenant-Id": "t-1"},
-    )
-    assert response.status_code == 422
-

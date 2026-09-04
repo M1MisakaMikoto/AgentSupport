@@ -5,18 +5,16 @@ from httpx import ASGITransport, AsyncClient
 
 from agentsupport.api import create_app
 from agentsupport.application.service import ServiceError
-from agentsupport.config import Settings
 from agentsupport.domain import PresetResources, ProjectConfig
-from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_service
 
 
 def _service(tmp_path):
-    return AgentSupportService(
-        Settings(
-            workspace_root=tmp_path / "workspaces",
-            skills_root=tmp_path / "skills",
-        )
-    )
+    return _make_service(
+        tmp_path,
+        workspace_root=tmp_path / "workspaces",
+        skills_root=tmp_path / "skills",
+    ).service
 
 
 def test_mcp_server_crud_and_validation(tmp_path):

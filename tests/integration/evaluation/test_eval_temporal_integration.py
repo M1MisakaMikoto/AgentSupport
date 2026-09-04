@@ -177,7 +177,6 @@ async def env(tmp_path):
         event_notifier=create_event_notifier(None),
         workspace_provider=LocalWorkspaceProvider(tmp_path / "workspace"),
         skill_provider=LocalSkillProvider(skills_root),
-        runtime_driver=context.runtime_driver,
         core_runtime=runner,
         repository=repository,
         temporal=TemporalRunCoordinator(

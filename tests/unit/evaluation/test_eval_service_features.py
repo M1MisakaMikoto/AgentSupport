@@ -168,6 +168,7 @@ async def test_compare_matches_by_case_id_not_task_text():
 def _postgres_service(tmp_path) -> EvalService:
     config = Settings(
         persistence_mode="postgres",
+        execution_mode="temporal",
         database_url=f"sqlite:///{tmp_path / 'db.sqlite'}",
         auto_create_schema=True,
         workspace_root=tmp_path / "workspace",

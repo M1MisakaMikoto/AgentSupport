@@ -4,12 +4,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from agentsupport.api import create_app
-from agentsupport.config import Settings
-from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_service
 
 
 def _service(tmp_path, *, with_runner: bool):
-    service = AgentSupportService(Settings(workspace_root=tmp_path))
+    service = _make_service(tmp_path).service
     if with_runner:
 
         class _FakeCore:
