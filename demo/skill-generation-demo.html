@@ -145,7 +145,10 @@
 .skill-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted);padding:0 2px}
 .skill-bar-label{font-weight:700;color:var(--accent2)}
 .skill-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1;min-width:0}
-.skill-chip{border:1px solid var(--line);border-radius:99px;padding:3px 11px;font-size:12px;color:var(--muted);background:var(--panel2);cursor:pointer;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.skill-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:99px;padding:3px 6px 3px 11px;font-size:12px;color:var(--muted);background:var(--panel2);cursor:pointer;white-space:nowrap;max-width:240px}
+.skill-chip .s-name{overflow:hidden;text-overflow:ellipsis}
+.skill-chip .s-more{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;color:var(--accent);font-weight:700;font-size:13px;line-height:1;flex-shrink:0}
+.skill-chip .s-more:hover{background:rgba(79,140,255,.18);color:#fff}
 .skill-chip:hover{border-color:var(--accent);color:var(--text)}
 .skill-chip.on{border-color:var(--accent2);color:var(--accent2);background:rgba(34,211,165,.1)}
 .skill-chip.disabled{opacity:.45;cursor:not-allowed}
@@ -260,6 +263,16 @@
         </div>
         <pre id="gpDraft" class="hidden"></pre>
       </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="skillDetailOverlay" style="display:none" onclick="if(event.target===this)closeSkillDetail()">
+  <div class="modal file-modal">
+    <div class="modal-head"><b id="sdTitle">Skill 详情</b><button class="chip" onclick="closeSkillDetail()">关闭</button></div>
+    <div class="modal-body">
+      <div class="fp-meta"><span class="hint" id="sdSkillId"></span><span class="hint" id="sdDesc"></span></div>
+      <pre class="fp-text" id="sdContent">加载中…</pre>
     </div>
   </div>
 </div>
@@ -414,14 +427,15 @@ function renderGenPanel(summary){
   if (running) generationStartedThisView = true;
   const gid = summary.gen_id || "…";
   const key = (summary.gen_id || "pending") + "|" + (summary.attempt || 1);
-  if (key !== genRunKey){
+  const newRun = key !== genRunKey;
+  if (newRun){
     genRunKey = key;
     genLogItems.clear();
     $("gpLog").innerHTML = "";
     genBenchDismissed = false;
   }
   if (running && !genBenchDismissed) openBench();
-  if (!running && (done || failed || generationStartedThisView)) openBench();
+  if (!running && !genBenchDismissed && (done || failed)) openBench();
   $("gpGenId").textContent = gid;
   $("gpDot").classList.toggle("idle", !running);
   const prog = summary.progress || "starting";
@@ -623,8 +637,20 @@ function renderSkillBar(){
   publishedSkills.forEach(s => {
     const chip = document.createElement("span");
     chip.className = "skill-chip" + (activeSkills.includes(s.skill_id) ? " on" : "");
-    chip.textContent = s.name || s.skill_id;
     chip.title = s.description || s.skill_id;
+    const label = document.createElement("span");
+    label.className = "s-name";
+    label.textContent = s.name || s.skill_id;
+    const more = document.createElement("span");
+    more.className = "s-more";
+    more.textContent = "⋯";
+    more.title = "查看 Skill 详情";
+    more.onclick = ev => {
+      ev.stopPropagation();
+      openSkillDetail(s.skill_id);
+    };
+    chip.appendChild(label);
+    chip.appendChild(more);
     if (running || skillBusy){
       chip.classList.add("disabled");
     } else {
@@ -632,6 +658,30 @@ function renderSkillBar(){
     }
     chips.appendChild(chip);
   });
+}
+
+async function openSkillDetail(skillId){
+  closeMoreMenu();
+  $("sdTitle").textContent = "Skill 详情 · " + skillId;
+  $("sdContent").textContent = "加载中…";
+  $("sdSkillId").textContent = skillId;
+  $("sdDesc").textContent = "";
+  $("skillDetailOverlay").style.display = "flex";
+  try{
+    const resp = await fetch("/api/skills/" + encodeURIComponent(skillId));
+    if(!resp.ok) throw new Error((await resp.text()).slice(0, 160));
+    const s = await resp.json();
+    $("sdTitle").textContent = "Skill 详情 · " + (s.name || skillId);
+    $("sdSkillId").textContent = s.skill_id || skillId;
+    $("sdDesc").textContent = s.description || "";
+    $("sdContent").textContent = s.content || "（无内容）";
+  }catch(e){
+    $("sdContent").textContent = "加载失败：" + e.message;
+  }
+}
+
+function closeSkillDetail(){
+  $("skillDetailOverlay").style.display = "none";
 }
 
 async function toggleSkill(skillId){

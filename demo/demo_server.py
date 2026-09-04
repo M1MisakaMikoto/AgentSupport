@@ -1054,6 +1054,32 @@ def skills() -> list[dict[str, Any]]:
     return _published_skills()
 
 
+@app.get("/api/skills/{skill_id}")
+def skill_detail(skill_id: str) -> dict[str, Any]:
+    """Return one published skill's frontmatter and SKILL.md content."""
+
+    base = Path("skills") / "tenants" / TENANT
+    markdown = base / skill_id / "SKILL.md"
+    try:
+        resolved = markdown.resolve()
+        base_resolved = base.resolve()
+    except OSError as exc:
+        raise RuntimeError("skill not found") from exc
+    if (
+        not str(resolved).startswith(str(base_resolved))
+        or not markdown.is_file()
+    ):
+        raise RuntimeError("skill not found")
+    content = markdown.read_text(encoding="utf-8")
+    frontmatter = _parse_frontmatter(content)
+    return {
+        "skill_id": skill_id,
+        "name": frontmatter.get("name") or skill_id,
+        "description": frontmatter.get("description") or "",
+        "content": content,
+    }
+
+
 @app.post("/api/start")
 def start(body: StartBody) -> dict[str, Any]:
     global _current_approver
