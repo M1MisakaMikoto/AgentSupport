@@ -7,12 +7,13 @@ COPY pyproject.toml requirements.txt ./
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY src ./src
+COPY demo ./demo
 COPY docs ./docs
 COPY vendor/trae-agent-src ./vendor/trae-agent-src
 ENV PYTHONPATH=/app/src:/app/vendor/trae-agent-src
 ARG INSTALL_DEPS=true
 RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "$INSTALL_DEPS" = "true" ]; then pip install ".[trae,postgres]"; fi
+    if [ "$INSTALL_DEPS" = "true" ]; then pip install ".[trae,postgres,temporal]"; fi
 
 USER root
 RUN if ! getent group agent > /dev/null; then addgroup --system agent; fi \

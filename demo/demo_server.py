@@ -9,7 +9,9 @@ Then open http://127.0.0.1:8900
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
 import threading
 import time
@@ -18,14 +20,16 @@ from typing import Any
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-AGENTSUPPORT_URL = "http://127.0.0.1:8000"
+AGENTSUPPORT_URL = os.getenv("AGENTSUPPORT_DEMO_CONTROL_URL", "http://127.0.0.1:8000")
+RUNNER_URL = os.getenv("AGENTSUPPORT_DEMO_RUNNER_URL", "http://127.0.0.1:8080")
 TENANT = "t-demo"
 POLL_INTERVAL = 2.0
 APPROVE_INTERVAL = 1.0
+LIVE_POLL_INTERVAL = 0.4
 
 ROUNDS = [
     (
@@ -95,10 +99,17 @@ class DemoState:
         self.summary: dict[str, Any] | None = None
         self.summary: dict[str, Any] | None = None
         self.pending_approval: dict[str, Any] | None = None
+        self.live: dict[str, Any] | None = None
         self._lock = threading.Lock()
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
+            summary = self.summary
+            if isinstance(summary, dict):
+                summary = {
+                    **summary,
+                    "log": list(summary.get("log") or []),
+                }
             return {
                 "status": self.status,
                 "session_id": self.session_id,
@@ -112,8 +123,9 @@ class DemoState:
                 "error": self.error,
                 "auto_approve": self.auto_approve,
                 "pending_approval": self.pending_approval,
-                "summary": self.summary,
+                "summary": summary,
                 "active_skills": list(self.active_skills),
+                "live": self.live,
             }
 
 
@@ -142,7 +154,10 @@ def _get(path: str, *, tenant: str = TENANT, params: dict[str, Any] | None = Non
 
 
 def _conversation_events(conversation_id: str) -> list[dict[str, Any]]:
-    return _get(f"/conversations/{conversation_id}/events")
+    # The events API caps at list_default_limit (100) by default. A round that
+    # drifts (many bash calls) can exceed that, hiding the newest tool approval
+    # from the auto-approver and deadlocking the run. Ask for the full stream.
+    return _get(f"/conversations/{conversation_id}/events", params={"limit": 1000})
 
 
 def _friendly(payload: dict[str, Any], limit: int = 220) -> str:
@@ -150,10 +165,167 @@ def _friendly(payload: dict[str, Any], limit: int = 220) -> str:
     return text[:limit] + ("…" if len(text) > limit else "")
 
 
+def _looks_like_file(path_value: str) -> bool:
+    """True for paths that are real files or carry a file extension (skip dirs)."""
+    try:
+        candidate = Path(path_value).expanduser()
+    except OSError:
+        return False
+    if candidate.suffix:
+        return True
+    try:
+        return candidate.is_file()
+    except OSError:
+        return False
+
+
+def _tool_summary(arguments: dict[str, Any] | None) -> str:
+    args = arguments or {}
+    parts: list[str] = []
+    command = args.get("command")
+    if isinstance(command, str) and command:
+        parts.append(command)
+    path = args.get("path") or args.get("input_path") or args.get("output_path")
+    if isinstance(path, str) and path:
+        parts.append(path)
+    title = args.get("title")
+    if isinstance(title, str) and title:
+        parts.append(title)
+    if "rows" in args:
+        rows = args.get("rows") or []
+        if isinstance(rows, list):
+            parts.append(f"rows={len(rows)}")
+    if args.get("content") is not None:
+        text = str(args["content"])
+        parts.append(text[:60] + ("…" if len(text) > 60 else ""))
+    return " ".join(parts)[:180]
+
+
+def _approval_was_auto(approval_id: str) -> bool | None:
+    for entry in STATE.approvals or []:
+        if entry.get("approval_id") == approval_id:
+            return bool(entry.get("auto"))
+    return None
+
+
+#: approval_id -> auto flag, remembered so the live relay can mark a batch as
+#: approved even when the approval lands before the batch row appears in STATE.live.
+_live_approved: dict[str, bool] = {}
+
+
+def _mark_live_approved(approval_id: str, auto: bool) -> None:
+    """Write an approval decision back into the live tool batch.
+
+    The runner's in-memory event stream carries interaction.requested and tool
+    results but never approval.decided, so batches created by _live_relay would
+    stay stuck in "审批中" unless the demo marks them itself. The approval id is
+    recorded up front so a batch that appears later is still marked correctly.
+    """
+    _live_approved[approval_id] = auto
+    with STATE._lock:
+        live = STATE.live
+        if not live:
+            return
+        for entry in live.get("batches") or []:
+            if entry.get("approval_id") == approval_id:
+                entry["approved"] = True
+                entry["auto"] = auto
+
+
+def _tool_batches(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuild parallel tool batches from the conversation event stream.
+
+    Batch boundaries are defined by approval interactions (tool_batch.calls);
+    tool.call events arrive *before* their authorization, so they are not used
+    to define batches. Results attach by call_id; calls that never went through
+    an interaction (e.g. task_done) land in a trailing legacy batch.
+    """
+    batches: list[dict[str, Any]] = []
+    by_hash: dict[str, dict[str, Any]] = {}
+    call_map: dict[str, dict[str, Any]] = {}
+    for event in events:
+        etype = event["type"]
+        payload = event.get("payload") or {}
+        if etype == "interaction.requested" and payload.get("kind") == "approval":
+            calls = (payload.get("tool_batch") or {}).get("calls") or []
+            batch_hash = payload.get("tool_batch_hash") or f"b{len(batches)}"
+            entry = by_hash.get(batch_hash)
+            if entry is None:
+                entry = {
+                    "batch_hash": batch_hash,
+                    "approval_id": payload.get("interaction_id"),
+                    "tools": [],
+                    "approved": False,
+                    "auto": None,
+                }
+                by_hash[batch_hash] = entry
+                batches.append(entry)
+            for call in calls:
+                tool = {
+                    "call_id": call.get("call_id"),
+                    "name": call.get("name"),
+                    "summary": _tool_summary(call.get("arguments")),
+                    "status": "pending",
+                }
+                entry["tools"].append(tool)
+                call_map[tool["call_id"]] = tool
+        elif etype == "approval.decided":
+            approval_id = payload.get("approval_id")
+            for entry in by_hash.values():
+                if entry.get("approval_id") == approval_id:
+                    entry["approved"] = True
+                    entry["auto"] = _approval_was_auto(approval_id)
+
+    leftover: list[dict[str, Any]] = []
+    for event in events:
+        etype = event["type"]
+        payload = event.get("payload") or {}
+        if etype == "tool.call":
+            call_id = payload.get("call_id")
+            if call_id not in call_map:
+                leftover.append(
+                    {
+                        "call_id": call_id,
+                        "name": payload.get("name"),
+                        "summary": _tool_summary(payload.get("arguments")),
+                        "status": "pending",
+                    }
+                )
+        elif etype == "tool.result":
+            tool = call_map.get(payload.get("call_id"))
+            if tool is not None:
+                tool["status"] = "ok" if payload.get("success") else "error"
+                if payload.get("error"):
+                    tool["error"] = str(payload["error"])[:120]
+    if leftover:
+        batches.append(
+            {
+                "batch_hash": f"b{len(batches)}",
+                "approval_id": None,
+                "tools": leftover,
+                "approved": None,
+                "auto": None,
+            }
+        )
+    return batches
+
+
 def _round_summary(conversation_id: str) -> dict[str, Any]:
     events = _conversation_events(conversation_id)
     types = [e["type"] for e in events]
     tool_calls = [e["payload"].get("name") for e in events if e["type"] == "tool.call"]
+    file_paths: list[str] = []
+    for e in events:
+        if e["type"] != "tool.call":
+            continue
+        arguments = e["payload"].get("arguments") or {}
+        if not isinstance(arguments, dict):
+            continue
+        for key in ("path", "input_path", "output_path"):
+            value = arguments.get(key)
+            if isinstance(value, str) and value.strip() and _looks_like_file(value.strip()):
+                file_paths.append(value.strip())
+    files = list(dict.fromkeys(file_paths))
     messages = [e["payload"].get("content", "") for e in events if e["type"] == "message"]
     usage = None
     for e in events:
@@ -166,13 +338,139 @@ def _round_summary(conversation_id: str) -> dict[str, Any]:
         "state": "completed" if "run.completed" in types else "not-completed",
         "event_types": types,
         "tool_calls": tool_calls,
+        "tool_batches": _tool_batches(events),
+        "files": files,
         "message": (
-            messages[-1][:500]
+            messages[-1]
             if messages
             else "（agent 本轮直接完成，未输出文本）"
         ),
         "usage": usage,
     }
+
+
+def _gen_note(summary: dict[str, Any], kind: str, text: str) -> None:
+    """Append a state note to the live generation log (never touches rounds)."""
+    with STATE._lock:
+        if STATE.summary is not summary:
+            return
+        summary.setdefault("log", []).append(
+            {"id": f"note:{time.monotonic_ns()}", "kind": kind, "text": text}
+        )
+
+
+def _pending_generation_question(conversation_id: str | None) -> dict[str, Any] | None:
+    """Return the currently unanswered ask_user question of the generation run."""
+
+    if not conversation_id:
+        return None
+    try:
+        events = _conversation_events(conversation_id)
+    except Exception:  # noqa: BLE001 - question feed is best effort
+        return None
+    pending: dict[str, Any] | None = None
+    for event in events:
+        etype = event.get("type", "")
+        payload = event.get("payload") or {}
+        if etype == "interaction.requested" and payload.get("kind") == "question":
+            pending = {
+                "conversation_id": conversation_id,
+                "interaction_id": payload.get("interaction_id"),
+                "question": payload.get("question") or "请确认总结范围。",
+            }
+        elif (
+            etype == "interaction.input"
+            and pending is not None
+            and payload.get("interaction_id") == pending.get("interaction_id")
+        ):
+            pending = None
+    return pending
+
+
+def _merge_generation_log(
+    summary: dict[str, Any],
+    conversation_id: str | None,
+    from_seq: int,
+) -> int:
+    """Merge new generation-conversation events (seq > from_seq) into the log.
+
+    The generation conversation is separate from the demo rounds, so its
+    tool trajectory is streamed into the panel log only; nothing is appended
+    to STATE.rounds (the chat area).
+    """
+    if not conversation_id:
+        return from_seq
+    try:
+        events = _conversation_events(conversation_id)
+    except Exception:  # noqa: BLE001 - progress feed is best effort
+        return from_seq
+    max_seq = from_seq
+    with STATE._lock:
+        if STATE.summary is not summary:
+            return max_seq
+        log = summary.setdefault("log", [])
+        by_call: dict[str, str] = {}
+        for entry in log:
+            call_id = entry.get("call_id")
+            if call_id:
+                by_call[call_id] = entry["id"]
+        for event in events:
+            seq = event.get("seq")
+            if not isinstance(seq, int) or seq <= from_seq:
+                continue
+            max_seq = max(max_seq, seq)
+            etype = event.get("type", "")
+            payload = event.get("payload") or {}
+            if etype == "tool.call":
+                call_id = payload.get("call_id")
+                entry_id = f"tool:{call_id or seq}"
+                log.append(
+                    {
+                        "id": entry_id,
+                        "call_id": call_id,
+                        "kind": "tool",
+                        "name": payload.get("name") or "工具",
+                        "summary": _tool_summary(payload.get("arguments")),
+                        "status": "running",
+                    }
+                )
+                if call_id:
+                    by_call[call_id] = entry_id
+            elif etype == "tool.result":
+                call_id = payload.get("call_id")
+                entry_id = by_call.get(call_id) if call_id else None
+                if entry_id:
+                    for entry in log:
+                        if entry.get("id") == entry_id:
+                            entry["status"] = "ok" if payload.get("success") else "error"
+                            if payload.get("error"):
+                                entry["error"] = str(payload["error"])[:160]
+                            break
+                else:
+                    log.append(
+                        {
+                            "id": f"res:{seq}",
+                            "kind": "tool",
+                            "name": payload.get("name") or "工具",
+                            "summary": "工具完成",
+                            "status": "ok" if payload.get("success") else "error",
+                        }
+                    )
+            elif etype == "message":
+                content = (payload.get("content") or "").strip()
+                if content:
+                    log.append(
+                        {"id": f"msg:{seq}", "kind": "agent", "text": content[:300]}
+                    )
+            elif etype == "interaction.requested" and payload.get("kind") == "question":
+                log.append(
+                    {
+                        "id": f"ask:{seq}",
+                        "kind": "ask",
+                        "text": payload.get("question") or "请确认总结范围。",
+                    }
+                )
+    return max_seq
 
 
 class Approver(threading.Thread):
@@ -218,11 +516,19 @@ class Approver(threading.Thread):
                         self.retries[key] = self.retries.get(key, 0) + 1
                         if resp.status_code == 200:
                             self.seen.add(key)
+                            _mark_live_approved(payload["interaction_id"], True)
                             STATE.pending_approval = None
                             STATE.pending_approval = None
                             batch = payload.get("tool_batch") or {}
                             names = [c.get("name") for c in batch.get("calls", [])]
-                            STATE.approvals.append({"conversation": cid[:8], "tools": names, "auto": True})
+                            STATE.approvals.append(
+                                {
+                                    "conversation": cid[:8],
+                                    "tools": names,
+                                    "auto": True,
+                                    "approval_id": payload["interaction_id"],
+                                }
+                            )
             except Exception:
                 pass
             time.sleep(APPROVE_INTERVAL)
@@ -248,20 +554,142 @@ def _wait_terminal(conversation_id: str, timeout: float = 1200) -> dict[str, Any
     return {"state": "timeout"}
 
 
+def _live_relay(run_id: str, conversation_id: str) -> None:
+    """Poll the runner's in-memory event stream and mirror it into STATE.live."""
+    cursor = 0
+    while True:
+        with STATE._lock:
+            live = STATE.live
+        if not live or live.get("run_id") != run_id:
+            return
+        try:
+            resp = client.get(
+                f"{RUNNER_URL}/runs/{run_id}/events",
+                params={"after_seq": cursor},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                time.sleep(LIVE_POLL_INTERVAL)
+                continue
+            events = resp.json()
+            if not events:
+                time.sleep(LIVE_POLL_INTERVAL)
+                continue
+            with STATE._lock:
+                live = STATE.live
+                if not live or live.get("run_id") != run_id:
+                    return
+                for event in events:
+                    seq = int(event.get("seq") or 0)
+                    if seq <= cursor:
+                        continue
+                    cursor = seq
+                    etype = event.get("type", "")
+                    payload = event.get("payload") or {}
+                    if etype == "interaction.requested" and payload.get("kind") == "approval":
+                        calls = (payload.get("tool_batch") or {}).get("calls") or []
+                        approval_id = payload.get("interaction_id")
+                        auto = _live_approved.get(approval_id)
+                        live.setdefault("batches", []).append(
+                            {
+                                "batch_hash": payload.get("tool_batch_hash")
+                                or f"b{len(live['batches'])}",
+                                "approval_id": approval_id,
+                                "approved": auto is not None,
+                                "auto": auto,
+                                "tools": [
+                                    {
+                                        "call_id": call.get("call_id"),
+                                        "name": call.get("name"),
+                                        "summary": _tool_summary(call.get("arguments")),
+                                        "status": "pending",
+                                    }
+                                    for call in calls
+                                ],
+                            }
+                        )
+                    elif etype == "tool.call":
+                        name = payload.get("name")
+                        if name:
+                            live.setdefault("tool_calls", []).append(name)
+                        arguments = payload.get("arguments") or {}
+                        if isinstance(arguments, dict):
+                            for key in ("path", "input_path", "output_path"):
+                                value = arguments.get(key)
+                                if (
+                                    isinstance(value, str)
+                                    and value.strip()
+                                    and _looks_like_file(value.strip())
+                                ):
+                                    path = value.strip()
+                                    if path not in live.setdefault("files", []):
+                                        live["files"].append(path)
+                    elif etype == "tool.result":
+                        call_id = payload.get("call_id")
+                        for entry in reversed(live.get("batches") or []):
+                            for tool in entry.get("tools", []):
+                                if tool.get("call_id") == call_id:
+                                    tool["status"] = "ok" if payload.get("success") else "error"
+                                    if payload.get("error"):
+                                        tool["error"] = str(payload["error"])[:120]
+                                    break
+                    elif etype == "message.delta":
+                        delta = payload.get("delta") or ""
+                        if delta:
+                            live["text"] = live.get("text", "") + delta
+                    elif etype == "message":
+                        content = payload.get("content") or ""
+                        if not live.get("text") or len(live.get("text", "")) < len(content) * 0.6:
+                            live["text"] = content
+                    elif etype in ("run.completed", "run.failed", "run.cancelled"):
+                        live["status"] = "done"
+                live["updated_at"] = time.time()
+        except Exception:  # noqa: BLE001 - live relay is best-effort
+            pass
+        time.sleep(LIVE_POLL_INTERVAL)
+
+
 def _run_round(n: int, task: str | None = None) -> None:
     try:
         assert STATE.session_id is not None
         task_text = task if task else ROUNDS[n][1]
         body: dict[str, Any] = {"task": task_text}
+        if STATE.active_skills:
+            body["skills"] = [
+                {"skill_id": skill_id, "enabled": True}
+                for skill_id in STATE.active_skills
+            ]
         if n > 0 and STATE.rounds and STATE.rounds[-1].get("conversation_id"):
             body["parent_conversation_id"] = STATE.rounds[-1]["conversation_id"]
         conv = _post(f"/sessions/{STATE.session_id}/conversations", body)
+        run_id = ((conv.get("run") or {}).get("run_id")) or conv.get("run_id")
+        if not run_id:
+            detail = _get(f"/conversations/{conv['id']}")
+            run_id = ((detail.get("run") or {}).get("run_id")) or detail.get("run_id")
         STATE.round = n + 1
+        with STATE._lock:
+            STATE.live = {
+                "run_id": run_id,
+                "conversation_id": conv["id"],
+                "text": "",
+                "tool_calls": [],
+                "files": [],
+                "status": "running",
+                "updated_at": time.time(),
+            }
+        if run_id:
+            threading.Thread(
+                target=_live_relay, args=(run_id, conv["id"]), daemon=True
+            ).start()
         result = _wait_terminal(conv["id"])
         summary = _round_summary(conv["id"])
         summary["state"] = result["state"]
         summary["task"] = task_text
         STATE.rounds.append(summary)
+        with STATE._lock:
+            if STATE.live and STATE.live.get("run_id") == run_id:
+                STATE.live["status"] = "done"
+                STATE.live["updated_at"] = time.time()
         STATE.status = "waiting_next" if result["state"] == "completed" else "error"
         if result["state"] != "completed":
             STATE.error = f"round {n + 1} ended with {result['state']}"
@@ -306,8 +734,9 @@ def _seed_sales_xlsx(path: str) -> None:
 
 
 def _run_activation_case(label: str, file_name: str, skill_id: str | None) -> dict[str, Any]:
-    _seed_sales_xlsx(rf"D:\workspace\{file_name}")
     workspace = _post("/workspaces", {"name": f"demo-{label}"}, tenant=TENANT)
+    workspace_root = Path(workspace["root_path"])
+    _seed_sales_xlsx(workspace_root / file_name)
     session = _post(
         "/sessions",
         {"workspace_id": workspace["id"], "tenant_id": TENANT, "name": label},
@@ -320,7 +749,7 @@ def _run_activation_case(label: str, file_name: str, skill_id: str | None) -> di
     _wait_terminal(conv["id"], timeout=1200)
     from openpyxl import load_workbook
 
-    workbook = load_workbook(rf"D:\workspace\{file_name}")
+    workbook = load_workbook(workspace_root / file_name)
     sheet = workbook["Sales"]
     rows = list(sheet.iter_rows(values_only=True))
     data_rows = rows[1:]
@@ -348,38 +777,81 @@ def _run_summarize() -> None:
     The real model is occasionally flaky (finishes without embedding the
     markdown, or the provider is slow enough to trip the control-plane
     timeout), so retry a few times before reporting failure.
+
+    The generation runs in its own conversation; its progress is streamed
+    through STATE.summary.log (rendered in the panel above the input), never
+    into STATE.rounds (the chat area).
     """
     last_error: str | None = None
+    summary: dict[str, Any] | None = None
     for attempt in range(1, 4):
         try:
             assert STATE.session_id is not None
-            STATE.summary = {
-                "progress": "analyzing", "status": "running",
-                "skill_id": None, "file_path": None, "attempt": attempt,
-            }
+            with STATE._lock:
+                summary = {
+                    "progress": "analyzing",
+                    "status": "running",
+                    "skill_id": None,
+                    "file_path": None,
+                    "attempt": attempt,
+                    "gen_id": None,
+                    "log": [],
+                }
+                STATE.summary = summary
+            _gen_note(
+                summary,
+                "info",
+                f"开始分析原会话 {STATE.session_id[:8]} 历史（只读引用，不写入原会话）",
+            )
             g = _post(f"/sessions/{STATE.session_id}/skills/generate")
             gid = g["id"]
             conversation_id = g.get("conversation_id")
-            STATE.summary["progress"] = "generating"
+            gen_id = "g-" + gid[:8]
+            with STATE._lock:
+                if STATE.summary is summary:
+                    summary["gen_id"] = gen_id
+            _gen_note(
+                summary,
+                "ok",
+                f"生成会话 {gen_id} 已创建：把原会话总结成 SKILL，过程与产物相互隔离",
+            )
+            summary["progress"] = "generating"
+            _gen_note(summary, "info", "生成 agent 正在读取事件文件并编写 SKILL.md…")
             deadline = time.time() + 1500
             status = g
+            seen_seq = 0
+            awaiting_question = False
             while time.time() < deadline:
                 status = _get(f"/sessions/{STATE.session_id}/skills/generations/{gid}")
+                seen_seq = _merge_generation_log(summary, conversation_id, seen_seq)
+                question = _pending_generation_question(conversation_id)
+                if question is not None:
+                    summary["pending_question"] = question
+                    if not awaiting_question:
+                        _gen_note(summary, "ask", "等待你确认意图…")
+                    awaiting_question = True
+                elif awaiting_question:
+                    awaiting_question = False
+                    summary.pop("pending_question", None)
+                    _gen_note(summary, "ok", "已收到你的确认，继续生成…")
                 if status["status"] in ("completed", "failed"):
                     break
                 time.sleep(POLL_INTERVAL)
             if status.get("status") != "completed":
                 last_error = status.get("error") or f"generation failed on attempt {attempt}"
+                _gen_note(summary, "warn", f"生成未完成：{last_error}")
                 time.sleep(2)
                 continue
             drafts = _get("/skill-drafts", tenant=TENANT)
             if not drafts:
                 last_error = "no draft produced"
+                _gen_note(summary, "warn", "未生成草稿")
                 time.sleep(2)
                 continue
             draft = max(drafts, key=lambda d: d["created_at"])
-            STATE.summary["progress"] = "validating"
-            STATE.summary["skill_id"] = draft["skill_id"]
+            summary["progress"] = "validating"
+            summary["skill_id"] = draft["skill_id"]
+            _gen_note(summary, "ok", "SKILL.md 内容校验通过，正在生成草稿…")
             resp = client.post(
                 f"{AGENTSUPPORT_URL}/skill-drafts/{draft['id']}/review",
                 json={"decision": "approve", "note": "demo summarize"},
@@ -388,12 +860,14 @@ def _run_summarize() -> None:
             )
             if resp.status_code != 200:
                 last_error = resp.text[:300]
+                _gen_note(summary, "warn", f"草稿审核失败：{last_error}")
                 time.sleep(2)
                 continue
             STATE.review = resp.json()
             STATE.draft = {k: draft.get(k) for k in ("id", "skill_id", "status", "frontmatter")}
             skill_id = draft["skill_id"]
-            file_path = rf"skills\tenants\{TENANT}\{skill_id}\SKILL.md"
+            skills_root = Path(os.environ.get("AGENTSUPPORT_SKILLS_ROOT", "skills"))
+            file_path = skills_root / "tenants" / TENANT / skill_id / "SKILL.md"
             with open(file_path, encoding="utf-8") as fh:
                 content = fh.read()
             usage = None
@@ -403,21 +877,34 @@ def _run_summarize() -> None:
                         result = e["payload"].get("result") or {}
                         if isinstance(result, dict):
                             usage = result.get("usage")
-            STATE.summary = {
-                "progress": "done",
-                "status": "completed",
-                "skill_id": skill_id,
-                "file_path": file_path,
-                "content": content,
-                "usage": usage,
-                "attempt": attempt,
-            }
+            summary.update(
+                {
+                    "progress": "done",
+                    "status": "completed",
+                    "skill_id": skill_id,
+                    "file_path": str(file_path),
+                    "content": content,
+                    "usage": usage,
+                    "attempt": attempt,
+                }
+            )
+            _gen_note(summary, "ok", f"草稿已入库：{skill_id} → {file_path}")
+            _gen_note(
+                summary,
+                "ok",
+                "原会话聊天框全程零写入（生成内容只显示在独立面板）",
+            )
             STATE.status = "reviewed"
             return
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
+            if summary is not None:
+                _gen_note(summary, "warn", f"生成过程异常：{last_error}")
             time.sleep(2)
-    STATE.summary = {"progress": "failed", "status": "failed", "error": last_error}
+    if summary is not None:
+        with STATE._lock:
+            summary.update({"progress": "failed", "status": "failed", "error": last_error})
+        _gen_note(summary, "warn", f"总结失败：{last_error}")
     STATE.status = "error"
 
 
@@ -491,10 +978,15 @@ def _session_history_summary(session: dict[str, Any]) -> dict[str, Any]:
 class StartBody(BaseModel):
     auto_approve: bool = True
     skills: list[str] = Field(default_factory=list)
+    file_ref_format: bool = True
 
 
 class RoundBody(BaseModel):
     task: str | None = None
+
+
+class SkillsSelectBody(BaseModel):
+    skills: list[str] = Field(default_factory=list)
 
 
 class ReviewBody(BaseModel):
@@ -505,9 +997,13 @@ class ActivateBody(BaseModel):
     skill_id: str | None = None
 
 
+class AnswerBody(BaseModel):
+    value: str
+
+
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse("demo/skill-generation-demo.html")
+    return FileResponse(Path(__file__).resolve().parent / "skill-generation-demo.html")
 
 
 @app.get("/api/state")
@@ -538,10 +1034,11 @@ def start(body: StartBody) -> dict[str, Any]:
     STATE.auto_approve = body.auto_approve
     workspace = _post("/workspaces", {"name": "demo"})
     config = None
-    if body.skills:
+    if body.skills or body.file_ref_format:
         config = {
             "version": 1,
             "skills": [{"skill_id": skill_id, "enabled": True} for skill_id in body.skills],
+            "file_ref_format": body.file_ref_format,
         }
     session = _post(
         "/sessions",
@@ -557,6 +1054,8 @@ def start(body: StartBody) -> dict[str, Any]:
     STATE.status = "ready"
     STATE.rounds = []
     STATE.approvals = []
+    _live_approved.clear()
+    STATE.live = None
     STATE.generation = None
     STATE.draft = None
     STATE.review = None
@@ -581,7 +1080,20 @@ def round_step(body: RoundBody | None = None) -> dict[str, Any]:
     if STATE.status not in ("ready", "waiting_next"):
         raise RuntimeError(f"cannot start round from status {STATE.status}")
     STATE.status = "running_round"
+    STATE.live = None
     threading.Thread(target=_run_round, args=(n, body.task if custom else None), daemon=True).start()
+    return STATE.snapshot()
+
+
+@app.post("/api/skills-select")
+def skills_select(body: SkillsSelectBody) -> dict[str, Any]:
+    if STATE.status in ("running_round", "running_generate"):
+        raise RuntimeError(f"cannot change skills while {STATE.status}")
+    published = {item["skill_id"] for item in _published_skills()}
+    unknown = sorted(set(body.skills) - published)
+    if unknown:
+        raise RuntimeError(f"unknown skills: {', '.join(unknown)}")
+    STATE.active_skills = list(dict.fromkeys(body.skills))
     return STATE.snapshot()
 
 
@@ -590,6 +1102,7 @@ def generate() -> dict[str, Any]:
     if STATE.status not in ("waiting_next", "generated", "error"):
         raise RuntimeError(f"cannot generate from {STATE.status}")
     STATE.status = "running_generate"
+    STATE.live = None
     threading.Thread(target=_run_generation, daemon=True).start()
     return STATE.snapshot()
 
@@ -616,7 +1129,9 @@ def approve_tool() -> dict[str, Any]:
         "conversation": pending["conversation_id"][:8],
         "tools": pending["tools"],
         "auto": False,
+        "approval_id": pending["approval_id"],
     })
+    _mark_live_approved(pending["approval_id"], False)
     STATE.pending_approval = None
     return STATE.snapshot()
 
@@ -625,9 +1140,48 @@ def approve_tool() -> dict[str, Any]:
 def summarize() -> dict[str, Any]:
     if STATE.status not in ("waiting_next", "reviewed", "error"):
         raise RuntimeError(f"cannot summarize from {STATE.status}")
-    STATE.summary = {"progress": "starting", "status": "running", "skill_id": None, "file_path": None}
+    STATE.summary = {
+        "progress": "starting",
+        "status": "running",
+        "skill_id": None,
+        "file_path": None,
+        "attempt": 1,
+        "gen_id": None,
+        "log": [],
+    }
     STATE.status = "running_generate"
+    STATE.live = None
     threading.Thread(target=_run_summarize, daemon=True).start()
+    return STATE.snapshot()
+
+
+@app.post("/api/answer-question")
+def answer_question(body: AnswerBody) -> dict[str, Any]:
+    pending = (STATE.summary or {}).get("pending_question")
+    if not pending:
+        raise RuntimeError("no pending question")
+    resp = client.post(
+        f"{AGENTSUPPORT_URL}/conversations/{pending['conversation_id']}/input",
+        json={
+            "interaction_id": pending["interaction_id"],
+            "value": body.value,
+        },
+        headers={"X-Tenant-Id": TENANT},
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(resp.text[:300])
+    with STATE._lock:
+        summary = STATE.summary
+        if summary is not None:
+            summary.pop("pending_question", None)
+            summary.setdefault("log", []).append(
+                {
+                    "id": f"answer:{time.monotonic_ns()}",
+                    "kind": "ok",
+                    "text": f"你已回复：{body.value}",
+                }
+            )
     return STATE.snapshot()
 
 
@@ -659,5 +1213,93 @@ def activate(body: ActivateBody) -> dict[str, Any]:
     return STATE.snapshot()
 
 
+# File preview (demo-local): read files inside workspace roots only.
+WORKSPACE_ROOTS = [
+    Path(os.environ.get("AGENTSUPPORT_RUNNER_WORKSPACE_ROOT", r"D:\workspace")).resolve(),
+    Path(os.environ.get("AGENTSUPPORT_WORKSPACE_ROOT", "workspace-data")).resolve(),
+]
+TEXT_EXTENSIONS = {
+    ".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".csv", ".tsv", ".log", ".html", ".htm", ".css", ".js", ".xml", ".sql",
+    ".sh", ".ps1", ".bat", ".dockerfile",
+}
+IMAGE_EXTENSIONS = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+}
+TEXT_PREVIEW_LIMIT = 200_000
+TABLE_PREVIEW_ROWS = 300
+
+
+@app.get("/api/file")
+def file_preview(path: str) -> dict[str, Any]:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = WORKSPACE_ROOTS[0] / candidate
+    try:
+        resolved = candidate.resolve()
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid path: {exc}") from exc
+    if not any(resolved == root or root in resolved.parents for root in WORKSPACE_ROOTS):
+        raise HTTPException(status_code=400, detail="path outside workspace roots")
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    if resolved.name.lower() == ".env":
+        raise HTTPException(status_code=400, detail="not allowed")
+    size = resolved.stat().st_size
+    base = {"name": resolved.name, "path": str(resolved), "size": size}
+    suffix = resolved.suffix.lower()
+    if suffix in IMAGE_EXTENSIONS:
+        payload = base64.b64encode(resolved.read_bytes()).decode("ascii")
+        return {
+            **base,
+            "kind": "image",
+            "data_uri": f"data:{IMAGE_EXTENSIONS[suffix]};base64,{payload}",
+        }
+    if suffix == ".xlsx":
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(resolved, read_only=True, data_only=True)
+        sheet = workbook.active
+        rows: list[list[str]] = []
+        for idx, row in enumerate(sheet.iter_rows(values_only=True)):
+            if idx >= TABLE_PREVIEW_ROWS:
+                break
+            rows.append(["" if value is None else str(value) for value in row])
+        workbook.close()
+        return {**base, "kind": "table", "table": rows}
+    if suffix == ".docx":
+        import docx
+
+        document = docx.Document(str(resolved))
+        parts: list[str] = []
+        for paragraph in document.paragraphs:
+            if paragraph.text.strip():
+                parts.append(paragraph.text)
+        for table in document.tables:
+            for row in table.rows:
+                parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+        return {**base, "kind": "text", "text": "\n".join(parts)}
+    if suffix == ".pdf":
+        import fitz
+
+        pages: list[str] = []
+        with fitz.open(str(resolved)) as document:
+            for page in document:
+                pages.append(page.get_text())
+        return {**base, "kind": "text", "text": "\n".join(pages)}
+    if suffix in TEXT_EXTENSIONS or size <= TEXT_PREVIEW_LIMIT:
+        data = resolved.read_bytes()
+        text = data.decode("utf-8", errors="replace")
+        return {**base, "kind": "text", "text": text}
+    return {**base, "kind": "binary", "note": "该文件类型暂不支持预览，仅显示路径与大小"}
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8900, log_level="info")
+    uvicorn.run(
+        app,
+        host=os.getenv("AGENTSUPPORT_DEMO_HOST", "127.0.0.1"),
+        port=int(os.getenv("AGENTSUPPORT_DEMO_PORT", "8900")),
+        log_level="info",
+    )

@@ -20,6 +20,7 @@ services:
   api:
     image: agentsupport-api
     build: .
+    restart: unless-stopped
     command: uvicorn agentsupport.main:app --host 0.0.0.0 --port 8000
     environment:
       AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
@@ -55,6 +56,7 @@ services:
 
   gateway:
     image: nginx:1.27-alpine
+    restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
@@ -69,6 +71,7 @@ services:
 
   event-publisher:
     image: agentsupport-api
+    restart: unless-stopped
     command: python -m agentsupport.event_publisher
     environment:
       AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
@@ -83,18 +86,19 @@ services:
 
   reconciler:
     image: agentsupport-api
+    restart: unless-stopped
     command: python -m agentsupport.reconciler
     environment:
       AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
       AGENTSUPPORT_PERSISTENCE_MODE: postgres
       AGENTSUPPORT_AUTO_CREATE_SCHEMA: "false"
-      AGENTSUPPORT_RUNTIME_DRIVER: memory
     depends_on:
       db-migrate:
         condition: service_completed_successfully
 
   retention:
     image: agentsupport-api
+    restart: unless-stopped
     command: python -m agentsupport.retention
     environment:
       AGENTSUPPORT_DATABASE_URL: postgresql+psycopg://agent:agent@postgres:5432/agentsupport
@@ -108,6 +112,7 @@ services:
 
   runner:
     image: agentsupport-api
+    restart: unless-stopped
     command: uvicorn session_runner.main:app --host 0.0.0.0 --port 8080
     environment:
       SESSION_RUNNER_MODE: ${SESSION_RUNNER_MODE:-trae}
@@ -124,6 +129,7 @@ services:
       TRAE_MODEL_BASE_URL: ${TRAE_MODEL_BASE_URL:-${ANTHROPIC_BASE_URL:-}}
       TRAE_MODEL_HOST: ${TRAE_MODEL_HOST:-}
       TRAE_MODEL: ${TRAE_MODEL:-claude-sonnet-4-20250514}
+      TRAE_MAX_STEPS: ${TRAE_MAX_STEPS:-24}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       HTTP_PROXY: ${HTTP_PROXY:-}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
@@ -159,6 +165,7 @@ services:
   temporal-worker:
     image: agentsupport-api
     command: python -m agentsupport.execution.temporal.worker
+    restart: unless-stopped
     environment:
       AGENTSUPPORT_PERSISTENCE_MODE: postgres
       AGENTSUPPORT_EXECUTION_MODE: temporal
@@ -181,8 +188,32 @@ services:
       temporal:
         condition: service_started
 
+  demo:
+    image: agentsupport-api
+    restart: unless-stopped
+    command: python /app/demo/demo_server.py
+    environment:
+      AGENTSUPPORT_DEMO_HOST: 0.0.0.0
+      AGENTSUPPORT_DEMO_PORT: "8900"
+      AGENTSUPPORT_DEMO_CONTROL_URL: http://gateway:8000
+      AGENTSUPPORT_DEMO_RUNNER_URL: http://runner:8080
+      AGENTSUPPORT_WORKSPACE_ROOT: /workspace-data
+      AGENTSUPPORT_RUNNER_WORKSPACE_ROOT: /workspace-data
+      AGENTSUPPORT_SKILLS_ROOT: /app/src/skills
+    ports:
+      - "8900:8900"
+    volumes:
+      - workspace-data:/workspace-data
+      - skills-data:/app/src/skills
+    depends_on:
+      gateway:
+        condition: service_healthy
+      runner:
+        condition: service_healthy
+
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: agent
       POSTGRES_PASSWORD: agent
@@ -199,6 +230,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
