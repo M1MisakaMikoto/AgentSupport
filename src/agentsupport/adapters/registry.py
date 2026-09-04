@@ -19,6 +19,15 @@ class SqlAlchemyRunnerRegistry:
         self.repository = repository
 
     def register(self, registration: RunnerRegistrationRequest, token_hash: str) -> RunnerRegistration:
+        existing = [
+            entry
+            for entry in self.repository.list_ready_runner_registrations()
+            if entry.provider == registration.provider and entry.endpoint == registration.endpoint
+        ]
+        if existing:
+            raise RunnerRegistryConflict(
+                f"runner {existing[0].runner_id} is already registered"
+            )
         entry = RunnerRegistration(
             provider=registration.provider,
             endpoint=registration.endpoint,

@@ -20,17 +20,31 @@ from agent_runner_contracts.events import EventEnvelope
 
 from ...adapters.persistence.sqlalchemy.repository import PostgresRepository
 from ...adapters.skills.local import LocalSkillProvider
-from ...application.ports import CoreRuntime, RuntimeDriver
+from ...application.ports import CoreRuntime
+from ...application.workspace_refs import build_workspace_ref
 from ...bootstrap.container import (
     build_core_runtime,
     build_repository,
-    build_runtime_driver,
     build_skill_provider,
 )
 from ...bootstrap.settings import Settings, settings
 from ...domain import TERMINAL_STATES, Conversation, ExecutionState
 
 ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 10.0
+
+
+def _select_runner_url(ctx: ExecutionContext) -> str:
+    """Pick the least-loaded ready runner from the registry, else the static URL."""
+
+    if ctx.repository is not None:
+        ready = [
+            entry
+            for entry in ctx.repository.list_ready_runner_registrations()
+            if "run" in (entry.capabilities or [])
+        ]
+        if ready:
+            return min(ready, key=lambda entry: entry.load).endpoint
+    return ctx.config.core_runner_url if ctx.config else None or "http://runner"
 
 
 async def _heartbeat_until(stop: asyncio.Event, details: dict[str, Any]) -> None:
@@ -56,7 +70,6 @@ class ExecutionContext:
     config: Settings | None = None
     repository: PostgresRepository | None = None
     core_runtime: CoreRuntime | None = None
-    runtime_driver: RuntimeDriver | None = None
     skill_provider: LocalSkillProvider | None = None
 
     def __post_init__(self) -> None:
@@ -65,8 +78,6 @@ class ExecutionContext:
             self.repository = build_repository(self.config)
         if self.core_runtime is None:
             self.core_runtime = build_core_runtime(self.config)
-        if self.runtime_driver is None:
-            self.runtime_driver = build_runtime_driver(self.config)
         if self.skill_provider is None:
             self.skill_provider = build_skill_provider(self.config)
 
@@ -139,6 +150,11 @@ def _build_run_request(
     """Build the runner request, mirroring the inline execution path."""
 
     skills = request.get("skills") or []
+    runner_url = _select_runner_url(ctx)
+    workspace_ref = build_workspace_ref(
+        ctx.config.core_runner_workspace_root if ctx.config else None,
+        workspace.root_path,
+    )
     tool_policy = request.get("tool_policy") or {}
     session_conversations = ctx.repository.list_conversations(session_id=session.id)
     injected_instructions = [
@@ -173,7 +189,7 @@ def _build_run_request(
         "context_bundle": {
             "task": conversation.task,
             "conversation_id": str(conversation.id),
-            "workspace_ref": "/workspace",
+            "workspace_ref": workspace_ref,
             "recent_events": recent_events,
             "skill_manifest": ctx.skill_provider.manifest(
                 skills, tenant_id=session.tenant_id
@@ -182,12 +198,15 @@ def _build_run_request(
                 skills, tenant_id=session.tenant_id
             ),
             "tool_policy": tool_policy,
+            "file_ref_format": bool(
+                getattr(session.config, "file_ref_format", False)
+            ),
             "mcp_refs": _resolve_mcp_refs(request.get("mcp_refs") or [], ctx),
         },
-        "workspace_ref": "/workspace",
+        "workspace_ref": workspace_ref,
         "tool_policy": tool_policy,
         "core_version": request.get("core_version", "0.1.0"),
-        "runner_url": ctx.config.core_runner_url or "http://runner",
+        "runner_url": runner_url,
     }
 
 
@@ -398,5 +417,3 @@ async def fail_run(payload: dict) -> dict:
     )
     await _make_sink(repository, conversation)(event)
     return {"status": "failed", "run_id": request["run_id"]}
-
-

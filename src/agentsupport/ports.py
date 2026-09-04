@@ -3,7 +3,6 @@
 from .application.ports import (
     CoreRuntime,
     EventSink,
-    RuntimeDriver,
     WorkspaceProvider,
     WorkspaceStorageDriver,
 )
@@ -11,7 +10,6 @@ from .application.ports import (
 __all__ = [
     "CoreRuntime",
     "EventSink",
-    "RuntimeDriver",
     "WorkspaceProvider",
     "WorkspaceStorageDriver",
 ]

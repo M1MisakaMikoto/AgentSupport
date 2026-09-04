@@ -10,14 +10,11 @@ from agent_runner_contracts.registration import (
     RunnerRegistrationRequest,
 )
 from agentsupport.application.service import ServiceError
-from agentsupport.config import Settings
-from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_service
 
 
 def _service(tmp_path, *, token: str = "bootstrap-secret"):
-    return AgentSupportService(
-        Settings(workspace_root=tmp_path, runner_token=token)
-    )
+    return _make_service(tmp_path, runner_token=token).service
 
 
 def _request() -> RunnerRegistrationRequest:
@@ -93,31 +90,33 @@ def test_stale_runners_are_pruned(tmp_path):
     service = _service(tmp_path)
     response = service.register_runner(_request(), bootstrap_token="bootstrap-secret")
     stale_at = datetime.now(UTC) - timedelta(seconds=service.config.runner_heartbeat_timeout_seconds + 5)
-    service.runner_registry._registrations[response.runner_id].last_heartbeat_at = stale_at
+    service.runner_registry.repository.update_runner_registration(
+        response.runner_id,
+        status="READY",
+        load=1,
+        capabilities=list(RUNNER_CAPABILITIES),
+        heartbeat_at=stale_at,
+    )
 
     assert service.prune_stale_runners() == 1
     assert service.runner_snapshot() == []
 
 
-async def test_registered_runner_is_used_for_inline_routing(tmp_path):
-    service = _service(tmp_path)
-    service.register_runner(_request(), bootstrap_token="bootstrap-secret")
-    captured: dict = {}
-
-    class _FakeCore:
-        async def run(self, request: dict, event_sink):
-            captured["runner_url"] = request.get("runner_url")
-            return {"status": "RUNNING", "events": []}
-
-        def register_run_endpoint(self, run_id, endpoint) -> None:
-            return None
-
-    service.core_runtime = _FakeCore()
+async def test_registered_runner_is_used_for_temporal_routing(tmp_path):
+    env = _make_service(tmp_path, runner_token="bootstrap-secret")
+    service = env.service
+    response = service.register_runner(_request(), bootstrap_token="bootstrap-secret")
+    service.runner_heartbeat(
+        response.runner_id,
+        RunnerHeartbeat(status="READY", load=1),
+        runner_token=response.token,
+    )
     workspace = service.create_workspace("demo")
     session = service.create_session(workspace.id)
-    await service.create_conversation(session.id, "task")
+    conversation = await service.create_conversation(session.id, "task")
+    await env.coordinator.wait_for_run(str(conversation.run.run_id), timeout_seconds=15)
 
-    assert captured["runner_url"] == "http://127.0.0.1:8080"
+    assert env.fake.captured[0]["runner_url"] == "http://127.0.0.1:8080"
 
 
 def test_select_ready_runner_prefers_lowest_load(tmp_path):

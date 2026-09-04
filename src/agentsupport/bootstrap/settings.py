@@ -16,18 +16,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://agent:agent@localhost:5432/agentsupport"
     persistence_mode: str = "memory"
     auto_create_schema: bool = True
-    execution_mode: str = "inline"
+    execution_mode: str = "temporal"
     instance_id: str = ""
     event_poll_interval_seconds: float = 0.25
     redis_url: str | None = None
-    runtime_driver: str = "memory"
-    runtime_context: str = "desktop-linux"
-    runner_image: str = "agentsupport-runner:dev"
-    kubernetes_api_server: str = "https://kubernetes.default.svc"
-    kubernetes_namespace: str = "default"
-    kubernetes_pvc_size: str = "10Gi"
-    kubernetes_storage_class: str | None = None
-    kubernetes_runner_secret_name: str | None = None
     core_runner_url: str | None = None
     core_runner_timeout_seconds: float = 300.0
     core_runner_workspace_root: Path | None = None
@@ -103,6 +95,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "only api_auth_mode='none' is implemented; "
                 "token-based authentication is intentionally not provided"
+            )
+        if self.execution_mode != "temporal":
+            raise ValueError(
+                "only execution_mode='temporal' is supported; "
+                "the inline runtime mode has been retired"
             )
         return self
 

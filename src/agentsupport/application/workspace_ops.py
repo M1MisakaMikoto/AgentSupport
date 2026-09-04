@@ -162,8 +162,7 @@ class WorkspaceOpsMixin:
         if self.repository:
             sessions = self.repository.list_sessions()
             if any(
-                session.workspace_id == workspace_id and session.active_container_id
-                for session in sessions
+                session.workspace_id == workspace_id for session in sessions
             ):
                 raise ServiceError(
                     "WORKSPACE_BUSY",

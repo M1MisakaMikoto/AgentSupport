@@ -39,14 +39,17 @@ from .ports import (
     EventStore,
     RepositoryConflict,
     RunnerRegistry,
-    RuntimeDriver,
     SkillProvider,
     WorkspaceProvider,
 )
 from .runner_ops import RunnerOpsMixin
 from .runner_registry import InMemoryRunnerRegistry
 from .session_ops import SessionOpsMixin
-from .skill_generation_ops import SkillGenerationOpsMixin
+from .skill_generation_ops import (
+    ASK_USER_TOOL,
+    SkillGenerationOpsMixin,
+    is_skill_generation_task,
+)
 from .skill_mcp_ops import SkillMcpOpsMixin
 from .workspace_ops import WorkspaceOpsMixin
 
@@ -91,7 +94,6 @@ class AgentSupportService(
         event_notifier: EventNotifier,
         workspace_provider: WorkspaceProvider,
         skill_provider: SkillProvider,
-        runtime_driver: RuntimeDriver,
         core_runtime: CoreRuntime | None,
         repository: Any | None,
         runner_registry: RunnerRegistry | None = None,
@@ -114,7 +116,6 @@ class AgentSupportService(
         self.enabled_skills = [
             item.strip() for item in config.enabled_skills.split(",") if item.strip()
         ]
-        self.runtime_driver = runtime_driver
         self.core_runtime = core_runtime
         self.idempotency: dict[tuple[str, str], IdempotencyRecord] = {}
         self.workspace_leases: dict[UUID, UUID] = {}
@@ -137,9 +138,6 @@ class AgentSupportService(
         self.workspaces = {item.id: item for item in self.repository.list_workspaces()}
         self.sessions = {item.id: item for item in self.repository.list_sessions()}
         self.conversations = {item.id: item for item in self.repository.list_conversations()}
-        for session in self.sessions.values():
-            if session.active_container_id:
-                self.workspace_leases[session.workspace_id] = session.id
         for conversation in self.conversations.values():
             for event in self.repository.list_events(conversation.id):
                 self.events_store.append(conversation.id, event)
@@ -162,12 +160,7 @@ class AgentSupportService(
 
 
     async def _runner_endpoint(self, session: Session) -> str | None:
-        if session.active_container_id:
-            endpoint_method = getattr(self.runtime_driver, "endpoint", None)
-            if endpoint_method is not None:
-                endpoint = await endpoint_method(session.active_container_id)
-                if endpoint:
-                    return endpoint
+        del session
         return self.config.core_runner_url
 
 
@@ -347,7 +340,11 @@ class AgentSupportService(
             policy["approval_required_tools"] = []
             policy["mode"] = mode.value
         elif mode == ConversationMode.SILENT:
-            policy["allowed_tools"] = list(SILENT_MODE_TOOLS)
+            allowed = list(SILENT_MODE_TOOLS)
+            if is_skill_generation_task(conversation.task):
+                # Skill 提炼 agent 需要在写 SKILL.md 前向用户确认意图。
+                allowed.append(ASK_USER_TOOL)
+            policy["allowed_tools"] = allowed
             policy["approval_required_tools"] = []
             policy["mode"] = mode.value
         return policy

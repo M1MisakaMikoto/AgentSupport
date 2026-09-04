@@ -116,96 +116,21 @@ class ConversationOpsMixin:
             mcp_refs=mcp_refs,
             mode=mode or ConversationMode.DEFAULT,
         )
-        if self.temporal_mode:
-            if self.temporal is None:
-                raise ServiceError(
-                    "TEMPORAL_UNAVAILABLE", "temporal coordinator is not configured", 503
-                )
-            assert self.repository is not None
-            try:
-                persisted = self.repository.create_conversation(
-                    conversation, _hash_request(payload), idempotency_key
-                )
-            except RepositoryConflict as exc:
-                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
-            if persisted.id != conversation.id:
-                return persisted  # idempotent replay of an earlier request
-            conversation = persisted
-            await self._start_temporal_run(conversation, session)
-            return conversation
-        if self.repository:
-            try:
-                persisted = self.repository.create_conversation(
-                    conversation, _hash_request(payload), idempotency_key
-                )
-            except RepositoryConflict as exc:
-                raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
-            if persisted.id != conversation.id:
-                self.conversations[persisted.id] = persisted
-                return persisted
-            conversation = persisted
-        self.conversations[conversation.id] = conversation
-        if session.active_run_id:
-            conversation.run.state = ExecutionState.QUEUED
-            self._append(conversation, "conversation.queued", {"session_id": str(session_id)})
-        else:
-            queued = sum(
-                1
-                for item in self.conversations.values()
-                if item.id != conversation.id and item.run.state == ExecutionState.QUEUED
+        if self.temporal is None:
+            raise ServiceError(
+                "TEMPORAL_UNAVAILABLE", "temporal coordinator is not configured", 503
             )
-            if queued >= self.config.max_queued_conversations:
-                self.conversations.pop(conversation.id, None)
-                if self.repository:
-                    self.repository.delete_conversation(conversation.id, idempotency_key)
-                raise ServiceError("RESOURCE_EXHAUSTED", "conversation queue is full", 429)
-            try:
-                acquired = await self._acquire_container(session)
-            except TimeoutError:
-                self._mark_run_failed(
-                    conversation,
-                    {
-                        "code": "CONTAINER_START_TIMEOUT",
-                        "message": "Session container did not start before the configured timeout",
-                    },
-                )
-                self._remember_persisted(
-                    "conversation",
-                    idempotency_key,
-                    payload,
-                    conversation.id,
-                    conversation.model_dump(mode="json"),
-                )
-                return conversation
-            except Exception as exc:  # noqa: BLE001 - startup errors become run events
-                self._mark_run_failed(
-                    conversation,
-                    {"code": "CONTAINER_START_FAILED", "message": str(exc)},
-                )
-                self._remember_persisted(
-                    "conversation",
-                    idempotency_key,
-                    payload,
-                    conversation.id,
-                    conversation.model_dump(mode="json"),
-                )
-                return conversation
-            if not acquired:
-                conversation.run.state = ExecutionState.QUEUED
-                self._append(conversation, "conversation.queued", {"session_id": str(session_id)})
-            else:
-                session.active_run_id = conversation.run.run_id
-                if self.repository:
-                    self.repository.save_session(session)
-                conversation.run.state = ExecutionState.STARTING
-                self._append(conversation, "run.started", {"session_id": str(session_id)})
-                conversation.run.state = ExecutionState.RUNNING
-                self._append(
-                    conversation, "run.running", {"container_id": session.active_container_id}
-                )
-                if self.core_runtime:
-                    await self._run_core(conversation, session)
-        self._remember("conversation", idempotency_key, payload, conversation.id)
+        assert self.repository is not None
+        try:
+            persisted = self.repository.create_conversation(
+                conversation, _hash_request(payload), idempotency_key
+            )
+        except RepositoryConflict as exc:
+            raise ServiceError("IDEMPOTENCY_CONFLICT", str(exc), 409) from exc
+        if persisted.id != conversation.id:
+            return persisted  # idempotent replay of an earlier request
+        conversation = persisted
+        await self._start_temporal_run(conversation, session)
         return conversation
 
 
@@ -299,6 +224,9 @@ class ConversationOpsMixin:
                     conversation_skills, tenant_id=session.tenant_id
                 ),
                 "tool_policy": tool_policy,
+                "file_ref_format": bool(
+                    getattr(session.config, "file_ref_format", False)
+                ),
                 "mcp_refs": self._resolve_mcp_refs(conversation.mcp_refs, session),
             },
             "workspace_ref": workspace_ref,

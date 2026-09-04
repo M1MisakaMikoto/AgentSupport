@@ -179,7 +179,7 @@ class EventOpsMixin:
             jobs_running = counts.get(ExecutionState.RUNNING.value, 0)
             jobs_waiting = counts.get(ExecutionState.WAITING_INPUT.value, 0)
             jobs_paused = counts.get(ExecutionState.PAUSED.value, 0)
-            active_runtimes = self.repository.active_container_count()
+            active_runtimes = jobs_running
         else:
             queue_ready = sum(
                 item.run.state == ExecutionState.QUEUED
@@ -199,7 +199,7 @@ class EventOpsMixin:
                 for item in self.conversations.values()
             )
             active_runtimes = sum(
-                item.active_container_id is not None for item in self.sessions.values()
+                item.active_run_id is not None for item in self.sessions.values()
             )
         return {
             "queue_ready": queue_ready,

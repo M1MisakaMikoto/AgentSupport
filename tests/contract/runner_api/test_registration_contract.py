@@ -5,15 +5,12 @@ from httpx import ASGITransport, AsyncClient
 
 from agent_runner_contracts.registration import RUNNER_CAPABILITIES
 from agentsupport.api import create_app
-from agentsupport.config import Settings
-from agentsupport.services import AgentSupportService
+from _support import make_temporal_service as _make_service
 
 
 @pytest.fixture
 def client(tmp_path):
-    service = AgentSupportService(
-        Settings(workspace_root=tmp_path, runner_token="bootstrap-secret")
-    )
+    service = _make_service(tmp_path, runner_token="bootstrap-secret").service
     app = create_app(service)
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 

@@ -17,6 +17,5 @@ class Session(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     config: ProjectConfig | None = None
     lease_epoch: int = 0
-    active_container_id: str | None = None
     active_run_id: UUID | None = None
     created_at: datetime = Field(default_factory=utc_now)

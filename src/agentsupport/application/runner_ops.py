@@ -115,59 +115,7 @@ class RunnerOpsMixin:
 
 
     async def supervise_active_sessions(self) -> int:
-        """Mark sessions LOST only after repeated failed container health checks."""
+        """Session supervision is handled by the execution layer (Temporal);
+        runner pool health is enforced by registration heartbeats + reconciler."""
 
-        lost = 0
-        for session in list(self.sessions.values()):
-            if not session.active_container_id:
-                self._health_failures.pop(session.id, None)
-                continue
-            try:
-                inspection = await self.runtime_driver.inspect(session.active_container_id)
-                healthy = (
-                    inspection.get("status") in {"running", "created"}
-                    and session.active_run_id is not None
-                )
-                if healthy and self.core_runtime is not None and session.active_run_id is not None:
-                    endpoint = await self._runner_endpoint(session)
-                    register = getattr(self.core_runtime, "register_run_endpoint", None)
-                    if register is not None:
-                        register(session.active_run_id, endpoint)
-                    health = await self.core_runtime.health(session.active_run_id)
-                    healthy = health.get("live", {}).get("status") == "ok" and health.get(
-                        "ready", {}
-                    ).get("status") in {"ok", "ready"}
-            except Exception:  # noqa: BLE001 - health failures are counted, not raised
-                healthy = False
-            if healthy:
-                self._health_failures.pop(session.id, None)
-                continue
-            failures = self._health_failures.get(session.id, 0) + 1
-            self._health_failures[session.id] = failures
-            if failures < self.config.health_failure_threshold:
-                continue
-            if session.active_run_id is None:
-                if await self._release_session(session):
-                    self._health_failures.pop(session.id, None)
-                    lost += 1
-                continue
-            conversation = next(
-                (
-                    item
-                    for item in self.conversations.values()
-                    if item.run.run_id == session.active_run_id
-                ),
-                None,
-            )
-            if conversation is None:
-                continue
-            conversation.run.state = ExecutionState.LOST
-            self._append(
-                conversation,
-                "run.lost",
-                {"container_id": session.active_container_id, "health_failures": failures},
-            )
-            await self._release_session(session, conversation)
-            self._health_failures.pop(session.id, None)
-            lost += 1
-        return lost
+        return 0
