@@ -419,8 +419,9 @@ function renderGenPanel(summary){
   const done = summary.status === "completed";
   const failed = summary.status === "failed";
   $("btnGenCancel").classList.toggle("hidden", !running);
-  if (!running && done && !generationStartedThisView){
-    // 页面刚打开时（尚未在本页发起生成）不展示上一个会话遗留的生成面板。
+  if (!running && !generationStartedThisView){
+    // 页面刚打开时（尚未在本页发起生成）不自动弹出上一次会话遗留的
+    // 完成/失败/已取消工作台；运行中的生成（running）仍会显示进度。
     resetGenPanel();
     return;
   }
