@@ -151,6 +151,25 @@
 .skill-chip.disabled{opacity:.45;cursor:not-allowed}
 .skill-bar-hint{font-size:11px;color:var(--muted);white-space:nowrap}
 .skill-bar-hint.err{color:var(--danger)}
+/* ---- Skill 生成工作台（方案 B：独立弹层，底部不再堆叠生成内容） ---- */
+.bench{background:var(--panel);border:1px solid var(--line);border-radius:16px;width:min(940px,96vw);max-height:88vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 26px 80px rgba(0,0,0,.6)}
+.bench-head{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.bench-title{color:var(--accent2);font-weight:700;font-size:13.5px}
+.bench-title .gid{color:var(--warn);font-weight:600}
+.bench-steps{display:flex;gap:4px;align-items:center;flex-wrap:wrap;flex:1;min-width:180px}
+.bench-body{flex:1;display:flex;min-height:0}
+.bench-side{width:min(330px,34%);flex-shrink:0;border-right:1px solid var(--line);background:var(--panel2);display:flex;flex-direction:column;min-height:0}
+.bench-side-title{display:flex;flex-direction:column;gap:2px;padding:9px 12px 7px;font-size:11.5px;color:var(--accent2);font-weight:700;border-bottom:1px solid var(--line)}
+.bench-side-hint{font-size:10px;color:var(--muted);font-weight:400}
+.bench-side .gp-log{flex:1;height:auto;max-height:none;border-radius:0;border:none;padding:9px 12px}
+.bench-main{flex:1;min-width:0;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+.bench-status{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12.5px;min-height:44px}
+.bench-spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--warn);border-radius:50%;animation:benchrot .9s linear infinite;flex-shrink:0}
+@keyframes benchrot{to{transform:rotate(360deg)}}
+.bench-main #gpAsk{border:1px solid rgba(79,140,255,.45);border-radius:12px;padding:12px 14px;background:rgba(79,140,255,.05)}
+.bench-main .gp-ask-row{display:flex;flex-direction:column;gap:9px}
+.bench-main #gpResult{align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;border:1px solid rgba(34,211,165,.4);border-radius:12px;background:rgba(34,211,165,.06);font-size:13px}
+.bench-main #gpDraft{margin:0;border:1px solid var(--line);border-radius:12px;max-height:46vh;overflow:auto;font-size:11.5px;padding:12px 14px}
 </style>
 </head>
 <body>
@@ -185,41 +204,6 @@
 
 <footer>
   <div class="f-inner">
-    <div id="genPanel" class="hidden">
-      <div class="gp-head">
-        <span class="gp-dot" id="gpDot"></span>
-        <div class="gp-meta">
-          <div class="gp-title">Skill 生成 · 独立会话 <span class="gp-genid" id="gpGenId">连接中…</span></div>
-          <div class="gp-sub">与原会话相互隔离：只读取其历史；过程、日志与草稿只显示在此面板，聊天框保持零写入</div>
-        </div>
-        <span class="gp-state" id="gpState">准备中…</span>
-        <div class="gp-steps" id="gpSteps"></div>
-        <button class="chip gp-collapse" id="btnGpCollapse">收起</button>
-      </div>
-      <div id="gpBody">
-        <div class="gp-log" id="gpLog"></div>
-        <div id="gpAsk" class="hidden">
-          <div class="gp-ask-title">请确认要总结成 Skill 的内容</div>
-          <div class="gp-question" id="gpQuestion"></div>
-          <div class="gp-ask-row">
-            <textarea id="gpCorr" class="gp-corr" rows="2" placeholder="如果范围不完全对，在这里写纠正意见"></textarea>
-            <div class="gp-ask-btns">
-              <button class="chip" id="btnGpCorr">按纠正继续</button>
-              <button class="chip gp-ok-btn" id="btnGpAgree">同意，按此生成</button>
-            </div>
-          </div>
-          <div class="gp-ask-err hidden" id="gpAskErr"></div>
-        </div>
-        <div id="gpResult" class="hidden">
-          <span class="gp-ok">✅ 生成完成，草稿已入库</span>
-          <span class="hint">skill：<b id="gpSkillId"></b></span>
-          <span class="file-ref" id="gpFileRef" title=""></span>
-          <button class="chip" id="btnGpDraft">查看草稿</button>
-          <button class="chip" id="btnGpClose">关闭面板</button>
-        </div>
-        <pre id="gpDraft" class="hidden"></pre>
-      </div>
-    </div>
     <div class="skill-bar" id="skillBar">
       <span class="skill-bar-label">Skill</span>
       <div class="skill-chips" id="skillChips"></div>
@@ -297,19 +281,23 @@ const GEN_LABEL = {
 const genLogItems = new Map();
 let genRunKey = "";
 let lastAskId = "";
+let genBenchDismissed = false;
 
 function resetGenPanel(){
   const chip = $("genChip");
-  $("genPanel").classList.add("hidden");
+  $("genBench").style.display = "none";
+  genBenchDismissed = false;
   $("lockBar").classList.add("hidden");
   chip.classList.add("hidden");
   chip.textContent = "";
-  $("gpBody").classList.remove("hidden");
   $("gpLog").innerHTML = "";
   $("gpSteps").innerHTML = "";
   $("gpState").textContent = "";
   $("gpGenId").textContent = "连接中…";
   $("gpDot").classList.remove("idle");
+  $("benchStatus").classList.remove("hidden");
+  $("benchStatus").style.color = "";
+  $("benchStatusText").textContent = "准备中…";
   $("gpResult").classList.add("hidden");
   $("gpDraft").classList.add("hidden");
   $("gpDraft").textContent = "";
@@ -319,6 +307,26 @@ function resetGenPanel(){
   genLogItems.clear();
   genRunKey = "";
   lastAskId = "";
+}
+
+function benchVisible(){
+  return $("genBench").style.display === "flex";
+}
+
+function openBench(){
+  genBenchDismissed = false;
+  $("genBench").style.display = "flex";
+  $("lockBar").classList.add("hidden");
+}
+
+function closeBench(){
+  genBenchDismissed = true;
+  $("genBench").style.display = "none";
+  const summary = state.summary;
+  if (summary && summary.status === "running"){
+    $("genIdText").textContent = summary.gen_id || "g-…";
+    $("lockBar").classList.remove("hidden");
+  }
 }
 
 function genLogLine(item){
@@ -342,55 +350,63 @@ function genLogLine(item){
 }
 
 function renderGenPanel(summary){
-  const panel = $("genPanel");
   if (!summary){
     resetGenPanel();
     return;
   }
-  if (summary.status === "running"){
-    generationStartedThisView = true;
-  } else if (!generationStartedThisView && summary.status === "completed"){
+  const running = summary.status === "running";
+  const done = summary.status === "completed";
+  const failed = summary.status === "failed";
+  if (!running && done && !generationStartedThisView){
     // 页面刚打开时（尚未在本页发起生成）不展示上一个会话遗留的生成面板。
     resetGenPanel();
     return;
   }
-  panel.classList.remove("hidden");
-  const running = summary.status === "running";
+  if (running) generationStartedThisView = true;
   const gid = summary.gen_id || "…";
   const key = (summary.gen_id || "pending") + "|" + (summary.attempt || 1);
   if (key !== genRunKey){
     genRunKey = key;
     genLogItems.clear();
     $("gpLog").innerHTML = "";
+    genBenchDismissed = false;
   }
+  if (running && !genBenchDismissed) openBench();
+  if (!running && (done || failed || generationStartedThisView)) openBench();
   $("gpGenId").textContent = gid;
   $("gpDot").classList.toggle("idle", !running);
   const prog = summary.progress || "starting";
-  const dispProg = summary.status === "completed" ? "done" : (running ? prog : "");
+  const dispProg = done ? "done" : (running ? prog : "");
   const di = GEN_STEPS.indexOf(dispProg);
   $("gpSteps").innerHTML = GEN_STEPS.map((k, i) => {
     let cls = "gp-step";
+    if (failed) return `<span class="gp-step">${GEN_LABEL[k]}</span>`;
     if (di >= 0 && i < di) cls += " done";
     if (di >= 0 && i === di) cls += running ? " on" : " done";
     return `<span class="${cls}">${GEN_LABEL[k]}</span>`;
   }).join("");
   $("gpState").textContent = running
     ? (GEN_LABEL[prog] || "处理中…")
-    : summary.status === "completed" ? "已完成" : "失败";
+    : done ? "已完成" : "失败";
   const chip = $("genChip");
   if (running){
-    $("lockBar").classList.remove("hidden");
     $("genIdText").textContent = summary.gen_id || "g-…";
-    chip.textContent = "生成会话 " + gid + " · running_generate";
+    chip.textContent = "生成会话 " + gid + " · " + (GEN_LABEL[prog] || "运行中");
     chip.className = "chip gen";
   } else {
     $("lockBar").classList.add("hidden");
-    if (summary.status === "completed"){
+    if (done){
       chip.textContent = "生成会话 " + (summary.gen_id || "") + " · reviewed（草稿）";
       chip.className = "chip gen done";
     } else {
       chip.classList.add("hidden");
     }
+  }
+  if (running && !benchVisible()){
+    $("genIdText").textContent = summary.gen_id || "g-…";
+    $("lockBar").classList.remove("hidden");
+  } else {
+    $("lockBar").classList.add("hidden");
   }
   (summary.log || []).forEach(genLogLine);
   const ask = summary.pending_question;
@@ -400,15 +416,24 @@ function renderGenPanel(summary){
     $("gpCorr").value = "";
     $("gpAskErr").classList.add("hidden");
   }
-  if (ask && running){
-    $("gpAsk").classList.remove("hidden");
+  const askActive = !!(ask && running);
+  $("gpAsk").classList.toggle("hidden", !askActive);
+  $("benchStatus").classList.toggle("hidden", askActive || done || failed);
+  $("benchStatus").style.color = "";
+  if (askActive){
     $("gpQuestion").textContent = ask.question || "请确认总结范围。";
     $("gpState").textContent = "等待你的确认…";
+    $("benchStatusText").textContent = "";
+  } else if (running){
+    $("benchStatusText").textContent = GEN_LABEL[prog] || "处理中…";
+  } else if (failed){
+    $("benchStatusText").textContent = "生成失败：" + (summary.error || "未知错误");
+    $("benchStatus").style.color = "var(--danger)";
   } else {
-    $("gpAsk").classList.add("hidden");
+    $("benchStatusText").textContent = "";
   }
-  const done = summary.status === "completed";
   $("gpResult").classList.toggle("hidden", !done);
+  $("gpDraft").classList.add("hidden");
   if (done){
     $("gpSkillId").textContent = summary.skill_id || "";
     const path = summary.file_path || "";
@@ -695,14 +720,9 @@ async function poll(force){
     $("dot").className = "dot"; $("connText").textContent = "未连接编排服务";
   }
 }
-$("btnGpCollapse").onclick = () => $("gpBody").classList.toggle("hidden");
+$("btnBenchClose").onclick = closeBench;
+$("genChip").onclick = () => { if (state.summary) openBench(); };
 $("btnGpDraft").onclick = () => $("gpDraft").classList.toggle("hidden");
-$("btnGpClose").onclick = () => {
-  $("genPanel").classList.add("hidden");
-  const chip = $("genChip");
-  chip.classList.add("hidden");
-  chip.className = "chip gen hidden";
-};
 async function answerDemoQuestion(value){
   const errBox = $("gpAskErr");
   errBox.classList.add("hidden");
@@ -734,6 +754,48 @@ loadSkills();
   <div class="modal file-modal">
     <div class="modal-head"><b>文件预览</b><button class="chip" onclick="closeFilePreview()">关闭</button></div>
     <div class="modal-body" id="fileBody"></div>
+  </div>
+</div>
+
+<div class="overlay" id="genBench" style="display:none" onclick="if(event.target===this)closeBench()">
+  <div class="bench">
+    <div class="bench-head">
+      <span class="gp-dot" id="gpDot"></span>
+      <div class="bench-title">Skill 生成工作台 <span class="gid" id="gpGenId">连接中…</span></div>
+      <div class="bench-steps" id="gpSteps"></div>
+      <span class="gp-state" id="gpState">准备中…</span>
+      <button class="chip" id="btnBenchClose" title="收起到后台，生成不中断">收起到后台</button>
+    </div>
+    <div class="bench-body">
+      <div class="bench-side">
+        <div class="bench-side-title">运行过程 <span class="bench-side-hint">与原会话隔离 · 只读引用历史</span></div>
+        <div class="gp-log" id="gpLog"></div>
+      </div>
+      <div class="bench-main">
+        <div class="bench-status" id="benchStatus">
+          <span class="bench-spin"></span><span id="benchStatusText">准备中…</span>
+        </div>
+        <div id="gpAsk" class="hidden">
+          <div class="gp-ask-title">请确认要总结成 Skill 的内容</div>
+          <div class="gp-question" id="gpQuestion"></div>
+          <div class="gp-ask-row">
+            <textarea id="gpCorr" class="gp-corr" rows="2" placeholder="如果范围不完全对，在这里写纠正意见"></textarea>
+            <div class="gp-ask-btns">
+              <button class="chip" id="btnGpCorr">按纠正继续</button>
+              <button class="chip gp-ok-btn" id="btnGpAgree">同意，按此生成</button>
+            </div>
+          </div>
+          <div class="gp-ask-err hidden" id="gpAskErr"></div>
+        </div>
+        <div id="gpResult" class="hidden">
+          <span class="gp-ok">✅ 生成完成，草稿已入库</span>
+          <span class="hint">skill：<b id="gpSkillId"></b></span>
+          <span class="file-ref" id="gpFileRef" title=""></span>
+          <button class="chip" id="btnGpDraft">查看草稿</button>
+        </div>
+        <pre id="gpDraft" class="hidden"></pre>
+      </div>
+    </div>
   </div>
 </div>
 
