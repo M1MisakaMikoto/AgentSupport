@@ -6,7 +6,10 @@ import pytest
 from session_runner.adapters.trae import (
     TraeExecutionAdapter,
     TraeRuntimeSettings,
+    _first_real_assistant_text,
     _file_reference_section,
+    _is_quick_talk,
+    _looks_like_meta_apology,
     _resolve_system_prompt,
     _skill_prompt_section,
 )
@@ -97,6 +100,40 @@ def test_file_reference_section_uses_real_workspace_ref_example():
 def test_file_reference_section_none_without_flag():
     assert _file_reference_section({"workspace_ref": "/workspace-data/w-123"}) is None
     assert _file_reference_section({"file_ref_format": False}) is None
+
+
+def test_quick_talk_classification():
+    assert _is_quick_talk("你是谁")
+    assert _is_quick_talk("你好")
+    assert _is_quick_talk("hello")
+    assert _is_quick_talk("你能做什么？")
+    assert not _is_quick_talk(
+        "修复 shop.py 的 N+1 查询：list_orders() 循环内逐行查询用户，请用批量查询修复"
+    )
+    assert not _is_quick_talk("")
+
+
+def test_meta_apology_detection():
+    assert _looks_like_meta_apology("抱歉，刚才的问候回复没有正确收尾。我现在来完成任务。")
+    assert not _looks_like_meta_apology("你好！我是你的 AI 智能编程助手，可以帮你处理文档等任务。")
+
+
+def test_first_real_assistant_text_skips_meta_apology():
+    payload = {
+        "llm_interactions": [
+            {
+                "response": {
+                    "content": "你好！我是你的 AI 智能编程助手，可以帮你处理文档等任务。"
+                }
+            },
+            {
+                "response": {
+                    "content": "抱歉，刚才的问候回复没有正确收尾。我现在来完成任务。"
+                }
+            },
+        ]
+    }
+    assert "AI 智能编程助手" in _first_real_assistant_text(payload)
 
 
 def test_blank_context_bundle_prompt_is_ignored(tmp_path):

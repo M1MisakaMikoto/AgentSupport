@@ -64,6 +64,80 @@ PRE_ASK_BLOCKED_TOOLS = (
     "task_done",
 )
 
+_QUICK_TALK_HINTS = (
+    "你好",
+    "你是谁",
+    "你叫什么",
+    "介绍下你自己",
+    "介绍一下你自己",
+    "你能做什么",
+    "你会做什么",
+    "hello",
+    "hi",
+    "hey",
+    "谢谢",
+    "感谢",
+    "再见",
+    "bye",
+    "在吗",
+)
+
+
+def _is_quick_talk(task: str) -> bool:
+    """Whether a task looks like greeting / quick Q&A rather than a job request."""
+
+    text = (task or "").strip()
+    if not text or len(text) > 120:
+        return False
+    lowered = text.lower()
+    if any(hint in lowered for hint in _QUICK_TALK_HINTS):
+        return True
+    # Short Chinese/English question sentences (no file/tool keywords).
+    if len(text) <= 60 and ("？" in text or "?" in text or "吗" in text or "呢" in text):
+        if not any(k in lowered for k in ("文件", "工具", "workspace", "创建", "修复", "写", "test", "修复")):
+            return True
+    return False
+
+
+def _looks_like_meta_apology(text: str) -> bool:
+    """Detect a model turn that only apologizes about the previous turn's ending."""
+
+    value = (text or "").strip()
+    if not value or len(value) > 180:
+        return False
+    return (
+        "没有正确收尾" in value
+        or ("抱歉" in value and "收尾" in value)
+        or ("抱歉" in value and "刚才" in value and "任务" in value)
+    )
+
+
+def _interaction_text(response: Any) -> str:
+    """Extract the assistant text of one LLM response (string or blocks)."""
+
+    content = (response or {}).get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text") or ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _first_real_assistant_text(payload: dict[str, Any]) -> str:
+    """Return the first substantive assistant text that is not a meta apology."""
+
+    for interaction in payload.get("llm_interactions") or []:
+        text = _interaction_text(interaction.get("response") or {})
+        if text and not _looks_like_meta_apology(text):
+            return text
+    return ""
+
 
 @dataclass(frozen=True)
 class TraeRuntimeSettings:
@@ -697,23 +771,29 @@ class TraeExecutionAdapter:
             # many exchanges. Insert earlier rounds' dialogue in front of the
             # current task message so the agent sees the full session history.
             self.agent.agent._initial_messages[1:1] = history
+        if _is_quick_talk(task):
+            # Greeting / quick Q&A: the agent may answer without calling
+            # task_done in the same turn. Allow a pure-text reply to complete
+            # so it is not pushed into a second "meta apology" turn.
+            setattr(self.agent.agent, "complete_on_text_only", True)
         execution = await self.agent.agent.execute_task()
         self._emit_trajectory()
         if not execution.success:
             step_error = execution.steps[-1].error if execution.steps else None
             raise RuntimeError(step_error or execution.final_result or "Trae execution failed")
         content = execution.final_result or ""
-        if not content:
-            content = self._fallback_final_content()
+        degraded = _looks_like_meta_apology(content)
+        if not content or degraded:
+            content = self._fallback_final_content(prefer_first=degraded)
             if content:
                 self._warn_content_degradation(
                     "fallback",
-                    "final result was empty; recovered the last non-empty assistant text",
+                    "final result was empty/degraded; recovered an earlier assistant text",
                 )
             else:
                 self._warn_content_degradation(
                     "empty",
-                    "final result is empty and no fallback text is available",
+                    "final result is empty/degraded and no fallback text is available",
                 )
         result = {
             "status": "completed",
@@ -727,7 +807,7 @@ class TraeExecutionAdapter:
             self.emit("message", {"content": content})
         return result
 
-    def _fallback_final_content(self) -> str:
+    def _fallback_final_content(self, *, prefer_first: bool = False) -> str:
         """Recover text the model produced before a content-less task_done.
 
         Trae's completion check only looks for a ``task_done`` tool call; a
@@ -742,11 +822,12 @@ class TraeExecutionAdapter:
             payload = json.loads(self.trajectory.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             return ""
+        if prefer_first:
+            return _first_real_assistant_text(payload)
         for interaction in reversed(payload.get("llm_interactions") or []):
-            response = interaction.get("response") or {}
-            content = response.get("content")
-            if isinstance(content, str) and content.strip():
-                return content
+            text = _interaction_text(interaction.get("response") or {})
+            if text:
+                return text
         return ""
 
     def _warn_content_degradation(self, kind: str, detail: str) -> None:
