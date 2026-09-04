@@ -277,11 +277,23 @@ class AgentSupportService(
                 ),
                 key=lambda event: event.occurred_at,
             )
+        silent_run_ids = {
+            str(conv.run.run_id)
+            for conv in conversations
+            if getattr(conv, "mode", None) == ConversationMode.SILENT
+            and conv.run is not None
+            and conv.run.run_id is not None
+        }
         # Earlier rounds' instructions live on the conversation rows, not the
         # event stream; inject them as user messages so the agent sees the
         # full dialogue history of the session.
         prior = sorted(
-            (conv for conv in conversations if conv.id != conversation.id),
+            (
+                conv
+                for conv in conversations
+                if conv.id != conversation.id
+                and getattr(conv, "mode", None) != ConversationMode.SILENT
+            ),
             key=lambda conv: conv.created_at,
         )
         injected = [
@@ -295,7 +307,12 @@ class AgentSupportService(
             for conv in prior
         ]
         merged = sorted(
-            injected + [event.model_dump(mode="json") for event in events],
+            injected
+            + [
+                event.model_dump(mode="json")
+                for event in events
+                if not silent_run_ids or str(event.run_id) not in silent_run_ids
+            ],
             key=lambda event: event.get("occurred_at") or "",
         )
         return merged

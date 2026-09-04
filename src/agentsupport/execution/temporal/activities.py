@@ -28,7 +28,7 @@ from ...bootstrap.container import (
     build_skill_provider,
 )
 from ...bootstrap.settings import Settings, settings
-from ...domain import TERMINAL_STATES, Conversation, ExecutionState
+from ...domain import TERMINAL_STATES, Conversation, ConversationMode, ExecutionState
 
 ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
@@ -157,6 +157,13 @@ def _build_run_request(
     )
     tool_policy = request.get("tool_policy") or {}
     session_conversations = ctx.repository.list_conversations(session_id=session.id)
+    silent_run_ids = {
+        str(conv.run.run_id)
+        for conv in session_conversations
+        if getattr(conv, "mode", None) == ConversationMode.SILENT
+        and conv.run is not None
+        and conv.run.run_id is not None
+    }
     injected_instructions = [
         {
             "type": "message",
@@ -169,13 +176,16 @@ def _build_run_request(
             (c for c in session_conversations if c.id != conversation.id),
             key=lambda c: c.created_at,
         )
+        if getattr(conv, "mode", None) != ConversationMode.SILENT
+    ]
+    session_events = [
+        event
+        for event in ctx.repository.list_session_events(session.id)
+        if not silent_run_ids or str(event.run_id) not in silent_run_ids
     ]
     recent_events = sorted(
         injected_instructions
-        + [
-            event.model_dump(mode="json")
-            for event in ctx.repository.list_session_events(session.id)
-        ],
+        + [event.model_dump(mode="json") for event in session_events],
         key=lambda event: event.get("occurred_at") or "",
     )
     return {

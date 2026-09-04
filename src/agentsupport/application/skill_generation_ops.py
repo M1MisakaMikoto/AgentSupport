@@ -84,6 +84,21 @@ class SkillGenerationOpsMixin:
         session = self.get_session(session_id)
         self._check_generation_tenant(session.tenant_id, tenant_id)
         events = self.session_events(session_id)
+        if self.repository is not None:
+            conversations = self.repository.list_conversations(session_id=session_id)
+            silent_run_ids = {
+                str(conv.run.run_id)
+                for conv in conversations
+                if getattr(conv, "mode", None) == ConversationMode.SILENT
+                and conv.run is not None
+                and conv.run.run_id is not None
+            }
+            if silent_run_ids:
+                events = [
+                    event
+                    for event in events
+                    if str(event.run_id) not in silent_run_ids
+                ]
         request = SkillGenerationRequest(
             session_id=session_id,
             tenant_id=session.tenant_id,
