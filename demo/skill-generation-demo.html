@@ -170,6 +170,9 @@
 .bench-main .gp-ask-row{display:flex;flex-direction:column;gap:9px}
 .bench-main #gpResult{align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;border:1px solid rgba(34,211,165,.4);border-radius:12px;background:rgba(34,211,165,.06);font-size:13px}
 .bench-main #gpDraft{margin:0;border:1px solid var(--line);border-radius:12px;max-height:46vh;overflow:auto;font-size:11.5px;padding:12px 14px}
+.gp-cancel-btn{border-color:rgba(248,113,113,.55)!important;color:var(--danger)!important;background:rgba(248,113,113,.08)!important}
+.gp-cancel-btn:hover{border-color:var(--danger)!important;background:rgba(248,113,113,.15)!important}
+.cont-btn{border-color:var(--accent2);color:var(--accent2);background:rgba(34,211,165,.1);margin:2px 0 8px}
 </style>
 </head>
 <body>
@@ -182,6 +185,7 @@
       <button class="chip" id="btnMore" onclick="toggleMoreMenu()">⋯ 更多</button>
       <div class="more-menu" id="moreMenu">
         <button onclick="openHistory()">历史会话</button>
+        <button onclick="newSession()">新建会话</button>
         <button onclick="openSettings()">新会话设置</button>
       </div>
     </div>
@@ -224,6 +228,7 @@
       <div class="bench-title">Skill 生成工作台 <span class="gid" id="gpGenId">连接中…</span></div>
       <div class="bench-steps" id="gpSteps"></div>
       <span class="gp-state" id="gpState">准备中…</span>
+      <button class="chip gp-cancel-btn" id="btnGenCancel" title="停止本次生成（原会话不受影响）">取消生成</button>
       <button class="chip" id="btnBenchClose" title="收起到后台，生成不中断">收起到后台</button>
     </div>
     <div class="bench-body">
@@ -324,6 +329,7 @@ const genLogItems = new Map();
 let genRunKey = "";
 let lastAskId = "";
 let genBenchDismissed = false;
+let lastSkillRefreshKey = "";
 
 function resetGenPanel(){
   const chip = $("genChip");
@@ -399,6 +405,7 @@ function renderGenPanel(summary){
   const running = summary.status === "running";
   const done = summary.status === "completed";
   const failed = summary.status === "failed";
+  $("btnGenCancel").classList.toggle("hidden", !running);
   if (!running && done && !generationStartedThisView){
     // 页面刚打开时（尚未在本页发起生成）不展示上一个会话遗留的生成面板。
     resetGenPanel();
@@ -469,7 +476,9 @@ function renderGenPanel(summary){
   } else if (running){
     $("benchStatusText").textContent = GEN_LABEL[prog] || "处理中…";
   } else if (failed){
-    $("benchStatusText").textContent = "生成失败：" + (summary.error || "未知错误");
+    $("benchStatusText").textContent = summary.progress === "cancelled"
+      ? "已取消本次生成，可以继续原会话"
+      : "生成失败：" + (summary.error || "未知错误");
     $("benchStatus").style.color = "var(--danger)";
   } else {
     $("benchStatusText").textContent = "";
@@ -482,6 +491,10 @@ function renderGenPanel(summary){
     $("gpFileRef").textContent = path.split(/[\\/]/).pop() || path;
     $("gpFileRef").title = path;
     if (summary.content) $("gpDraft").textContent = summary.content;
+    if (lastSkillRefreshKey !== key){
+      lastSkillRefreshKey = key;
+      loadSkills();
+    }
   }
 }
 
@@ -651,6 +664,24 @@ function openHistory(){
 }
 function closeHistory(){ historyOpen = false; $("historyOverlay").style.display = "none"; }
 
+async function newSession(){
+  closeMoreMenu();
+  if (state.status === "running_round" || state.status === "running_generate"){
+    sys("当前有轮次/生成正在运行，请先结束或取消后再新建会话");
+    return;
+  }
+  if (!confirm("新建会话将清空当前聊天区（旧会话会保留在历史里），继续？")) return;
+  try{
+    state = await api("/api/start", startBody());
+    started = true;
+    generationStartedThisView = false;
+    pendingTask = null;
+    activeSkills = state.active_skills || [];
+    const ex = $("examples"); if (ex) ex.classList.add("hidden");
+    await poll(true);
+  }catch(e){ sys("新建会话失败：" + e.message); }
+}
+
 function toggleMoreMenu(){ const m = $("moreMenu"); if(m) m.classList.toggle("show"); }
 function closeMoreMenu(){ const m = $("moreMenu"); if(m) m.classList.remove("show"); }
 function openSettings(){ closeMoreMenu(); $("settingsOverlay").style.display = "flex"; }
@@ -691,7 +722,8 @@ async function toggleHistoryDetail(div, sessionId){
   try{
     const resp = await fetch("/api/history/" + sessionId);
     const s = await resp.json();
-    let html = "";
+    let html = '<button class="chip cont-btn" onclick="continueSession(\'' + sessionId + '\')">继续此会话</button>';
+    html += '<div class="hint">继续后会载入为当前会话，可直接接着发指令。</div>';
     (s.rounds||[]).forEach(r => {
       html += '<div class="hist-round"><div class="hist-msg"><b>测试者：</b>' + esc(r.task || "") + '</div>';
       if(r.message) html += '<div class="hist-msg"><b>Agent：</b>' + esc(r.message) + '</div>';
@@ -700,6 +732,24 @@ async function toggleHistoryDetail(div, sessionId){
     });
     detail.innerHTML = html || '<div class="hint">该会话暂无轮次。</div>';
   }catch(e){ detail.innerHTML = '<div class="hint">加载失败：' + esc(e.message) + '</div>'; }
+}
+
+async function continueSession(sessionId){
+  if (state.status === "running_round" || state.status === "running_generate"){
+    sys("当前有轮次/生成正在运行，请先结束或取消后再切换会话");
+    return;
+  }
+  if (!confirm("切换到历史会话 " + sessionId.slice(0, 8) + " 并继续？当前会话保留在历史中。")) return;
+  try{
+    state = await api("/api/sessions/" + sessionId + "/continue", {});
+    started = true;
+    generationStartedThisView = false;
+    pendingTask = null;
+    activeSkills = state.active_skills || [];
+    closeHistory();
+    renderMessages();
+    sys("已载入历史会话 " + sessionId.slice(0, 8) + "，可以直接继续发指令");
+  }catch(e){ sys("切换会话失败：" + e.message); }
 }
 
 $("btnSend").onclick = send;
@@ -764,6 +814,15 @@ async function poll(force){
 }
 $("btnBenchClose").onclick = closeBench;
 $("genChip").onclick = () => { if (state.summary) openBench(); };
+$("btnGenCancel").onclick = async () => {
+  const s = state.summary;
+  if (!s || s.status !== "running") return;
+  if (!confirm("确定取消本次 Skill 生成？原会话内容不受影响。")) return;
+  try{
+    await api("/api/cancel-generation", {});
+    await poll(true);
+  }catch(e){ sys("取消失败：" + e.message); }
+};
 $("btnGpDraft").onclick = () => $("gpDraft").classList.toggle("hidden");
 async function answerDemoQuestion(value){
   const errBox = $("gpAskErr");

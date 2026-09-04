@@ -100,6 +100,7 @@ class DemoState:
         self.summary: dict[str, Any] | None = None
         self.pending_approval: dict[str, Any] | None = None
         self.live: dict[str, Any] | None = None
+        self.generation_busy = False
         self._lock = threading.Lock()
 
     def snapshot(self) -> dict[str, Any]:
@@ -771,7 +772,7 @@ def _run_activation_case(label: str, file_name: str, skill_id: str | None) -> di
     }
 
 
-def _run_summarize() -> None:
+def _run_summarize_impl() -> None:
     """Generate SKILL.md, auto-publish and report the file.
 
     The real model is occasionally flaky (finishes without embedding the
@@ -785,8 +786,11 @@ def _run_summarize() -> None:
     last_error: str | None = None
     summary: dict[str, Any] | None = None
     for attempt in range(1, 4):
+        if summary is not None and summary.get("cancel_requested"):
+            return
         try:
             assert STATE.session_id is not None
+            STATE.status = "running_generate"
             with STATE._lock:
                 summary = {
                     "progress": "analyzing",
@@ -795,6 +799,8 @@ def _run_summarize() -> None:
                     "file_path": None,
                     "attempt": attempt,
                     "gen_id": None,
+                    "conversation_id": None,
+                    "cancel_requested": False,
                     "log": [],
                 }
                 STATE.summary = summary
@@ -810,6 +816,7 @@ def _run_summarize() -> None:
             with STATE._lock:
                 if STATE.summary is summary:
                     summary["gen_id"] = gen_id
+                    summary["conversation_id"] = conversation_id
             _gen_note(
                 summary,
                 "ok",
@@ -822,6 +829,10 @@ def _run_summarize() -> None:
             seen_seq = 0
             awaiting_question = False
             while time.time() < deadline:
+                if summary.get("cancel_requested"):
+                    _gen_note(summary, "warn", "已取消本次生成")
+                    STATE.status = "waiting_next"
+                    return
                 status = _get(f"/sessions/{STATE.session_id}/skills/generations/{gid}")
                 seen_seq = _merge_generation_log(summary, conversation_id, seen_seq)
                 question = _pending_generation_question(conversation_id)
@@ -837,6 +848,9 @@ def _run_summarize() -> None:
                 if status["status"] in ("completed", "failed"):
                     break
                 time.sleep(POLL_INTERVAL)
+            if summary.get("cancel_requested"):
+                STATE.status = "waiting_next"
+                return
             if status.get("status") != "completed":
                 last_error = status.get("error") or f"generation failed on attempt {attempt}"
                 _gen_note(summary, "warn", f"生成未完成：{last_error}")
@@ -906,6 +920,18 @@ def _run_summarize() -> None:
             summary.update({"progress": "failed", "status": "failed", "error": last_error})
         _gen_note(summary, "warn", f"总结失败：{last_error}")
     STATE.status = "error"
+
+
+def _run_summarize() -> None:
+    """Wrapper that marks the generation thread busy until it fully exits."""
+
+    with STATE._lock:
+        STATE.generation_busy = True
+    try:
+        _run_summarize_impl()
+    finally:
+        with STATE._lock:
+            STATE.generation_busy = False
 
 
 def _run_activation() -> None:
@@ -1031,6 +1057,8 @@ def skills() -> list[dict[str, Any]]:
 @app.post("/api/start")
 def start(body: StartBody) -> dict[str, Any]:
     global _current_approver
+    if STATE.generation_busy or STATE.status in ("running_round", "running_generate"):
+        raise RuntimeError("cannot start a new session while a round/generation is running")
     STATE.auto_approve = body.auto_approve
     workspace = _post("/workspaces", {"name": "demo"})
     config = None
@@ -1138,6 +1166,8 @@ def approve_tool() -> dict[str, Any]:
 
 @app.post("/api/summarize")
 def summarize() -> dict[str, Any]:
+    if STATE.generation_busy:
+        raise RuntimeError("generation is still shutting down; cancel or wait a moment")
     if STATE.status not in ("waiting_next", "reviewed", "error"):
         raise RuntimeError(f"cannot summarize from {STATE.status}")
     STATE.summary = {
@@ -1147,6 +1177,8 @@ def summarize() -> dict[str, Any]:
         "file_path": None,
         "attempt": 1,
         "gen_id": None,
+        "conversation_id": None,
+        "cancel_requested": False,
         "log": [],
     }
     STATE.status = "running_generate"
@@ -1182,6 +1214,81 @@ def answer_question(body: AnswerBody) -> dict[str, Any]:
                     "text": f"你已回复：{body.value}",
                 }
             )
+    return STATE.snapshot()
+
+
+@app.post("/api/cancel-generation")
+def cancel_generation() -> dict[str, Any]:
+    """Cancel the running skill-generation conversation and stop retries."""
+
+    summary = STATE.summary
+    if not summary or summary.get("status") != "running":
+        raise RuntimeError("no running generation")
+    conversation_id = summary.get("conversation_id") or (
+        (summary.get("pending_question") or {}).get("conversation_id")
+    )
+    if not conversation_id:
+        raise RuntimeError("generation conversation is not tracked yet")
+    resp = client.post(
+        f"{AGENTSUPPORT_URL}/conversations/{conversation_id}/cancel",
+        headers={"X-Tenant-Id": TENANT},
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(resp.text[:300])
+    with STATE._lock:
+        summary["cancel_requested"] = True
+        summary.pop("pending_question", None)
+        summary.update(
+            {
+                "progress": "cancelled",
+                "status": "failed",
+                "error": "用户取消",
+            }
+        )
+    _gen_note(summary, "warn", "已收到取消请求，正在停止生成会话…")
+    STATE.status = "waiting_next"
+    STATE.live = None
+    return STATE.snapshot()
+
+
+@app.post("/api/sessions/{session_id}/continue")
+def continue_session(session_id: str) -> dict[str, Any]:
+    """Load a history session as the active demo session and keep chatting."""
+
+    global _current_approver
+    if STATE.generation_busy or STATE.status in ("running_round", "running_generate"):
+        raise RuntimeError("cannot switch session while a round/generation is running")
+    session = _get(f"/sessions/{session_id}", tenant=TENANT)
+    if not session:
+        raise RuntimeError("session not found")
+    tenant = session.get("tenant_id")
+    if tenant not in (None, TENANT):
+        raise RuntimeError("session belongs to another tenant")
+    config = session.get("config") or {}
+    skills: list[str] = []
+    for entry in config.get("skills") or []:
+        if isinstance(entry, dict) and entry.get("enabled") and entry.get("skill_id"):
+            skills.append(str(entry["skill_id"]))
+    history = _session_history_summary(session)
+    STATE.session_id = session_id
+    STATE.rounds = history["rounds"]
+    STATE.round = len(STATE.rounds)
+    STATE.active_skills = skills
+    STATE.status = "waiting_next"
+    STATE.error = None
+    STATE.live = None
+    STATE.generation = None
+    STATE.summary = None
+    STATE.draft = None
+    STATE.review = None
+    STATE.activation = None
+    STATE.pending_approval = None
+    _live_approved.clear()
+    if _current_approver is not None:
+        _current_approver.stop()
+    _current_approver = Approver(session_id)
+    _current_approver.start()
     return STATE.snapshot()
 
 
