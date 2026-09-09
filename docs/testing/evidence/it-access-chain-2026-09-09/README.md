@@ -120,9 +120,25 @@ agent 在后续轮次中能直接 `excel_edit_tool read` 到该文件（见 3.2�
   3. 报告模板若含表格/LOGO/固定版式，需确认是否超出当前 word 工具能力（当前仅标题+段落）；
   4. 先给脱敏小样复跑本流程，再放大到全量。
 
+## 6 补测（csv+grep 引导版，2026-09-09）
+
+在新增 `excel_edit_tool to_csv` 与"只读 bash grep 检索"引导后，复用同一样例与口径重跑 1→4：
+
+| 环节 | 结果 | 耗时/证据 |
+| --- | --- | --- |
+| 1 上传 | ✅ | `/api/upload` 成功（size 7101） |
+| 2 多轮指导（7 轮，csv+grep） | ✅ | 28/20/20/40/28/16/72 秒/轮；第 6 轮不读文件完整复述 4 口径与保留集 {9–16} |
+| 3 总结成 Skill | ✅ | attempt 1 完成（138.5s），skill `abnormal-access-log-filtering-report`（1406 字，含 csv/grep 检索方法，task_done/审批 0 提及） |
+| 4 启用 Skill 自动完成 | ✅ | S2 单轮 90.3s；docx 独立核验：标题✅、四节✅、高危 8/8、低风险 0 泄漏、N=8✅、csv 提及✅ |
+
+说明：S2 自动执行成功生成了报告，但该轮最终文本为空（页面显示"agent 本轮直接完成，未输出文本"），
+属"内容为空时无可见总结"的展示问题，不影响报告产出，可另行修复。
+
 ## 附件清单
 
 - [auto-report-by-skill.docx](auto-report-by-skill.docx)：S2 启用 Skill 后自动生成的报告（独立检查对象）
+- [auto-report-by-skill-csvgrep.docx](auto-report-by-skill-csvgrep.docx)：补测版 S2（csv+grep 引导的 skill）自动生成的报告
+- [skill-abnormal-access-log-filtering-report.md](skill-abnormal-access-log-filtering-report.md)：补测版总结出的 SKILL.md 原文
 - [guided-report-s1.docx](guided-report-s1.docx)：S1 逐步指导时生成的示范报告
 - [skill-abnormal-access-filtering-and-report.md](skill-abnormal-access-filtering-and-report.md)：S1 总结出的 SKILL.md 原文
 - 输入样例：[abnormal-access-sample.xlsx](../../../../demo/samples/seed/abnormal-access-sample.xlsx)
