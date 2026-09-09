@@ -1,0 +1,15 @@
+{
+  "skill": "abnormal-access-filter-report",
+  "total": 40,
+  "tp": 28,
+  "tn": 12,
+  "fp": 0,
+  "fn": 0,
+  "decision_accuracy": 1.0,
+  "keep_recall": 1.0,
+  "keep_precision": 1.0,
+  "category_accuracy_kept": 1.0,
+  "problems": [],
+  "workspace": "/workspace-data/8ed3f20e-08f7-4bc7-a356-c09f2daff1d2",
+  "final_msg": "（agent 本轮直接完成，未输出文本）"
+}
