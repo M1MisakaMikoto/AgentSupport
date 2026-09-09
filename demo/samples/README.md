@@ -83,17 +83,24 @@
   > 「4 建议措施」。
 - 任务文案（粘贴给 demo 会话，文件需已复制进该会话工作区）：
   > 你是公司 IT 安全分析员。`abnormal-access-sample.xlsx` 是本日网络异常访问记录。
-  > 请用 excel_edit_tool 读取并核对结构，按下面口径过滤低风险：① 已知搜索引擎爬虫
+  > 第一步：用 excel_edit_tool 的 `to_csv` 把它导出为同目录 `abnormal-access-sample.csv`
+  > （UTF-8），确认导出成功。
+  > 第二步：用只读 bash 检索该 csv（仅允许 `grep/rg/head/cat` 读取 csv，禁止写入、
+  > 网络或其它命令），核对表结构与总行数，并按下面口径过滤低风险：① 已知搜索引擎爬虫
   > （Googlebot/Bingbot）仅访问公开页面；② 源为登记白名单（192.168.200.5 监控探针、
   > 10.20.0.8 供应商维护）；③ 仅探测且无成功认证/交互；④ 仅 404 未触达敏感路径。
   > 其余保留并按 SSH/RDP 爆破、敏感路径访问、横向移动、敏感文件下载、异常登录、
   > 弱口令/Webshell 特征归类。再用 word_edit_tool 创建报告 docx：标题"网络异常访问分析报告
   > （2026-09-01）"，含「分析范围与方法」「结论概述」「高优先事件清单（每条一段：
   > 时间｜源IP｜目标资产｜事件类型｜理由｜建议动作）」「建议措施」四节。完成后回读核对，
-  > task_done 并列出输入与报告路径。禁止 bash。
+  > task_done 并列出 csv 与报告路径。
 - 期望：过滤后保留 8 条（序号 9–16）；报告含四节结构、8 条事件及正确归类，不含低风险行；
   结论概述中的保留数量与类型分布正确。
-- 工具：`excel_edit_tool`（read）+ `word_edit_tool`（create / append / read 回读）。
+- 工具：`excel_edit_tool`（read / to_csv）+ 只读 `bash`（grep/rg/head/cat）+ `word_edit_tool`
+  （create / append / read 回读）。
+- 提速路径（已验证 2026-09-09）：引导 agent「先 to_csv 导出 UTF-8，再用只读 bash 检索定位」，
+  单轮即完成分析+报告（耗时约 108s，工具调用 excel_edit_tool×2 + bash×1 + word_edit_tool×1），
+  产出与全量读表版一致（四节结构、8 条高优先、低风险不进入事件清单）。
 
 ## 验证断言一览
 

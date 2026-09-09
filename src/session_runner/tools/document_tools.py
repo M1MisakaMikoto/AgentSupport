@@ -214,11 +214,12 @@ class ExcelEditTool(Tool):
 
     def get_description(self) -> str:
         return """Tool for creating, reading and editing Excel .xlsx workbooks
-* Commands: create, read, set_cell, update, append_rows
+* Commands: create, read, set_cell, update, append_rows, to_csv
 * `create` writes a new .xlsx from a list of rows; fails if the file already exists
 * `read` dumps cell values for a sheet (optionally a range like A1:C5) as JSON
 * `set_cell` updates one cell (e.g. B2); `update` sets many cells via {cell: value}
 * `append_rows` appends rows below the last used row
+* `to_csv` exports the sheet to UTF-8 CSV (default: same directory, same name .csv)
 * Paths are Windows absolute paths (e.g. D:\\workspace\\data.xlsx) inside the workspace
 """
 
@@ -229,7 +230,7 @@ class ExcelEditTool(Tool):
                 type="string",
                 description="The operation to perform.",
                 required=True,
-                enum=["create", "read", "set_cell", "update", "append_rows"],
+                enum=["create", "read", "set_cell", "update", "append_rows", "to_csv"],
             ),
             ToolParameter(
                 name="path",
@@ -249,6 +250,12 @@ class ExcelEditTool(Tool):
                 description="List of rows (each row is a list of values); required for `create` and `append_rows`.",
                 required=False,
                 items={"type": "array"},
+            ),
+            ToolParameter(
+                name="output_path",
+                type="string",
+                description="Optional .csv output path for `to_csv`; defaults to the xlsx path with .csv suffix.",
+                required=False,
             ),
             ToolParameter(
                 name="cell",
@@ -350,6 +357,25 @@ class ExcelEditTool(Tool):
             workbook.save(str(path))
             return ToolExecResult(
                 output=f"Updated {len(cells)} cell(s) in {path}"
+            )
+
+        if command == "to_csv":
+            import csv
+
+            output_path = arguments.get("output_path")
+            if output_path is not None:
+                output = _resolve_path(str(output_path))
+                if output.suffix.lower() != ".csv":
+                    raise ToolError("`output_path` must end with .csv")
+            else:
+                output = path.with_suffix(".csv")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle)
+                for row in sheet.iter_rows(values_only=True):
+                    writer.writerow(["" if value is None else str(value) for value in row])
+            return ToolExecResult(
+                output=f"Exported sheet {sheet.title!r} to CSV: {output}"
             )
 
         rows = arguments.get("rows")

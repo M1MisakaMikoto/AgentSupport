@@ -218,3 +218,46 @@ async def test_convert_docx_to_pdf_via_office(tmp_path):
     )
     assert result.error_code == 0
     assert target.is_file()
+
+
+async def test_excel_to_csv_export(tmp_path):
+    tool = ExcelEditTool()
+    path = tmp_path / "logs.xlsx"
+    await tool.execute(
+        {
+            "command": "create",
+            "path": str(path),
+            "sheet_name": "访问记录",
+            "rows": [
+                ["序号", "源IP", "事件类型"],
+                [1, "10.0.1.23", "端口扫描"],
+                [9, "203.0.113.7", "SSH爆破"],
+            ],
+        }
+    )
+
+    result = await tool.execute({"command": "to_csv", "path": str(path)})
+    assert result.error_code == 0
+    csv_path = path.with_suffix(".csv")
+    assert csv_path.is_file()
+    text = csv_path.read_text(encoding="utf-8")
+    assert "源IP" in text
+    assert "203.0.113.7" in text
+    assert text.count("\n") == 3
+
+    custom = tmp_path / "custom.csv"
+    result = await tool.execute(
+        {"command": "to_csv", "path": str(path), "output_path": str(custom)}
+    )
+    assert result.error_code == 0
+    assert custom.is_file()
+    assert "SSH爆破" in custom.read_text(encoding="utf-8")
+
+    with pytest.raises(ToolError):
+        await tool.execute(
+            {
+                "command": "to_csv",
+                "path": str(path),
+                "output_path": str(tmp_path / "bad.pdf"),
+            }
+        )
