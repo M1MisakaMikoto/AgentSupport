@@ -20,7 +20,7 @@ from typing import Any
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -132,6 +132,19 @@ class DemoState:
 
 STATE = DemoState()
 client = httpx.Client(timeout=600)
+
+ALLOWED_UPLOAD_EXTENSIONS = {
+    ".xlsx",
+    ".xls",
+    ".csv",
+    ".docx",
+    ".pdf",
+    ".txt",
+    ".md",
+    ".json",
+    ".log",
+}
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
 def _post(path: str, body: dict[str, Any] | None = None, *, tenant: str = TENANT) -> dict[str, Any]:
@@ -1121,6 +1134,51 @@ def start(body: StartBody) -> dict[str, Any]:
     _current_approver = Approver(session["id"])
     _current_approver.start()
     return STATE.snapshot()
+
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Upload a file into the active session's workspace (demo analysis inputs)."""
+
+    if STATE.status in ("running_round", "running_generate") or STATE.generation_busy:
+        raise HTTPException(409, "cannot upload while a round/generation is running")
+    if not STATE.session_id:
+        raise HTTPException(400, "no active session")
+    raw_name = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if not raw_name or raw_name in (".", ".."):
+        raise HTTPException(400, "invalid filename")
+    extension = Path(raw_name).suffix.lower()
+    if extension not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            415,
+            "unsupported file type; allowed: "
+            + ", ".join(sorted(ALLOWED_UPLOAD_EXTENSIONS)),
+        )
+    session = _get(f"/sessions/{STATE.session_id}", tenant=TENANT)
+    workspace = _get(f"/workspaces/{session['workspace_id']}", tenant=TENANT)
+    root = Path(str(workspace.get("root_path") or ""))
+    if not root.is_dir():
+        raise HTTPException(500, f"workspace directory not found: {root}")
+    target = root / raw_name
+    size = 0
+    try:
+        with target.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    target.unlink(missing_ok=True)
+                    raise HTTPException(413, "file too large (max 25MB)")
+                out.write(chunk)
+    finally:
+        await file.close()
+    return {
+        "filename": raw_name,
+        "path": str(target),
+        "size": size,
+    }
 
 
 @app.post("/api/round")

@@ -85,6 +85,8 @@
   .sum{background:var(--panel2);color:var(--accent2);border:1px solid var(--accent2)}
   .sum:disabled{opacity:.4;cursor:not-allowed}
   .sum.running{color:var(--warn);border-color:var(--warn)}
+  .upload-btn{display:inline-flex;align-items:center;justify-content:center;width:52px;height:52px;border-radius:12px;background:var(--panel2);color:var(--accent2);border:1px dashed rgba(34,211,165,.45);cursor:pointer;font-size:19px;flex-shrink:0}
+  .upload-btn:hover{border-color:var(--accent2);background:rgba(34,211,165,.1)}
   /* ---- 生成会话独立面板：只展示生成内容，不写入聊天框 ---- */
   .hidden{display:none!important}
   .conn{flex-wrap:wrap}
@@ -217,6 +219,10 @@
       <span class="skill-bar-hint" id="skillBarHint"></span>
     </div>
     <div class="send-row">
+      <label class="upload-btn" id="btnUpload" title="上传文件到当前会话工作区">
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.docx,.pdf,.txt,.md,.json,.log" style="display:none">
+        <span>📎</span>
+      </label>
       <textarea id="input" placeholder="给 agent 下指令，例如：在 workspace 创建一个 markdown 转 HTML 的小工具，并写断言…"></textarea>
       <button class="send" id="btnSend">发送</button>
       <button class="sum" id="btnSum">总结成 Skill</button>
@@ -805,6 +811,7 @@ async function continueSession(sessionId){
 
 $("btnSend").onclick = send;
 $("input").addEventListener("keydown", e => { if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } });
+$("fileInput").addEventListener("change", uploadFile);
 document.querySelectorAll("#chips .chip").forEach(c => c.onclick = () => { $("input").value = c.dataset.task; $("input").focus(); });
 
 async function send(){
@@ -823,6 +830,33 @@ async function send(){
     await api("/api/round",{task});
   }catch(e){ sys("发送失败：" + e.message); }
   await poll(true);
+}
+
+async function uploadFile(){
+  const input = $("fileInput");
+  if(!input.files || !input.files.length) return;
+  const file = input.files[0];
+  if(state.status === "running_round" || state.status === "running_generate"){
+    sys("运行中不可上传文件，请等待本轮结束");
+    input.value = "";
+    return;
+  }
+  try{
+    if(!started){
+      state = await api("/api/start", startBody());
+      started = true;
+      const ex = $("examples"); if(ex) ex.classList.add("hidden");
+      renderMessages();
+    }
+    sys("上传中：" + file.name);
+    const fd = new FormData();
+    fd.append("file", file);
+    const resp = await fetch("/api/upload", {method: "POST", body: fd});
+    if(!resp.ok){ const t = await resp.text(); throw new Error(t.slice(0, 200)); }
+    const info = await resp.json();
+    sys("已上传：📄 " + info.filename + "（" + fmtSize(info.size) + "）");
+  }catch(e){ sys("上传失败：" + e.message); }
+  finally{ input.value = ""; }
 }
 
 function approveTool(){
