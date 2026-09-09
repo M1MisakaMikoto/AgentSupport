@@ -1,0 +1,195 @@
+{
+  "headers": [
+    "序号",
+    "时间",
+    "源IP",
+    "源归属",
+    "目标资产",
+    "目标端口",
+    "事件类型",
+    "行为摘要",
+    "请求数"
+  ],
+  "records": [
+    {
+      "seq": 1,
+      "expected": "filter",
+      "category": "low-risk",
+      "tricky": false
+    },
+    {
+      "seq": 2,
+      "expected": "filter",
+      "category": "low-risk",
+      "tricky": false
+    },
+    {
+      "seq": 3,
+      "expected": "filter",
+      "category": "low-risk",
+      "tricky": false
+    },
+    {
+      "seq": 4,
+      "expected": "filter",
+      "category": "low-risk",
+      "tricky": false
+    },
+    {
+      "seq": 5,
+      "expected": "filter",
+      "category": "low-risk",
+      "tricky": false
+    },
+    {
+      "seq": 6,
+      "expected": "filter",
+      "category": "low-risk",
+      "tricky": false
+    },
+    {
+      "seq": 7,
+      "expected": "filter",
+      "category": "low-risk",
+      "tricky": false
+    },
+    {
+      "seq": 8,
+      "expected": "filter",
+      "category": "low-risk",
+      "tricky": false
+    },
+    {
+      "seq": 9,
+      "expected": "filter",
+      "category": "low-risk",
+      "tricky": false
+    },
+    {
+      "seq": 10,
+      "expected": "filter",
+      "category": "low-risk",
+      "tricky": false
+    },
+    {
+      "seq": 11,
+      "expected": "keep",
+      "category": "SSH/RDP爆破",
+      "tricky": false
+    },
+    {
+      "seq": 12,
+      "expected": "keep",
+      "category": "SSH/RDP爆破",
+      "tricky": false
+    },
+    {
+      "seq": 13,
+      "expected": "keep",
+      "category": "敏感路径访问",
+      "tricky": false
+    },
+    {
+      "seq": 14,
+      "expected": "keep",
+      "category": "横向移动",
+      "tricky": false
+    },
+    {
+      "seq": 15,
+      "expected": "keep",
+      "category": "敏感文件下载",
+      "tricky": false
+    },
+    {
+      "seq": 16,
+      "expected": "keep",
+      "category": "异常登录",
+      "tricky": false
+    },
+    {
+      "seq": 17,
+      "expected": "keep",
+      "category": "弱口令/Webshell特征",
+      "tricky": false
+    },
+    {
+      "seq": 18,
+      "expected": "keep",
+      "category": "弱口令/Webshell特征",
+      "tricky": false
+    },
+    {
+      "seq": 19,
+      "expected": "keep",
+      "category": "SSH/RDP爆破",
+      "tricky": false
+    },
+    {
+      "seq": 20,
+      "expected": "keep",
+      "category": "SSH/RDP爆破",
+      "tricky": false
+    },
+    {
+      "seq": 21,
+      "expected": "keep",
+      "category": "敏感路径访问",
+      "tricky": true
+    },
+    {
+      "seq": 22,
+      "expected": "keep",
+      "category": "SSH/RDP爆破",
+      "tricky": true
+    },
+    {
+      "seq": 23,
+      "expected": "keep",
+      "category": "敏感文件下载",
+      "tricky": true
+    },
+    {
+      "seq": 24,
+      "expected": "keep",
+      "category": "异常登录",
+      "tricky": true
+    },
+    {
+      "seq": 25,
+      "expected": "keep",
+      "category": "敏感路径访问",
+      "tricky": true
+    },
+    {
+      "seq": 26,
+      "expected": "keep",
+      "category": "敏感路径访问",
+      "tricky": true
+    },
+    {
+      "seq": 27,
+      "expected": "keep",
+      "category": "弱口令/Webshell特征",
+      "tricky": true
+    },
+    {
+      "seq": 28,
+      "expected": "keep",
+      "category": "敏感路径访问",
+      "tricky": true
+    },
+    {
+      "seq": 29,
+      "expected": "keep",
+      "category": "横向移动",
+      "tricky": true
+    },
+    {
+      "seq": 30,
+      "expected": "keep",
+      "category": "弱口令/Webshell特征",
+      "tricky": true
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "session": "97015c5b-aaf7-4526-8903-f11e4d78958c",
+  "workspace": "/workspace-data/a085f22e-daf9-4ca3-8830-1484db28abcd",
+  "skill": "abnormal-access-log-filtering-report",
+  "elapsed_s": 195.9,
+  "total": 30,
+  "tp": 17,
+  "tn": 10,
+  "fp": 0,
+  "fn": 3,
+  "decision_accuracy": 0.9,
+  "keep_recall": 0.85,
+  "keep_precision": 1.0,
+  "category_accuracy_kept": 1.0,
+  "problems": [
+    {
+      "seq": 22,
+      "kind": "false_filter",
+      "expected": "SSH/RDP爆破",
+      "predicted": "过滤",
+      "tricky": true
+    },
+    {
+      "seq": 23,
+      "kind": "false_filter",
+      "expected": "敏感文件下载",
+      "predicted": "过滤",
+      "tricky": true
+    },
+    {
+      "seq": 27,
+      "kind": "false_filter",
+      "expected": "弱口令/Webshell特征",
+      "predicted": "过滤",
+      "tricky": true
+    }
+  ],
+  "final_msg": "（agent 本轮直接完成，未输出文本）"
+}
