@@ -148,11 +148,11 @@ class AnthropicClient(BaseLLMClient):
         # Apply retry decorator to the API call. When a streaming consumer is
         # attached (on_text_delta), use the streaming variant so text deltas are
         # forwarded in real time; otherwise keep the original batch call.
-        response_factory = (
-            self._create_anthropic_response_stream
-            if self.on_text_delta is not None
-            else self._create_anthropic_response
-        )
+        # Always stream. Measured on the deployed gateway: non-streaming
+        # responses stall (~50% of medium/long outputs return 200 with an empty
+        # body), while the SSE path completed 13/13 including 8k-token outputs.
+        # Deltas are forwarded to the caller only when a sink is attached.
+        response_factory = self._create_anthropic_response_stream
         retry_decorator = retry_with(
             func=response_factory,
             provider_name=self.retry_provider_name,
