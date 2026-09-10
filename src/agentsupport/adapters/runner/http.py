@@ -11,6 +11,7 @@ from agent_runner_contracts.events import EventEnvelope
 from ...application.ports import EventSink
 
 TERMINAL_RUN_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELLED", "LOST"})
+READY_PROBE_TIMEOUT_SECONDS = 5.0
 
 
 class TraeCoreRunnerRuntime:
@@ -83,6 +84,7 @@ class TraeCoreRunnerRuntime:
         run_id = UUID(str(request["run_id"]))
         runner_url = request.get("runner_url")
         self.register_run_endpoint(run_id, runner_url)
+        await self._require_ready(run_id)
         response = await self._client().post(self._url(run_id, "/runs"), json=request)
         response.raise_for_status()
         result = response.json()
@@ -91,6 +93,21 @@ class TraeCoreRunnerRuntime:
         if result.get("status") in TERMINAL_RUN_STATUSES:
             self.unregister_run_endpoint(run_id)
         return result
+
+    async def _require_ready(self, run_id: UUID) -> None:
+        """Fail fast when the runner is wedged instead of queueing forever.
+
+        A frozen runner still accepts TCP connections, so without this probe a
+        new run would sit in the socket backlog with no events emitted at all.
+        """
+
+        try:
+            response = await self._client().get(
+                self._url(run_id, "/ready"), timeout=READY_PROBE_TIMEOUT_SECONDS
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"session runner is not ready: {exc}") from exc
 
     async def accept_input(
         self,
