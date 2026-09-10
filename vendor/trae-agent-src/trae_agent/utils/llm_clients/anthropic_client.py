@@ -5,9 +5,10 @@
 
 import json
 import os
-from typing import Callable, override
+from typing import Any, Callable, override
 
 import anthropic
+import httpx
 from anthropic.types.tool_union_param import TextEditor20250429
 
 from trae_agent.tools.base import Tool, ToolCall, ToolResult
@@ -26,9 +27,20 @@ class AnthropicClient(BaseLLMClient):
     def __init__(self, model_config: ModelConfig):
         super().__init__(model_config)
 
-        client_options: dict[str, str] = {
+        client_options: dict[str, Any] = {
             "api_key": self.api_key,
             "base_url": self.base_url,
+            # Explicit timeouts: the SDK default is read=600s, which lets one
+            # stalled stream freeze the whole runner for ten minutes.
+            "timeout": httpx.Timeout(
+                connect=float(os.getenv("TRAE_LLM_CONNECT_TIMEOUT_SECONDS", "5")),
+                read=float(os.getenv("TRAE_LLM_READ_TIMEOUT_SECONDS", "120")),
+                write=float(os.getenv("TRAE_LLM_WRITE_TIMEOUT_SECONDS", "30")),
+                pool=float(os.getenv("TRAE_LLM_POOL_TIMEOUT_SECONDS", "15")),
+            ),
+            # The trae layer retries on top of the SDK, so keep SDK retries at
+            # one to avoid multiplying a stalled stream's wait window.
+            "max_retries": int(os.getenv("TRAE_LLM_SDK_MAX_RETRIES", "1")),
         }
         host_override = os.getenv("TRAE_MODEL_HOST", "").strip()
         if host_override:
