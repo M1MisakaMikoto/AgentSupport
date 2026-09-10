@@ -17,6 +17,8 @@
 .chips{display:flex;gap:8px;flex-wrap:wrap;padding:0}
 .chip{border:1px solid var(--line);border-radius:99px;padding:4px 13px;font-size:12.5px;color:var(--muted);cursor:pointer;background:var(--panel2)}
 .chip:hover{border-color:var(--accent);color:var(--text)}
+a.chip{text-decoration:none;display:inline-block}
+.head-actions{display:flex;align-items:center;gap:8px}
 .examples{padding:10px 18px 0;display:flex;flex-direction:column;align-items:center;gap:8px}
 .examples.hidden{display:none}
 .more-wrap{position:relative}
@@ -29,6 +31,26 @@
 .modal.small{width:min(420px,92vw)}
 .file-ref{display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(79,140,255,.55);background:rgba(79,140,255,.1);color:var(--accent2);border-radius:8px;padding:2px 9px;font-size:12px;cursor:pointer;margin:2px 3px;vertical-align:baseline}
 .file-ref:hover{border-color:var(--accent2);background:rgba(34,211,165,.12)}
+/* ---- 富文本（Agent 消息 Markdown 子集渲染） ---- */
+.rt>*:first-child{margin-top:0}
+.rt>*:last-child{margin-bottom:0}
+.rt p{margin:0 0 9px}
+.rt h1,.rt h2,.rt h3,.rt h4{margin:13px 0 7px;line-height:1.35;font-weight:700}
+.rt h1{font-size:18px}
+.rt h2{font-size:16.5px}
+.rt h3{font-size:15.5px}
+.rt h4{font-size:14.5px}
+.rt ul,.rt ol{margin:6px 0 9px;padding-left:23px}
+.rt li{margin:3px 0}
+.rt blockquote{margin:8px 0;padding:6px 12px;border-left:3px solid rgba(79,140,255,.5);border-radius:0 8px 8px 0;background:rgba(79,140,255,.07);color:var(--muted)}
+.rt hr{border:none;border-top:1px solid var(--line);margin:12px 0}
+.rt code{background:var(--code);border:1px solid var(--line);border-radius:6px;padding:1px 5px;font-size:12.5px}
+.rt pre{margin:8px 0;background:var(--code);border:1px solid var(--line);border-radius:10px;padding:10px 12px;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+.rt pre code{background:transparent;border:none;padding:0;font-size:12.5px;line-height:1.55}
+.rt table{border-collapse:collapse;margin:9px 0;font-size:13px;display:block;max-width:100%;overflow-x:auto}
+.rt th,.rt td{border:1px solid var(--line);padding:5px 10px;white-space:nowrap;text-align:left}
+.rt th{background:rgba(79,140,255,.10);font-weight:600}
+.rt a{color:var(--accent2)}
 .modal.file-modal{width:min(760px,94vw)}
 .fp-meta{display:flex;flex-direction:column;gap:3px;margin-bottom:10px;font-size:12.5px}
 .fp-meta .hint{font-size:11.5px;word-break:break-all}
@@ -84,7 +106,9 @@
   .send:disabled{opacity:.4;cursor:not-allowed}
   .sum{background:var(--panel2);color:var(--accent2);border:1px solid var(--accent2)}
   .sum:disabled{opacity:.4;cursor:not-allowed}
-  .sum.running{color:var(--warn);border-color:var(--warn)}
+.sum.running{color:var(--warn);border-color:var(--warn)}
+.cancel-round{height:52px;border-radius:12px;font-size:14px;cursor:pointer;padding:0 16px;white-space:nowrap;background:var(--panel2);color:var(--warn);border:1px solid var(--warn)}
+.cancel-round:disabled{opacity:.4;cursor:not-allowed}
   .upload-btn{display:inline-flex;align-items:center;justify-content:center;width:52px;height:52px;border-radius:12px;background:var(--panel2);color:var(--accent2);border:1px dashed rgba(34,211,165,.45);cursor:pointer;font-size:19px;flex-shrink:0}
   .upload-btn:hover{border-color:var(--accent2);background:rgba(34,211,165,.1)}
   /* ---- 生成会话独立面板：只展示生成内容，不写入聊天框 ---- */
@@ -178,6 +202,15 @@
 .gp-cancel-btn{border-color:rgba(248,113,113,.55)!important;color:var(--danger)!important;background:rgba(248,113,113,.08)!important}
 .gp-cancel-btn:hover{border-color:var(--danger)!important;background:rgba(248,113,113,.15)!important}
 .cont-btn{border-color:var(--accent2);color:var(--accent2);background:rgba(34,211,165,.1);margin:2px 0 8px}
+.up-block{border:1px solid rgba(79,140,255,.35);background:rgba(79,140,255,.07);border-radius:10px;padding:8px 12px;margin:8px 0}
+.up-title{font-size:12px;color:var(--accent2);font-weight:600;margin-bottom:5px}
+.up-item{display:flex;gap:8px;align-items:baseline;font-size:12.5px;padding:2px 0;flex-wrap:wrap}
+.up-name{color:var(--text);word-break:break-all}
+.gen-block{border:1px solid rgba(245,181,68,.35);background:rgba(245,181,68,.07);border-radius:10px;padding:8px 12px;margin:8px 0}
+.gen-title{font-size:12px;color:var(--warn);font-weight:600;margin-bottom:5px}
+.gen-item{display:flex;gap:8px;align-items:baseline;font-size:12.5px;padding:2px 0;flex-wrap:wrap}
+.gen-state{color:var(--text);font-weight:600}
+.gen-note{font-size:11.5px;color:var(--muted);margin-top:5px}
 </style>
 </head>
 <body>
@@ -226,6 +259,7 @@
       <textarea id="input" placeholder="给 agent 下指令，例如：在 workspace 创建一个 markdown 转 HTML 的小工具，并写断言…"></textarea>
       <button class="send" id="btnSend">发送</button>
       <button class="sum" id="btnSum">总结成 Skill</button>
+      <button class="cancel-round hidden" id="btnCancelRound">取消本轮</button>
     </div>
   </div>
 </footer>
@@ -275,7 +309,13 @@
 
 <div class="overlay" id="skillDetailOverlay" style="display:none" onclick="if(event.target===this)closeSkillDetail()">
   <div class="modal file-modal">
-    <div class="modal-head"><b id="sdTitle">Skill 详情</b><button class="chip" onclick="closeSkillDetail()">关闭</button></div>
+    <div class="modal-head">
+      <b id="sdTitle">Skill 详情</b>
+      <div class="head-actions">
+        <a class="chip hidden" id="sdDownload" download>下载 SKILL.md</a>
+        <button class="chip" onclick="closeSkillDetail()">关闭</button>
+      </div>
+    </div>
     <div class="modal-body">
       <div class="fp-meta"><span class="hint" id="sdSkillId"></span><span class="hint" id="sdDesc"></span></div>
       <pre class="fp-text" id="sdContent">加载中…</pre>
@@ -302,6 +342,37 @@ function log(){}
 function bubble(cls, who, html){ inner.insertAdjacentHTML("beforeend", `<div class="msg ${cls}"><div style="max-width:78%"><div class="who">${who}</div><div class="bubble">${html}</div></div></div>`); }
 function sys(text){ inner.insertAdjacentHTML("beforeend", `<div class="msg sys"><div class="bubble">${esc(text)}</div></div>`); }
 
+function fmtTime(iso){
+  if(!iso) return "";
+  const d = new Date(iso);
+  if(isNaN(d.getTime())) return String(iso);
+  const p = n => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
+// 上传记录：文件上传是会话记录的一部分，历史会话里同样可见
+function uploadsHtml(uploads){
+  const items = uploads || [];
+  if(!items.length) return "";
+  return '<div class="up-block"><div class="up-title">📎 上传记录 · ' + items.length + ' 个文件</div>' +
+    items.map(u => '<div class="up-item"><span class="up-name">📄 ' + esc(u.filename || "") + '</span>' +
+      '<span class="hint">' + fmtSize(u.size || 0) + (u.uploaded_at ? ' · ' + esc(fmtTime(u.uploaded_at)) : '') + '</span></div>').join("") +
+    '</div>';
+}
+
+const GEN_STATE_LABEL = { COMPLETED: "已完成", FAILED: "失败", CANCELLED: "已取消", RUNNING: "进行中", WAITING_INPUT: "等待确认" };
+
+// 生成会话（mode=silent）：在历史里展示，但不可继续
+function generationsHtml(generations){
+  const items = generations || [];
+  if(!items.length) return "";
+  return '<div class="gen-block"><div class="gen-title">⚙️ 生成会话 · ' + items.length + ' 次（不可继续）</div>' +
+    items.map(g => '<div class="gen-item"><span class="gen-state">' + esc(GEN_STATE_LABEL[g.state] || g.state || "未知") + '</span>' +
+      '<span class="hint">' + esc(fmtTime(g.created_at)) + '</span>' +
+      (g.error ? '<span class="hint">· ' + esc(g.error) + '</span>' : '') + '</div>').join("") +
+    '<div class="gen-note">由「总结成 Skill」触发，内容只在 Skill 生成工作台展示，不能继续对话。</div></div>';
+}
+
 function renderMessages(){
   const prev = inner.scrollHeight;
   inner.innerHTML = "";
@@ -309,6 +380,7 @@ function renderMessages(){
     inner.insertAdjacentHTML("beforeend", `<div class="msg sys"><div class="bubble">👋 这是 AgentSupport 的 Skill 对话演示。可点上方「示例任务」一键填入，或直接输入指令让 agent 干活（文件编辑需审批放行）；跑通后点「总结成 Skill」，系统会把这次对话沉淀为标准 SKILL.md 并入库。</div></div>`);
   } else {
     sys("会话已创建：" + (state.session_id||"").slice(0,8) + " · 现在你可以给 agent 下指令");
+    if ((state.uploads||[]).length) inner.insertAdjacentHTML("beforeend", uploadsHtml(state.uploads));
     (state.rounds||[]).forEach((r, i) => {
       if (r.task) bubble("user", "测试者", esc(r.task));
       if (r.tool_batches && r.tool_batches.length){
@@ -317,6 +389,7 @@ function renderMessages(){
         for (const t of r.tool_calls||[]) sys("🔧 工具调用：" + t);
       }
       if (r.message) bubble("agent", "Agent", renderAgentMessage(r.message));
+      if (r.cancelled) sys("⏹ 本轮已取消（用户中止）");
       if (r.usage){
         sys(`第 ${i+1} 轮完成 · input ${r.usage.input_tokens} / output ${r.usage.output_tokens}`);
       }
@@ -324,6 +397,9 @@ function renderMessages(){
     const seenTasks = new Set((state.rounds||[]).map(r => r.task));
     if (pendingTask && seenTasks.has(pendingTask)) pendingTask = null;
     if (pendingTask) bubble("user", "测试者", esc(pendingTask));
+    if (state.status === "error" && state.error){
+      sys("⚠ 上一轮异常（" + state.error + "），可直接发送新指令继续，无需重建会话");
+    }
   }
   const live = state.live;
   if (live && (state.status === "running_round" || state.status === "running_generate")){
@@ -529,9 +605,31 @@ function startBody(){
   return {auto_approve:$("autoApprove").checked, file_ref_format:true, skills:[...activeSkills]};
 }
 
+// 行内 Markdown：加粗 / 斜体 / 链接（输入已完成 HTML 转义）
+function inlineMd(s){
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+
+// Agent 消息富文本渲染：Markdown 子集（标题/列表/表格/代码/引用/加粗…）
+// 先抽出代码块、行内代码与文件引用，再整体转义，避免任何原始 HTML 注入。
 function renderAgentMessage(text){
-  let html = esc(text || "");
-  html = html.replace(/(\[\[file:([^\]|]+?)(?:\|([^\]]*))?\]\])|([A-Za-z]:\\[^\s<>"'()]+)/g, (m, token, path, label, plain) => {
+  const raw = String(text == null ? "" : text).replace(/\r\n?/g, "\n");
+  if (!raw.trim()) return "";
+  const codeBlocks = [], inlineCodes = [], refs = [];
+  let src = raw.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (m, lang, body) => {
+    codeBlocks.push({lang: (lang || "").trim(), body: body.replace(/\n$/, "")});
+    return "\u0000C" + (codeBlocks.length - 1) + "\u0000";
+  });
+  src = src.replace(/`([^`\n]+)`/g, (m, body) => {
+    inlineCodes.push(body);
+    return "\u0000I" + (inlineCodes.length - 1) + "\u0000";
+  });
+  src = src.replace(/(\[\[file:([^\]|]+?)(?:\|([^\]]*))?\]\])|([A-Za-z]:\\[^\s<>"'()]+)/g, (m, token, path, label, plain) => {
     let p = "", l = "";
     if (token){
       p = (path || "").trim();
@@ -544,9 +642,78 @@ function renderAgentMessage(text){
     } else {
       return m;
     }
-    return `<span class="file-ref" data-path="${escAttr(p)}" title="${escAttr(p)}" onclick="previewFile(this)">📄 ${esc(l)}</span>`;
+    refs.push({path: p, label: l});
+    return "\u0000R" + (refs.length - 1) + "\u0000";
   });
-  return html;
+
+  const lines = esc(src).split("\n");
+  const out = [];
+  let list = null, para = [];
+  const flushPara = () => { if(para.length){ out.push("<p>" + para.join("<br>") + "</p>"); para = []; } };
+  const closeList = () => { if(list){ out.push(list === "ul" ? "</ul>" : "</ol>"); list = null; } };
+  const isTableSep = s => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(s);
+  const splitRow = s => s.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(c => c.trim());
+
+  for (let i = 0; i < lines.length; i++){
+    const line = lines[i], t = line.trim();
+    if (!t){ flushPara(); closeList(); continue; }
+    if (/^\u0000C\d+\u0000$/.test(t)){ flushPara(); closeList(); out.push(t); continue; }
+    let m;
+    if ((m = /^(#{1,6})\s+(.*)$/.exec(t))){
+      flushPara(); closeList();
+      const lvl = Math.min(m[1].length, 4);
+      out.push("<h" + lvl + ">" + inlineMd(m[2]) + "</h" + lvl + ">");
+      continue;
+    }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)){ flushPara(); closeList(); out.push("<hr>"); continue; }
+    if (/^&gt;\s?/.test(t)){
+      flushPara(); closeList();
+      out.push("<blockquote>" + inlineMd(t.replace(/^&gt;\s?/, "")) + "</blockquote>");
+      continue;
+    }
+    if (t.includes("|") && i + 1 < lines.length && lines[i + 1].includes("-") && isTableSep(lines[i + 1])){
+      flushPara(); closeList();
+      const header = splitRow(t);
+      const rows = [];
+      i += 2;
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()){ rows.push(splitRow(lines[i])); i++; }
+      i--;
+      let table = "<table><thead><tr>" + header.map(c => "<th>" + inlineMd(c) + "</th>").join("") + "</tr></thead><tbody>";
+      rows.forEach(r => {
+        table += "<tr>" + header.map((_, ci) => "<td>" + inlineMd(r[ci] || "") + "</td>").join("") + "</tr>";
+      });
+      out.push(table + "</tbody></table>");
+      continue;
+    }
+    if ((m = /^[-*+]\s+(.*)$/.exec(t))){
+      flushPara();
+      if (list !== "ul"){ closeList(); out.push("<ul>"); list = "ul"; }
+      out.push("<li>" + inlineMd(m[1]) + "</li>");
+      continue;
+    }
+    if ((m = /^\d+[.)]\s+(.*)$/.exec(t))){
+      flushPara();
+      if (list !== "ol"){ closeList(); out.push("<ol>"); list = "ol"; }
+      out.push("<li>" + inlineMd(m[1]) + "</li>");
+      continue;
+    }
+    closeList();
+    para.push(inlineMd(t));
+  }
+  flushPara(); closeList();
+
+  let html = out.join("");
+  html = html.replace(/\u0000I(\d+)\u0000/g, (m, n) => "<code>" + esc(inlineCodes[+n]) + "</code>");
+  html = html.replace(/\u0000C(\d+)\u0000/g, (m, n) => {
+    const b = codeBlocks[+n];
+    return "<pre><code>" + esc(b.body) + "</code></pre>";
+  });
+  html = html.replace(/\u0000R(\d+)\u0000/g, (m, n) => {
+    const r = refs[+n];
+    return '<span class="file-ref" data-path="' + escAttr(r.path) + '" title="' + escAttr(r.path) +
+      '" onclick="previewFile(this)">📄 ' + esc(r.label) + "</span>";
+  });
+  return '<div class="rt">' + html + "</div>";
 }
 
 function toolTimeline(b){
@@ -583,12 +750,17 @@ function liveStatusLine(live){
 async function previewFile(el){
   const path = el.dataset.path;
   const overlay = $("fileOverlay"), body = $("fileBody");
+  const download = $("fileDownload");
+  download.classList.add("hidden");
+  download.removeAttribute("href");
   overlay.style.display = "flex";
   body.innerHTML = '<div class="hint">加载中…</div>';
   try{
     const resp = await fetch("/api/file?path=" + encodeURIComponent(path));
     if(!resp.ok){ const t = await resp.text(); throw new Error(t.slice(0,200)); }
     renderFilePreview(await resp.json());
+    download.href = "/api/file-download?path=" + encodeURIComponent(path);
+    download.classList.remove("hidden");
   }catch(e){ body.innerHTML = '<div class="hint">预览失败：' + esc(e.message) + '</div>'; }
 }
 
@@ -669,6 +841,9 @@ function renderSkillBar(){
 
 async function openSkillDetail(skillId){
   closeMoreMenu();
+  const download = $("sdDownload");
+  download.classList.add("hidden");
+  download.removeAttribute("href");
   $("sdTitle").textContent = "Skill 详情 · " + skillId;
   $("sdContent").textContent = "加载中…";
   $("sdSkillId").textContent = skillId;
@@ -682,6 +857,8 @@ async function openSkillDetail(skillId){
     $("sdSkillId").textContent = s.skill_id || skillId;
     $("sdDesc").textContent = s.description || "";
     $("sdContent").textContent = s.content || "（无内容）";
+    download.href = "/api/skills/" + encodeURIComponent(skillId) + "/download";
+    download.classList.remove("hidden");
   }catch(e){
     $("sdContent").textContent = "加载失败：" + e.message;
   }
@@ -764,7 +941,12 @@ function renderHistory(sessions){
     div.className = "hist-item";
     div.onclick = () => toggleHistoryDetail(div, s.session_id);
     const rounds = s.rounds || [];
-    div.innerHTML = '<b>' + esc(s.name) + '</b> <span class="hint">· ' + rounds.length + ' 轮 · ' + esc(s.created_at || "") + '</span>';
+    const uploads = s.uploads || [];
+    const generations = s.generations || [];
+    div.innerHTML = '<b>' + esc(s.name) + '</b> <span class="hint">· ' + rounds.length + ' 轮' +
+      (uploads.length ? ' · ' + uploads.length + ' 个上传' : '') +
+      (generations.length ? ' · ' + generations.length + ' 个生成会话' : '') +
+      ' · ' + esc(s.created_at || "") + '</span>';
     list.appendChild(div);
   });
 }
@@ -781,9 +963,11 @@ async function toggleHistoryDetail(div, sessionId){
     const s = await resp.json();
     let html = '<button class="chip cont-btn" onclick="continueSession(\'' + sessionId + '\')">继续此会话</button>';
     html += '<div class="hint">继续后会载入为当前会话，可直接接着发指令。</div>';
+    html += generationsHtml(s.generations);
+    html += uploadsHtml(s.uploads);
     (s.rounds||[]).forEach(r => {
       html += '<div class="hist-round"><div class="hist-msg"><b>测试者：</b>' + esc(r.task || "") + '</div>';
-      if(r.message) html += '<div class="hist-msg"><b>Agent：</b>' + esc(r.message) + '</div>';
+      if(r.message) html += '<div class="hist-msg"><b>Agent：</b>' + renderAgentMessage(r.message) + '</div>';
       if(r.usage) html += '<div class="hint">' + (r.conversation_id||"").slice(0,8) + ' · input ' + (r.usage.input_tokens||"—") + ' / output ' + (r.usage.output_tokens||"—") + '</div>';
       html += '</div>';
     });
@@ -806,6 +990,7 @@ async function continueSession(sessionId){
     closeHistory();
     renderMessages();
     sys("已载入历史会话 " + sessionId.slice(0, 8) + "，可以直接继续发指令");
+    await poll(true);
   }catch(e){ sys("切换会话失败：" + e.message); }
 }
 
@@ -855,6 +1040,7 @@ async function uploadFile(){
     if(!resp.ok){ const t = await resp.text(); throw new Error(t.slice(0, 200)); }
     const info = await resp.json();
     sys("已上传：📄 " + info.filename + "（" + fmtSize(info.size) + "）");
+    await poll(true);
   }catch(e){ sys("上传失败：" + e.message); }
   finally{ input.value = ""; }
 }
@@ -873,6 +1059,21 @@ $("btnSum").onclick = async () => {
   }catch(e){ sys("总结失败："+e.message); }
 };
 
+$("btnCancelRound").onclick = async () => {
+  if(state.status !== "running_round") return;
+  if(!confirm("确定取消当前这一轮？已生成的文件会保留在 workspace。")) return;
+  $("btnCancelRound").disabled = true;
+  try{
+    const resp = await api("/api/cancel-round", {});
+    const remote = (resp.round_cancel || {}).remote;
+    sys(remote === "ok" ? "已取消本轮，可以继续下发指令" : "已在本地取消本轮（底层运行未确认结束：" + remote + "）");
+  }catch(e){ sys("取消失败："+e.message); }
+  finally{
+    $("btnCancelRound").disabled = false;
+    await poll(true);
+  }
+};
+
 async function poll(force){
   try{
     const resp = await fetch("/api/state");
@@ -885,6 +1086,7 @@ async function poll(force){
       const summarizing = state.summary && state.summary.status === "running";
       $("btnSum").disabled = !started || summarizing || (state.rounds||[]).length === 0;
       $("btnSum").classList.toggle("running", summarizing);
+      $("btnCancelRound").classList.toggle("hidden", state.status !== "running_round");
       renderSkillBar();
       renderMessages();
       const delay = (summarizing || state.status === "running_round" || state.status === "running_generate") ? 450 : 1500;
@@ -938,7 +1140,13 @@ loadSkills();
 
 <div class="overlay" id="fileOverlay" style="display:none" onclick="if(event.target===this)closeFilePreview()">
   <div class="modal file-modal">
-    <div class="modal-head"><b>文件预览</b><button class="chip" onclick="closeFilePreview()">关闭</button></div>
+    <div class="modal-head">
+      <b>文件预览</b>
+      <div class="head-actions">
+        <a class="chip hidden" id="fileDownload" download>下载</a>
+        <button class="chip" onclick="closeFilePreview()">关闭</button>
+      </div>
+    </div>
     <div class="modal-body" id="fileBody"></div>
   </div>
 </div>

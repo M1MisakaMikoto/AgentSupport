@@ -15,8 +15,9 @@ import os
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 import uvicorn
@@ -27,6 +28,9 @@ from pydantic import BaseModel, Field
 AGENTSUPPORT_URL = os.getenv("AGENTSUPPORT_DEMO_CONTROL_URL", "http://127.0.0.1:8000")
 RUNNER_URL = os.getenv("AGENTSUPPORT_DEMO_RUNNER_URL", "http://127.0.0.1:8080")
 TENANT = "t-demo"
+UPLOAD_LOG_DIR = (
+    Path(os.getenv("AGENTSUPPORT_WORKSPACE_ROOT", "workspace-data")) / ".demo" / "uploads"
+)
 POLL_INTERVAL = 2.0
 APPROVE_INTERVAL = 1.0
 LIVE_POLL_INTERVAL = 0.4
@@ -87,6 +91,8 @@ class DemoState:
         self.session_id: str | None = None
         self.round = 0
         self.rounds: list[dict[str, Any]] = []
+        self.round_cancel_requested = False
+        self.uploads: list[dict[str, Any]] = []
         self.approvals: list[dict[str, Any]] = []
         self.generation: dict[str, Any] | None = None
         self.draft: dict[str, Any] | None = None
@@ -116,6 +122,8 @@ class DemoState:
                 "session_id": self.session_id,
                 "round": self.round,
                 "rounds": list(self.rounds),
+                "round_cancel_requested": self.round_cancel_requested,
+                "uploads": list(self.uploads),
                 "approvals": list(self.approvals),
                 "generation": self.generation,
                 "draft": self.draft,
@@ -555,9 +563,15 @@ _current_approver: Approver | None = None
 _pending_approval: dict[str, Any] | None = None
 
 
-def _wait_terminal(conversation_id: str, timeout: float = 1200) -> dict[str, Any]:
+def _wait_terminal(
+    conversation_id: str,
+    timeout: float = 1200,
+    cancel_check: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if cancel_check is not None and cancel_check():
+            return {"state": "cancelled"}
         events = _conversation_events(conversation_id)
         types = [e["type"] for e in events]
         if "run.completed" in types:
@@ -695,21 +709,35 @@ def _run_round(n: int, task: str | None = None) -> None:
             threading.Thread(
                 target=_live_relay, args=(run_id, conv["id"]), daemon=True
             ).start()
-        result = _wait_terminal(conv["id"])
+        result = _wait_terminal(
+            conv["id"], cancel_check=lambda: STATE.round_cancel_requested
+        )
         summary = _round_summary(conv["id"])
         summary["state"] = result["state"]
         summary["task"] = task_text
+        cancelled = STATE.round_cancel_requested or result["state"] == "cancelled"
+        if cancelled:
+            summary["cancelled"] = True
         STATE.rounds.append(summary)
         with STATE._lock:
             if STATE.live and STATE.live.get("run_id") == run_id:
                 STATE.live["status"] = "done"
                 STATE.live["updated_at"] = time.time()
-        STATE.status = "waiting_next" if result["state"] == "completed" else "error"
-        if result["state"] != "completed":
-            STATE.error = f"round {n + 1} ended with {result['state']}"
+        if cancelled:
+            # 用户主动取消：会话保持可用，不进入异常状态
+            STATE.status = "waiting_next"
+            STATE.error = None
+        else:
+            STATE.status = "waiting_next" if result["state"] == "completed" else "error"
+            if result["state"] != "completed":
+                STATE.error = f"round {n + 1} ended with {result['state']}"
     except Exception as exc:  # noqa: BLE001
-        STATE.status = "error"
-        STATE.error = str(exc)
+        if STATE.round_cancel_requested:
+            STATE.status = "waiting_next"
+            STATE.error = None
+        else:
+            STATE.status = "error"
+            STATE.error = str(exc)
 
 
 def _run_generation() -> None:
@@ -1000,9 +1028,24 @@ def _published_skills() -> list[dict[str, Any]]:
 
 def _session_history_summary(session: dict[str, Any]) -> dict[str, Any]:
     """One session with its rounds, for the history browser."""
-    convs = _get(f"/sessions/{session['id']}/conversations")
+    # 生成会话以 mode=silent 创建（skill 提炼 agent）。它们属于该 session 的
+    # 记录：不进聊天框/轮次，但在历史里单独列为「生成会话（不可继续）」。
+    conversations = _get(f"/sessions/{session['id']}/conversations")
     rounds: list[dict[str, Any]] = []
-    for conv in convs:
+    generations: list[dict[str, Any]] = []
+    for conv in conversations:
+        run = conv.get("run") or {}
+        if (conv.get("mode") or "default") != "default":
+            error = run.get("error") or {}
+            generations.append(
+                {
+                    "conversation_id": conv["id"],
+                    "created_at": conv.get("created_at"),
+                    "state": run.get("state") or "UNKNOWN",
+                    "error": error.get("message") if isinstance(error, dict) else None,
+                }
+            )
+            continue
         summary = _round_summary(conv["id"])
         summary["task"] = conv.get("task")
         rounds.append(summary)
@@ -1011,7 +1054,42 @@ def _session_history_summary(session: dict[str, Any]) -> dict[str, Any]:
         "name": session.get("name") or f"会话 {session['id'][:8]}",
         "created_at": session.get("created_at"),
         "rounds": rounds,
+        "generations": generations,
+        "uploads": _read_upload_records(session.get("workspace_id")),
     }
+
+
+def _upload_log_path(workspace_id: str | None) -> Path | None:
+    if not workspace_id:
+        return None
+    return UPLOAD_LOG_DIR / f"{workspace_id}.json"
+
+
+def _read_upload_records(workspace_id: str | None) -> list[dict[str, Any]]:
+    """Upload records for one workspace, newest last (empty when none)."""
+
+    path = _upload_log_path(workspace_id)
+    if path is None or not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _append_upload_record(workspace_id: str | None, record: dict[str, Any]) -> None:
+    path = _upload_log_path(workspace_id)
+    if path is None:
+        return
+    records = _read_upload_records(workspace_id)
+    records.append(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 class StartBody(BaseModel):
@@ -1067,10 +1145,7 @@ def skills() -> list[dict[str, Any]]:
     return _published_skills()
 
 
-@app.get("/api/skills/{skill_id}")
-def skill_detail(skill_id: str) -> dict[str, Any]:
-    """Return one published skill's frontmatter and SKILL.md content."""
-
+def _resolve_skill_markdown(skill_id: str) -> Path:
     base = Path("skills") / "tenants" / TENANT
     markdown = base / skill_id / "SKILL.md"
     try:
@@ -1083,6 +1158,14 @@ def skill_detail(skill_id: str) -> dict[str, Any]:
         or not markdown.is_file()
     ):
         raise RuntimeError("skill not found")
+    return markdown
+
+
+@app.get("/api/skills/{skill_id}")
+def skill_detail(skill_id: str) -> dict[str, Any]:
+    """Return one published skill's frontmatter and SKILL.md content."""
+
+    markdown = _resolve_skill_markdown(skill_id)
     content = markdown.read_text(encoding="utf-8")
     frontmatter = _parse_frontmatter(content)
     return {
@@ -1091,6 +1174,18 @@ def skill_detail(skill_id: str) -> dict[str, Any]:
         "description": frontmatter.get("description") or "",
         "content": content,
     }
+
+
+@app.get("/api/skills/{skill_id}/download")
+def skill_download(skill_id: str) -> FileResponse:
+    """Download a published SKILL.md file with its original content."""
+
+    markdown = _resolve_skill_markdown(skill_id)
+    return FileResponse(
+        markdown,
+        media_type="text/markdown",
+        filename=f"{skill_id}-SKILL.md",
+    )
 
 
 @app.post("/api/start")
@@ -1120,6 +1215,7 @@ def start(body: StartBody) -> dict[str, Any]:
     STATE.active_skills = list(body.skills)
     STATE.status = "ready"
     STATE.rounds = []
+    STATE.uploads = []
     STATE.approvals = []
     _live_approved.clear()
     STATE.live = None
@@ -1174,11 +1270,20 @@ async def upload_file(file: UploadFile = File(...)) -> dict[str, Any]:
                 out.write(chunk)
     finally:
         await file.close()
-    return {
+    record = {
         "filename": raw_name,
         "path": str(target),
         "size": size,
+        "uploaded_at": datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
+        "session_id": STATE.session_id,
+        "workspace_id": session["workspace_id"],
     }
+    _append_upload_record(str(session["workspace_id"]), record)
+    with STATE._lock:
+        STATE.uploads = _read_upload_records(session["workspace_id"])
+    return {**record, "uploads": list(STATE.uploads)}
 
 
 @app.post("/api/round")
@@ -1189,12 +1294,52 @@ def round_step(body: RoundBody | None = None) -> dict[str, Any]:
         return STATE.snapshot()
     if n >= 30:
         raise RuntimeError("round limit reached (30)")
-    if STATE.status not in ("ready", "waiting_next"):
+    # error 状态也允许继续：上一轮异常后应能直接补发指令，不必绕历史会话
+    if STATE.status not in ("ready", "waiting_next", "error"):
         raise RuntimeError(f"cannot start round from status {STATE.status}")
     STATE.status = "running_round"
     STATE.live = None
+    STATE.error = None
+    STATE.round_cancel_requested = False
     threading.Thread(target=_run_round, args=(n, body.task if custom else None), daemon=True).start()
     return STATE.snapshot()
+
+
+@app.post("/api/cancel-round")
+def cancel_round() -> dict[str, Any]:
+    """取消正在运行的轮次：本地立即放行，远端 run 尽力一并取消。"""
+
+    if STATE.status != "running_round":
+        raise RuntimeError("no running round")
+    STATE.round_cancel_requested = True
+    live = STATE.live or {}
+    conversation_id = live.get("conversation_id")
+    STATE.status = "waiting_next"
+    STATE.error = None
+    remote = "untracked"
+    if conversation_id:
+        try:
+            resp = client.post(
+                f"{AGENTSUPPORT_URL}/conversations/{conversation_id}/cancel",
+                headers={"X-Tenant-Id": TENANT},
+                timeout=30,
+            )
+            remote = "ok" if resp.status_code == 200 else f"http {resp.status_code}"
+        except Exception as exc:  # noqa: BLE001
+            remote = f"error {exc}"
+    # 等本轮记录落地（_run_round 会在下一个轮询点结束并写入 cancelled 标记），
+    # 这样前端收到响应后重绘就能直接显示「本轮已取消」。
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if STATE.rounds and STATE.rounds[-1].get("cancelled"):
+            break
+        time.sleep(0.2)
+    snapshot = STATE.snapshot()
+    snapshot["round_cancel"] = {
+        "conversation_id": conversation_id,
+        "remote": remote,
+    }
+    return snapshot
 
 
 @app.post("/api/skills-select")
@@ -1311,15 +1456,6 @@ def cancel_generation() -> dict[str, Any]:
     conversation_id = summary.get("conversation_id") or (
         (summary.get("pending_question") or {}).get("conversation_id")
     )
-    if not conversation_id:
-        raise RuntimeError("generation conversation is not tracked yet")
-    resp = client.post(
-        f"{AGENTSUPPORT_URL}/conversations/{conversation_id}/cancel",
-        headers={"X-Tenant-Id": TENANT},
-        timeout=60,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(resp.text[:300])
     with STATE._lock:
         summary["cancel_requested"] = True
         summary.pop("pending_question", None)
@@ -1331,6 +1467,25 @@ def cancel_generation() -> dict[str, Any]:
             }
         )
     _gen_note(summary, "warn", "已收到取消请求，正在停止生成会话…")
+    # 本地意图是取消的唯一依据：生成会话可能还没建立（点得太早），
+    # 远端取消只是加速手段，失败不影响本次取消结果。
+    if not conversation_id:
+        _gen_note(summary, "warn", "生成会话尚未建立，已按本地取消处理")
+    else:
+        try:
+            resp = client.post(
+                f"{AGENTSUPPORT_URL}/conversations/{conversation_id}/cancel",
+                headers={"X-Tenant-Id": TENANT},
+                timeout=60,
+            )
+            if resp.status_code != 200:
+                _gen_note(
+                    summary,
+                    "warn",
+                    f"远端取消返回 {resp.status_code}，已按本地取消处理",
+                )
+        except Exception as exc:  # noqa: BLE001
+            _gen_note(summary, "warn", f"远端取消失败（{exc}），已按本地取消处理")
     STATE.status = "waiting_next"
     STATE.live = None
     return STATE.snapshot()
@@ -1357,6 +1512,7 @@ def continue_session(session_id: str) -> dict[str, Any]:
     history = _session_history_summary(session)
     STATE.session_id = session_id
     STATE.rounds = history["rounds"]
+    STATE.uploads = list(history.get("uploads") or [])
     STATE.round = len(STATE.rounds)
     STATE.active_skills = skills
     STATE.status = "waiting_next"
@@ -1423,8 +1579,7 @@ TEXT_PREVIEW_LIMIT = 200_000
 TABLE_PREVIEW_ROWS = 300
 
 
-@app.get("/api/file")
-def file_preview(path: str) -> dict[str, Any]:
+def _resolve_workspace_file(path: str) -> Path:
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():
         candidate = WORKSPACE_ROOTS[0] / candidate
@@ -1438,6 +1593,12 @@ def file_preview(path: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="file not found")
     if resolved.name.lower() == ".env":
         raise HTTPException(status_code=400, detail="not allowed")
+    return resolved
+
+
+@app.get("/api/file")
+def file_preview(path: str) -> dict[str, Any]:
+    resolved = _resolve_workspace_file(path)
     size = resolved.stat().st_size
     base = {"name": resolved.name, "path": str(resolved), "size": size}
     suffix = resolved.suffix.lower()
@@ -1485,6 +1646,14 @@ def file_preview(path: str) -> dict[str, Any]:
         text = data.decode("utf-8", errors="replace")
         return {**base, "kind": "text", "text": text}
     return {**base, "kind": "binary", "note": "该文件类型暂不支持预览，仅显示路径与大小"}
+
+
+@app.get("/api/file-download")
+def file_download(path: str) -> FileResponse:
+    """Download a workspace file with its original name (demo-local)."""
+
+    resolved = _resolve_workspace_file(path)
+    return FileResponse(resolved, filename=resolved.name)
 
 
 if __name__ == "__main__":
