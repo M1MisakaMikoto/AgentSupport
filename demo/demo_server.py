@@ -1012,26 +1012,29 @@ def _parse_frontmatter(content: str) -> dict[str, Any]:
 
 
 def _published_skills() -> list[dict[str, Any]]:
-    """List SKILL.md files published under the demo tenant (reviewed drafts)."""
-    base = Path("skills") / "tenants" / TENANT
-    if not base.is_dir():
-        return []
-    items: list[dict[str, Any]] = []
-    for child in sorted(base.iterdir()):
-        if not child.is_dir():
+    """List the skills the demo tenant can use.
+
+    Same rule as the platform: the tenant's own published skills first, then the
+    shared ones; a tenant skill with the same id wins.
+    """
+
+    found: dict[str, dict[str, Any]] = {}
+    for base in (Path("skills") / "tenants" / TENANT, Path("skills")):
+        if not base.is_dir():
             continue
-        markdown = child / "SKILL.md"
-        if not markdown.is_file():
-            continue
-        frontmatter = _parse_frontmatter(markdown.read_text(encoding="utf-8"))
-        items.append(
-            {
+        for child in sorted(base.iterdir()):
+            if not child.is_dir():
+                continue
+            markdown = child / "SKILL.md"
+            if not markdown.is_file():
+                continue
+            frontmatter = _parse_frontmatter(markdown.read_text(encoding="utf-8"))
+            found[child.name] = {
                 "skill_id": child.name,
                 "name": frontmatter.get("name") or child.name,
                 "description": frontmatter.get("description") or "",
             }
-        )
-    return items
+    return [found[key] for key in sorted(found)]
 
 
 def _session_history_summary(session: dict[str, Any]) -> dict[str, Any]:
@@ -1154,19 +1157,19 @@ def skills() -> list[dict[str, Any]]:
 
 
 def _resolve_skill_markdown(skill_id: str) -> Path:
-    base = Path("skills") / "tenants" / TENANT
-    markdown = base / skill_id / "SKILL.md"
-    try:
-        resolved = markdown.resolve()
-        base_resolved = base.resolve()
-    except OSError as exc:
-        raise RuntimeError("skill not found") from exc
-    if (
-        not str(resolved).startswith(str(base_resolved))
-        or not markdown.is_file()
-    ):
-        raise RuntimeError("skill not found")
-    return markdown
+    for base in (Path("skills") / "tenants" / TENANT, Path("skills")):
+        markdown = base / skill_id / "SKILL.md"
+        try:
+            resolved = markdown.resolve()
+            base_resolved = base.resolve()
+        except OSError:
+            continue
+        if (
+            str(resolved).startswith(str(base_resolved))
+            and markdown.is_file()
+        ):
+            return markdown
+    raise RuntimeError("skill not found")
 
 
 @app.get("/api/skills/{skill_id}")
