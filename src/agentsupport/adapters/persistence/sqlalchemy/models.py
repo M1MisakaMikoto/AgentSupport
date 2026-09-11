@@ -56,7 +56,6 @@ class ConversationRow(Base):
     mode: Mapped[str] = mapped_column(
         String(32), nullable=False, default="default", server_default="default"
     )
-    skills: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     mcp_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     execution_state: Mapped[str] = mapped_column(String(32), nullable=False)
     run_id: Mapped[str] = mapped_column(String(36), nullable=False)
@@ -346,9 +345,6 @@ def create_schema(database_url: str) -> None:
     conversation_columns = {
         column["name"] for column in inspect(engine).get_columns("conversations")
     }
-    if "skills" not in conversation_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE conversations ADD COLUMN skills JSON"))
     if "mcp_refs" not in conversation_columns:
         with engine.begin() as connection:
             connection.execute(text("ALTER TABLE conversations ADD COLUMN mcp_refs JSON"))

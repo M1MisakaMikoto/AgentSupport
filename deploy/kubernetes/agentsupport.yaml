@@ -65,7 +65,6 @@ spec:
             - {name: AGENTSUPPORT_RUNNER_TOKEN, valueFrom: {secretKeyRef: {name: agentsupport-secrets, key: AGENTSUPPORT_RUNNER_TOKEN}}}
           volumeMounts:
             - {name: workspace, mountPath: /workspace-data}
-            - {name: skills, mountPath: /app/src/skills}
           readinessProbe:
             httpGet: {path: /ready, port: 8000}
             initialDelaySeconds: 5

@@ -139,7 +139,6 @@ services:
       - "8080"
     volumes:
       - workspace-data:/workspace-data
-      - skills-data:/app/src/skills
     healthcheck:
       test:
         [
