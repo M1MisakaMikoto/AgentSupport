@@ -224,7 +224,12 @@ def create_runner_app(
             state.pending_interaction = None
             state.emit(
                 "run.failed",
-                {"code": "TRAE_RUNTIME_ERROR", "message": str(exc)},
+                {
+                    "code": "TRAE_RUNTIME_ERROR",
+                    "message": str(exc),
+                    # Runtime/transport failures are worth another round.
+                    "retryable": True,
+                },
             )
         else:
             state.status = "COMPLETED"

@@ -59,6 +59,7 @@ Swagger UI（`/docs`）顶部内嵌本参考全文（`docs/api/agentsupport-api.
 | `POST` | `/conversations/{conversation_id}/input` | [10.1](#101-post-conversationsconversation_idinput) |
 | `POST` | `/conversations/{conversation_id}/approval` | [10.2](#102-post-conversationsconversation_idapproval) |
 | `POST` | `/conversations/{conversation_id}/cancel` | [10.3](#103-post-conversationsconversation_idcancel) |
+| `POST` | `/conversations/{conversation_id}/continue` | [10.4](#104-post-conversationsconversation_idcontinue) |
 | `GET` | `/live` | [11.1](#111-get-live) |
 | `GET` | `/ready` | [11.2](#112-get-ready) |
 | `GET` | `/metrics` | [11.3](#113-get-metrics) |
@@ -826,6 +827,33 @@ POST /conversations/{conversation_id}/approval
 | `404` | `CONVERSATION_NOT_FOUND` | 对话不存在 |
 | `409` | `CONFLICT` / `INVALID_STATE` | 游标不匹配或未处于等待审批状态 |
 | `422` | `INVALID_DECISION` | `decision` 不是 `APPROVE_ONCE` / `REJECT` |
+
+### 10.4 POST /conversations/{conversation_id}/continue
+
+模型侧偶发**运行/传输类失败**（例如流式读超时）后，用它在**同一 Session** 下发起新一轮，
+任务沿用失败那一轮，`parent_conversation_id` 指向它。agent 会因为常规的会话历史注入看到
+失败轮已经做过什么，所以用户不必重述任务。
+
+**不是断点续传**：失败轮已经流失的输出不会被复用，agent 会重新产出，因此**可能重复副作用**
+（例如把同一个文件再写一遍）。
+
+**路径参数**：`conversation_id`（UUID，必须是失败的那一轮）。
+
+**请求头**：`Idempotency-Key`（可选）。
+
+```http
+POST /conversations/{conversation_id}/continue
+```
+
+**成功响应 `201`**：新 Conversation 的完整对象（同 `POST /sessions/{id}/conversations`）。
+
+**错误**：
+
+| 状态码 | 错误码 | 说明 |
+| --- | --- | --- |
+| `404` | `CONVERSATION_NOT_FOUND` | 对话不存在 |
+| `409` | `CONVERSATION_NOT_FAILED` | 该轮不是失败态 |
+| `409` | `CONVERSATION_NOT_RETRYABLE` | 该失败不可重试（`run.failed.retryable` 为 false） |
 
 ### 10.3 POST /conversations/{conversation_id}/cancel
 

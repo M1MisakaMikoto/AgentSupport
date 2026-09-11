@@ -739,6 +739,68 @@ def _run_round(n: int, task: str | None = None) -> None:
             STATE.error = str(exc)
 
 
+def _run_continue() -> None:
+    """Re-run the failed round through the platform's continue endpoint.
+
+    The platform starts a fresh conversation in the same session with the same
+    task, so the usual history injection gives the agent everything it already
+    did; this thread only mirrors the round bookkeeping.
+    """
+
+    try:
+        assert STATE.session_id is not None
+        failed = next(
+            (
+                item
+                for item in reversed(STATE.rounds)
+                if item.get("state") != "completed" and item.get("conversation_id")
+            ),
+            None,
+        )
+        if not failed:
+            raise RuntimeError("no failed round to continue")
+        conv = _post(f"/conversations/{failed['conversation_id']}/continue")
+        run_id = ((conv.get("run") or {}).get("run_id")) or conv.get("run_id")
+        if not run_id:
+            detail = _get(f"/conversations/{conv['id']}")
+            run_id = ((detail.get("run") or {}).get("run_id")) or detail.get("run_id")
+        with STATE._lock:
+            STATE.live = {
+                "run_id": run_id,
+                "conversation_id": conv["id"],
+                "text": "",
+                "tool_calls": [],
+                "files": [],
+                "status": "running",
+                "updated_at": time.time(),
+            }
+        if run_id:
+            threading.Thread(
+                target=_live_relay, args=(run_id, conv["id"]), daemon=True
+            ).start()
+        result = _wait_terminal(
+            conv["id"], cancel_check=lambda: STATE.round_cancel_requested
+        )
+        summary = _round_summary(conv["id"])
+        summary["state"] = result["state"]
+        summary["task"] = conv.get("task") or ""
+        summary["continued_from"] = failed["conversation_id"]
+        STATE.rounds.append(summary)
+        with STATE._lock:
+            if STATE.live and STATE.live.get("run_id") == run_id:
+                STATE.live["status"] = "done"
+                STATE.live["updated_at"] = time.time()
+        if result["state"] == "completed":
+            STATE.status = "waiting_next"
+            STATE.error = None
+        else:
+            STATE.status = "error"
+            STATE.error = f"continued round ended with {result['state']}"
+    except Exception as exc:  # noqa: BLE001
+        STATE.status = "error"
+        STATE.error = str(exc)
+
+
 def _run_generation() -> None:
     try:
         assert STATE.session_id is not None
@@ -1299,6 +1361,22 @@ async def upload_file(file: UploadFile = File(...)) -> dict[str, Any]:
     with STATE._lock:
         STATE.uploads = _read_upload_records(session["workspace_id"])
     return {**record, "uploads": list(STATE.uploads)}
+
+
+@app.post("/api/continue")
+def continue_round() -> dict[str, Any]:
+    """Continue the failed round instead of making the user retype the task."""
+
+    if STATE.status in ("running_round", "running_generate"):
+        raise RuntimeError("cannot continue while a round/generation is running")
+    if STATE.session_id is None:
+        raise RuntimeError("no active session")
+    STATE.status = "running_round"
+    STATE.live = None
+    STATE.error = None
+    STATE.round_cancel_requested = False
+    threading.Thread(target=_run_continue, daemon=True).start()
+    return STATE.snapshot()
 
 
 @app.post("/api/round")

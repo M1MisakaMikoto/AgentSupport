@@ -24,7 +24,7 @@
 | `run.started` | 生命周期 | `conversation_id` | ✅ canonical |
 | `run.running` | 生命周期 | `container_id` | ✅ canonical |
 | `run.completed` | 结果 + 成本 | `result`（含可选 `usage`） | ✅ canonical |
-| `run.failed` | 结果 + 过程 | `code`、`message` | ✅ canonical |
+| `run.failed` | 结果 + 过程 | `code`、`message`、`retryable` | ✅ canonical |
 | `run.cancelled` | 结果 | — | ✅ canonical |
 | `run.lost` | 结果（异常终态） | `container_id`、`health_failures` | ✅ canonical |
 | `message` | 过程 | `content` | ✅ canonical |
@@ -39,6 +39,10 @@
 
 `trajectory.*` 事件与 Trae 特有文件强相关：评估规则不得依赖其 payload，仅可在单指纹
 调试时查看。
+
+`run.failed.retryable`：**运行/传输类失败**（例如模型流读超时）为 `true`，此时调用方可以
+用 `POST /conversations/{id}/continue` 在同一 session 下重跑同一任务；配置类/参数类失败为
+`false`，不给续跑入口。
 
 ### 流式过程事件（非 canonical）
 

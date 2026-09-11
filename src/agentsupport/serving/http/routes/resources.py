@@ -221,3 +221,17 @@ def list_session_conversations(
 @router.get("/conversations/{conversation_id}")
 def get_conversation(request: Request, conversation_id: UUID):
     return agentsupport_service(request).get_conversation(conversation_id).model_dump(mode="json")
+
+
+@router.post("/conversations/{conversation_id}/continue", status_code=201)
+async def continue_conversation(
+    request: Request,
+    conversation_id: UUID,
+    idempotency_key: str | None = Header(default=None),
+):
+    """Start a fresh round for a retryable failure, keeping session memory."""
+
+    conversation = await agentsupport_service(request).continue_conversation(
+        conversation_id, idempotency_key=idempotency_key
+    )
+    return conversation.model_dump(mode="json")

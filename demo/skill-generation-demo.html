@@ -109,6 +109,8 @@ a.chip{text-decoration:none;display:inline-block}
 .sum.running{color:var(--warn);border-color:var(--warn)}
 .cancel-round{height:52px;border-radius:12px;font-size:14px;cursor:pointer;padding:0 16px;white-space:nowrap;background:var(--panel2);color:var(--warn);border:1px solid var(--warn)}
 .cancel-round:disabled{opacity:.4;cursor:not-allowed}
+.retry{height:52px;border-radius:12px;font-size:14px;cursor:pointer;padding:0 16px;white-space:nowrap;background:var(--panel2);color:var(--accent2);border:1px solid var(--accent2)}
+.retry:disabled{opacity:.4;cursor:not-allowed}
   .upload-btn{display:inline-flex;align-items:center;justify-content:center;width:52px;height:52px;border-radius:12px;background:var(--panel2);color:var(--accent2);border:1px dashed rgba(34,211,165,.45);cursor:pointer;font-size:19px;flex-shrink:0}
   .upload-btn:hover{border-color:var(--accent2);background:rgba(34,211,165,.1)}
   /* ---- 生成会话独立面板：只展示生成内容，不写入聊天框 ---- */
@@ -259,6 +261,7 @@ a.chip{text-decoration:none;display:inline-block}
       <textarea id="input" placeholder="给 agent 下指令，例如：在 workspace 创建一个 markdown 转 HTML 的小工具，并写断言…"></textarea>
       <button class="send" id="btnSend">发送</button>
       <button class="sum" id="btnSum">总结成 Skill</button>
+      <button class="retry hidden" id="btnContinue">继续本轮</button>
       <button class="cancel-round hidden" id="btnCancelRound">取消本轮</button>
     </div>
   </div>
@@ -1059,8 +1062,20 @@ $("btnSum").onclick = async () => {
   }catch(e){ sys("总结失败："+e.message); }
 };
 
+$("btnContinue").onclick = async () => {
+  if(state.status === "running_round" || state.status === "running_generate") return;
+  $("btnContinue").disabled = true;
+  try{
+    await api("/api/continue", {});
+    await poll(true);
+  }catch(e){ sys("继续失败："+e.message); }
+  finally{ $("btnContinue").disabled = false; }
+};
+
 $("btnCancelRound").onclick = async () => {
   if(state.status !== "running_round") return;
+  if(!confirm("确定取消当前这一轮？已生成的文件会保留在 workspace。")) return;
+  $("btnCancelRound").disabled = true;
   if(!confirm("确定取消当前这一轮？已生成的文件会保留在 workspace。")) return;
   $("btnCancelRound").disabled = true;
   try{
@@ -1087,6 +1102,10 @@ async function poll(force){
       $("btnSum").disabled = !started || summarizing || (state.rounds||[]).length === 0;
       $("btnSum").classList.toggle("running", summarizing);
       $("btnCancelRound").classList.toggle("hidden", state.status !== "running_round");
+      // 上一轮以失败结束时，给一个"带着上下文重跑"的入口（平台侧是续跑接口）
+      const rounds = state.rounds || [];
+      const lastFailed = rounds.length > 0 && rounds[rounds.length - 1].state !== "completed";
+      $("btnContinue").classList.toggle("hidden", state.status === "running_round" || state.status === "running_generate" || !lastFailed);
       renderSkillBar();
       renderMessages();
       const delay = (summarizing || state.status === "running_round" || state.status === "running_generate") ? 450 : 1500;

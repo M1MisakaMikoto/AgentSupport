@@ -422,6 +422,8 @@ async def fail_run(payload: dict) -> dict:
         payload={
             "code": str(error.get("code") or "WORKFLOW_FAILED"),
             "message": str(error.get("message") or "workflow failed"),
+            # Only failures that carry the flag may be continued by the caller.
+            "retryable": bool(error.get("retryable", False)),
         },
         source="agentsupport",
     )

@@ -237,7 +237,13 @@ class ConversationOpsMixin:
             await self._cancel_runner_best_effort(conversation.run.run_id)
             self._mark_run_failed(
                 conversation,
-                {"code": "CORE_RUNTIME_ERROR", "message": str(exc)},
+                {
+                    "code": "CORE_RUNTIME_ERROR",
+                    "message": str(exc),
+                    # A runtime/transport failure is worth another round; the
+                    # caller can continue instead of retyping the task.
+                    "retryable": True,
+                },
             )
         if conversation.run.state in TERMINAL_STATES:
             obs_metrics.record_run(
@@ -252,6 +258,41 @@ class ConversationOpsMixin:
         conversation.run.state = ExecutionState.FAILED
         conversation.run.error = dict(payload)
         self._append(conversation, "run.failed", payload)
+
+    async def continue_conversation(
+        self,
+        conversation_id: UUID,
+        idempotency_key: str | None = None,
+    ) -> Conversation:
+        """Start a fresh round for a retryable failure, keeping session memory.
+
+        The failed run is never resumed: the new round reuses the same task in
+        the same session, so the usual history injection lets the agent see what
+        the failed attempt already did.
+        """
+
+        conversation = self._conversation(conversation_id)
+        if conversation.run.state != ExecutionState.FAILED:
+            raise ServiceError(
+                "CONVERSATION_NOT_FAILED",
+                "only a failed conversation can be continued",
+                409,
+            )
+        error = conversation.run.error or {}
+        if not error.get("retryable"):
+            raise ServiceError(
+                "CONVERSATION_NOT_RETRYABLE",
+                "this failure is not retryable",
+                409,
+            )
+        return await self.create_conversation(
+            conversation.session_id,
+            conversation.task,
+            conversation.id,
+            idempotency_key=idempotency_key,
+            mcp_refs=conversation.mcp_refs,
+            mode=conversation.mode,
+        )
 
 
     def _apply_core_event(self, conversation: Conversation, event: EventEnvelope) -> None:
