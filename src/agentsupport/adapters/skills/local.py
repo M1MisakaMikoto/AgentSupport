@@ -129,17 +129,22 @@ class LocalSkillProvider:
         return packages
 
     def list_skills(self, *, tenant_id: str | None = None) -> list[dict[str, Any]]:
-        namespace = self._namespace(tenant_id)
-        if not namespace.is_dir():
-            return []
-        entries: list[dict[str, Any]] = []
-        for child in sorted(namespace.iterdir()):
-            if not child.is_dir():
+        """List the skills a namespace can use: its own first, then the shared ones."""
+
+        found: dict[str, dict[str, Any]] = {}
+        for namespace in reversed(self._search_namespaces(tenant_id)):
+            if not namespace.is_dir():
                 continue
-            if not (child / "SKILL.md").is_file():
-                continue
-            entries.append(self._resolve_one(child.name, tenant_id=tenant_id)[0].model_dump(mode="json"))
-        return entries
+            for child in sorted(namespace.iterdir()):
+                if not child.is_dir() or not (child / "SKILL.md").is_file():
+                    continue
+                digest = hashlib.sha256(
+                    (child / "SKILL.md").read_bytes()
+                ).hexdigest()
+                found[child.name] = SkillManifestEntry(
+                    skill_id=child.name, content_hash=digest
+                ).model_dump(mode="json")
+        return [found[key] for key in sorted(found)]
 
     def describe_skill(
         self, skill_id: str, *, tenant_id: str | None = None
@@ -257,18 +262,28 @@ class LocalSkillProvider:
     ) -> tuple[SkillManifestEntry, Path]:
         if not self._valid_id.fullmatch(skill_id):
             raise ValueError(f"invalid skill id: {skill_id}")
+        for namespace in self._search_namespaces(tenant_id):
+            source = (namespace / skill_id).resolve()
+            if source.parent != namespace:
+                raise ValueError(f"skill escapes configured root: {skill_id}")
+            skill_file = source / "SKILL.md"
+            if not skill_file.is_file():
+                continue
+            digest = hashlib.sha256(skill_file.read_bytes()).hexdigest()
+            return (
+                SkillManifestEntry(skill_id=skill_id, content_hash=digest),
+                source,
+            )
+        raise FileNotFoundError(f"authorized skill is missing SKILL.md: {skill_id}")
+
+    def _search_namespaces(self, tenant_id: str | None) -> list[Path]:
+        """Tenant namespace first, then the shared/global one.
+
+        A tenant never sees another tenant's directory: the fallback is only ever
+        the root-level shared namespace.
+        """
+
         namespace = self._namespace(tenant_id)
-        source = (namespace / skill_id).resolve()
-        if source.parent != namespace:
-            raise ValueError(f"skill escapes configured root: {skill_id}")
-        skill_file = source / "SKILL.md"
-        if not skill_file.is_file():
-            raise FileNotFoundError(f"authorized skill is missing SKILL.md: {skill_id}")
-        digest = hashlib.sha256(skill_file.read_bytes()).hexdigest()
-        return (
-            SkillManifestEntry(
-                skill_id=skill_id,
-                content_hash=digest,
-            ),
-            source,
-        )
+        if namespace == self.root:
+            return [self.root]
+        return [namespace, self.root]

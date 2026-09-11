@@ -59,6 +59,40 @@ def test_install_requires_frontmatter(tmp_path):
     assert len(installed["content_hash"]) == 64
 
 
+def test_tenant_sees_shared_skills_and_never_another_tenant(tmp_path):
+    skills_root = tmp_path / "skills"
+    provider = LocalSkillProvider(skills_root)
+    provider.install_skill("shared", {"SKILL.md": SKILL_MD.encode()})
+    provider.install_skill(
+        "only-a", {"SKILL.md": SKILL_MD.encode()}, tenant_id="tenant-a"
+    )
+
+    assert [item["skill_id"] for item in provider.skill_catalog(["shared"], tenant_id="tenant-a")]
+    with pytest.raises(FileNotFoundError):
+        provider.skill_catalog(["only-a"], tenant_id="tenant-b")
+    assert [item["skill_id"] for item in provider.list_skills(tenant_id="tenant-a")] == [
+        "only-a",
+        "shared",
+    ]
+    assert [item["skill_id"] for item in provider.list_skills(tenant_id="tenant-b")] == [
+        "shared"
+    ]
+
+
+def test_tenant_skill_shadows_the_shared_one(tmp_path):
+    skills_root = tmp_path / "skills"
+    provider = LocalSkillProvider(skills_root)
+    provider.install_skill("review", {"SKILL.md": SKILL_MD.encode()})
+    tenant_md = SKILL_MD.replace("输出审查报告", "租户自己的口径")
+    provider.install_skill("review", {"SKILL.md": tenant_md.encode()}, tenant_id="tenant-a")
+
+    global_entry = provider.skill_catalog(["review"])
+    tenant_entry = provider.skill_catalog(["review"], tenant_id="tenant-a")
+
+    assert global_entry[0]["description"] == "输出审查报告"
+    assert tenant_entry[0]["description"] == "租户自己的口径"
+
+
 def test_local_workspace_storage_driver_creates_and_restores_versions(tmp_path):
     driver = LocalWorkspaceStorageDriver(tmp_path / "workspaces")
     workspace_id, workspace_path = driver.create("versioned")

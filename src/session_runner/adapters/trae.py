@@ -23,7 +23,13 @@ from agent_runner_contracts.tools import (
     ToolGatewayPolicy,
 )
 
-from ..security import BashCallGate
+from ..security import (
+    MISSING_REASON,
+    BashCallGate,
+    CommandTier,
+    CommandVerdict,
+    classify_command,
+)
 from ..skills_materialize import materialize_skill_package
 
 EventEmitter = Callable[[str, dict[str, Any]], None]
@@ -499,6 +505,15 @@ class TraeToolGatewayBridge:
             for name in tool_names
         ]
         self.control_plane = ToolGatewayControlPlane(descriptors)
+        # In default mode the command gate owns bash approval: a batch whose bash
+        # calls are all whitelist-safe drops ``bash`` from the approval set for
+        # that batch only, so a read does not need a human click. The tool-level
+        # flag stays on the descriptor path for every other mode.
+        if self.mode == "default":
+            for descriptor in descriptors:
+                if descriptor.name == "bash":
+                    descriptor.requires_approval = False
+            approvals.add("bash")
         self.policy = ToolGatewayPolicy(
             allowed_tools=allowed,
             approval_required_tools=approvals,
@@ -551,7 +566,23 @@ class TraeToolGatewayBridge:
         )
         for call in batch.calls:
             self.emit("tool.call", call.model_dump(mode="json"))
-        authorization = self.control_plane.authorize(batch, self.policy)
+
+        blocked, all_bash_safe = self._preflight(calls)
+        if blocked and len(blocked) == len(calls):
+            # A batch that is only forbidden commands never reaches the human gate.
+            return self._store_results(
+                [
+                    self._rejection(
+                        call, f"命令被拒绝（不可用清单）：{blocked[call.call_id]}"
+                    )
+                    for call in calls
+                ]
+            )
+
+        authorization = self.control_plane.authorize(
+            batch,
+            self._effective_policy(all_bash_safe, restored_decision=restored_decision),
+        )
         self.emit("tool.authorization", authorization.model_dump(mode="json"))
         decision = restored_decision
         if authorization.status == AuthorizationStatus.REQUIRES_APPROVAL and decision is None:
@@ -624,6 +655,50 @@ class TraeToolGatewayBridge:
             problem = blocked.get(call.call_id)
             ordered.append(self._rejection(call, problem) if problem else executed[call.call_id])
         return self._store_results(ordered)
+
+    def _bash_verdict(self, call: Any) -> CommandVerdict | None:
+        """Deterministic tier for one bash call; ``None`` for other tools."""
+
+        if call.name != "bash" or self.bash_gate is None:
+            return None
+        arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        if not str(arguments.get("reason") or "").strip():
+            return CommandVerdict(CommandTier.BLOCKED, MISSING_REASON)
+        return classify_command(
+            str(arguments.get("command") or ""),
+            allowed_prefixes=self.bash_gate.allowed_prefixes,
+            cwd=self.bash_gate.cwd,
+            policy=self.bash_gate.policy,
+        )
+
+    def _preflight(self, calls: list[Any]) -> tuple[dict[str, str], bool]:
+        """Return (blocked bash reasons, whether every bash call is whitelist-safe)."""
+
+        blocked: dict[str, str] = {}
+        bash_calls = 0
+        safe_calls = 0
+        for call in calls:
+            verdict = self._bash_verdict(call)
+            if verdict is None:
+                continue
+            bash_calls += 1
+            if verdict.tier is CommandTier.BLOCKED:
+                blocked[call.call_id] = verdict.reason
+            elif verdict.tier is CommandTier.SAFE:
+                safe_calls += 1
+        return blocked, bash_calls > 0 and safe_calls == bash_calls
+
+    def _effective_policy(
+        self, all_bash_safe: bool, *, restored_decision: ApprovalDecision | None
+    ) -> ToolGatewayPolicy:
+        """Drop ``bash`` from this batch's approval set when the gate already cleared it."""
+
+        if self.mode != "default" or not all_bash_safe or restored_decision is not None:
+            return self.policy
+        return ToolGatewayPolicy(
+            allowed_tools=self.policy.allowed_tools,
+            approval_required_tools=self.policy.approval_required_tools - {"bash"},
+        )
 
     async def _call_problem(self, call: Any) -> str | None:
         """Return a rejection reason for one call, or ``None`` to let it run."""
