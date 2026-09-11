@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from session_runner.security import (
     CachingApprover,
     CommandApprovalRequest,

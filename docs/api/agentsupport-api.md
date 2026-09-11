@@ -423,7 +423,6 @@ GET /sessions?workspace_id=<uuid>&tenant_id=t-1&project_id=p-2
 | `task` | string | 是 | 任务描述，不能为空 |
 | `parent_conversation_id` | UUID | 否 | 从同一 Session 的已有对话派生 |
 | `workspace_id` | UUID | 否 | 仅当 Session 不存在且 auto-create 开启时用于决定新 Session 的 Workspace |
-| `skills` | object[] | 否 | 本次对话激活的 skill 列表（`skill_id` + `enabled`）；缺省继承 Session 配置；显式传空数组表示本次不启用任何 skill |
 | `mcp_refs` | object[] | 否 | 本次对话激活的 MCP server 引用（`{"server_id": "..."}`）；缺省继承 Session 配置；显式传空数组表示本次不启用任何 MCP |
 | `mode` | string | 否 | 单次对话执行模式：`default`（默认）/ `no_approval`（无审批，全工具无工作区限制）/ `silent`（静默模式：仅工作区内工具与路径、无审批，供静默任务使用） |
 
@@ -434,12 +433,11 @@ Idempotency-Key: a1b2c3d4-...
 {
   "task": "分析项目并修复测试失败",
   "parent_conversation_id": null,
-  "skills": [{"skill_id": "review", "enabled": true}]
 }
 ```
 
-`skills` 在创建时预检（缺失返回 `404 SKILL_NOT_FOUND`）；运行时会话内可动态选择，
-例如同一 Session 的不同对话启用不同 skill。
+对话不再单独挑选 skill：候选池来自 Session/Project 配置的 `config.skills`
+（创建会话时预检，缺失返回 `404 SKILL_NOT_FOUND`），运行时由 agent 从目录里自行取用。
 
 **成功响应 `201`**：
 
@@ -471,7 +469,6 @@ Idempotency-Key: a1b2c3d4-...
 | --- | --- | --- |
 | `404` | `SESSION_NOT_FOUND` | Session 不存在（auto-create 关闭，或未提供 `workspace_id`） |
 | `404` | `PARENT_NOT_FOUND` | 父对话不存在或不属于当前 Session |
-| `404` | `SKILL_NOT_FOUND` | `skills` 中引用了不存在的 skill |
 | `404` | `MCP_SERVER_NOT_FOUND` | `mcp_refs` 中引用了不存在的 server |
 | `422` | `MCP_SERVER_DISABLED` | 引用的 MCP server 已停用 |
 | `409` | `IDEMPOTENCY_CONFLICT` | 相同 Key 用于不同请求 |
@@ -502,9 +499,11 @@ Idempotency-Key: a1b2c3d4-...
 
 ## 7. Skill API
 
-Skill 自服务接口：上游随时上传新 skill，平台存储到共享 skills 卷并只读挂载进 Runner。
-skill 是"目录 + `SKILL.md`"的本地包；会话执行配置里的 `config.skills` 引用
-`skill_id`，创建会话时平台会预检 skill 是否存在。
+Skill 自服务接口：上游随时上传新 skill，平台存储到共享 skills 卷。
+skill 是"目录 + `SKILL.md`"的本地包，且 `SKILL.md` 必须带 `name` 与 `description` frontmatter
+（缺失返回 `422`）。会话执行配置里的 `config.skills` 引用 `skill_id`，创建会话时平台会预检
+skill 是否存在；运行时只有**目录**（name + description）进 prompt，整目录随运行请求下发并由
+Runner 落到只读目录，agent 按提示词规则自行读取需要的 `SKILL.md`。
 
 ### 7.1 POST /skills
 
@@ -537,7 +536,6 @@ file=@SKILL.md
 {
   "skill_id": "review",
   "content_hash": "3a5f8c9b...",
-  "mount_path": "/opt/agent-skills/review"
 }
 ```
 
@@ -566,7 +564,6 @@ file=@SKILL.md
 {
   "skill_id": "review",
   "content_hash": "3a5f8c9b...",
-  "mount_path": "/opt/agent-skills/review",
   "files": [
     { "path": "SKILL.md", "size": 128 },
     { "path": "references/guide.md", "size": 512 }
@@ -616,7 +613,7 @@ file=@SKILL.md
 
 ### 7.8 POST /skill-drafts/{draft_id}/review
 
-人工审核：`approve` 将 SKILL.md 按 tenant 命名空间发布到 skill 库（之后可被同租户会话勾选注入）；
+人工审核：`approve` 将 SKILL.md 按 tenant 命名空间发布到 skill 库（之后可进入同租户会话的候选池）；
 `reject` 标记拒绝。发布前不影响现有 skill 注入链路。
 **请求体**：`decision`（`approve` | `reject`，必填）、`note`（可选）。
 **请求头**：`X-Tenant-Id`（可选）：与草稿 tenant 不一致时返回 404。

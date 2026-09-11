@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import logging
 import re
 import shutil
 import zipfile
@@ -16,11 +18,46 @@ MAX_ENTRY_SIZE = 2 * 1024 * 1024
 MAX_UNPACKED_SIZE = 10 * 1024 * 1024
 MAX_ENTRY_COUNT = 200
 
+#: Skill bodies are never truncated; a large one is only warned about because
+#: the agent is told to locate the part it needs with grep before reading.
+SKILL_MD_WARN_BYTES = 64 * 1024
+
+logger = logging.getLogger(__name__)
+
+_FRONTMATTER = re.compile(r"\A---\s*\r?\n(.*?)\r?\n---\s*(?:\r?\n|\Z)", re.DOTALL)
+
+
+def parse_skill_frontmatter(content: str) -> dict[str, str]:
+    """Parse the YAML-ish frontmatter block of a SKILL.md (flat string fields)."""
+
+    match = _FRONTMATTER.match(content or "")
+    if not match:
+        return {}
+    fields: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        fields[key.strip()] = value.strip().strip('"').strip("'")
+    return fields
+
+
+def skill_catalog_entry(skill_id: str, content: str) -> dict[str, Any]:
+    """The only thing a catalog exposes: id, name and description."""
+
+    frontmatter = parse_skill_frontmatter(content)
+    return {
+        "skill_id": skill_id,
+        "name": frontmatter.get("name", ""),
+        "description": frontmatter.get("description", ""),
+    }
+
 
 class SkillManifestEntry(BaseModel):
     skill_id: str
     content_hash: str
-    mount_path: str
 
 
 class LocalSkillProvider:
@@ -57,41 +94,39 @@ class LocalSkillProvider:
             resolved.append(self._resolve_one(skill_id, tenant_id=tenant_id))
         return resolved
 
-    def manifest(
+    def skill_catalog(
         self, skill_ids: list[str], *, tenant_id: str | None = None
     ) -> list[dict[str, Any]]:
-        return [
-            entry.model_dump(mode="json")
-            for entry, _ in self.resolve(skill_ids, tenant_id=tenant_id)
-        ]
-
-    def skill_prompt_entries(
-        self,
-        skill_ids: list[str],
-        *,
-        tenant_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Return enabled skills with their full SKILL.md content for prompt injection."""
+        """Return the catalog (name + description) for the candidate pool."""
 
         entries: list[dict[str, Any]] = []
         for skill_id in skill_ids:
-            entry, source = self._resolve_one(skill_id, tenant_id=tenant_id)
+            _, source = self._resolve_one(skill_id, tenant_id=tenant_id)
             content = (source / "SKILL.md").read_text(encoding="utf-8", errors="replace")
-            entries.append(
-                {
-                    **entry.model_dump(mode="json"),
-                    "content": content,
-                }
-            )
+            entries.append(skill_catalog_entry(skill_id, content))
         return entries
 
-    def read_only_mounts(
+    def skill_package(
         self, skill_ids: list[str], *, tenant_id: str | None = None
-    ) -> list[tuple[str, str]]:
-        return [
-            (str(source), entry.mount_path)
-            for entry, source in self.resolve(skill_ids, tenant_id=tenant_id)
-        ]
+    ) -> list[dict[str, Any]]:
+        """Return whole skill directories (base64) for materialization in the runner."""
+
+        packages: list[dict[str, Any]] = []
+        for skill_id in skill_ids:
+            _, source = self._resolve_one(skill_id, tenant_id=tenant_id)
+            files: list[dict[str, str]] = []
+            for item in sorted(source.rglob("*")):
+                if not item.is_file():
+                    continue
+                relative = str(item.relative_to(source)).replace("\\", "/")
+                files.append(
+                    {
+                        "path": relative,
+                        "content_b64": base64.b64encode(item.read_bytes()).decode("ascii"),
+                    }
+                )
+            packages.append({"skill_id": skill_id, "files": files})
+        return packages
 
     def list_skills(self, *, tenant_id: str | None = None) -> list[dict[str, Any]]:
         namespace = self._namespace(tenant_id)
@@ -154,6 +189,19 @@ class LocalSkillProvider:
                 if total > MAX_UNPACKED_SIZE:
                     raise ValueError("skill package exceeds unpacked size limit")
             skill_file = staging / "SKILL.md"
+            skill_text = skill_file.read_text(encoding="utf-8", errors="replace")
+            frontmatter = parse_skill_frontmatter(skill_text)
+            if not frontmatter.get("name") or not frontmatter.get("description"):
+                raise ValueError(
+                    "skill package must declare frontmatter name and description"
+                )
+            if skill_file.stat().st_size > SKILL_MD_WARN_BYTES:
+                logger.warning(
+                    "skill %s has a large SKILL.md (%d bytes); the agent is told to grep "
+                    "before reading it in full",
+                    skill_id,
+                    skill_file.stat().st_size,
+                )
             digest = hashlib.sha256(skill_file.read_bytes()).hexdigest()
             final = namespace / skill_id
             if final.exists():
@@ -162,7 +210,6 @@ class LocalSkillProvider:
             return SkillManifestEntry(
                 skill_id=skill_id,
                 content_hash=digest,
-                mount_path=f"/opt/agent-skills/{skill_id}",
             ).model_dump(mode="json")
         finally:
             if staging.exists():
@@ -222,7 +269,6 @@ class LocalSkillProvider:
             SkillManifestEntry(
                 skill_id=skill_id,
                 content_hash=digest,
-                mount_path=f"/opt/agent-skills/{skill_id}",
             ),
             source,
         )

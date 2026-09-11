@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 
 import pytest
@@ -5,20 +6,57 @@ import pytest
 from agentsupport.skills import LocalSkillProvider
 from agentsupport.storage import LocalWorkspaceStorageDriver
 
+SKILL_MD = """---
+name: review
+description: 输出审查报告
+---
 
-def test_authorized_skill_manifest_and_read_only_mount(tmp_path):
+# Review
+"""
+
+
+def test_skill_catalog_carries_only_id_name_and_description(tmp_path):
     skills_root = tmp_path / "skills"
     skill = skills_root / "review"
     skill.mkdir(parents=True)
-    (skill / "SKILL.md").write_text("# Review\n", encoding="utf-8")
+    (skill / "SKILL.md").write_text(SKILL_MD, encoding="utf-8")
 
     provider = LocalSkillProvider(skills_root)
-    manifest = provider.manifest(["review"])
-    mounts = provider.read_only_mounts(["review"])
-    assert manifest[0]["skill_id"] == "review"
-    assert manifest[0]["mount_path"] == "/opt/agent-skills/review"
-    assert len(manifest[0]["content_hash"]) == 64
-    assert mounts == [(str(skill.resolve()), "/opt/agent-skills/review")]
+
+    assert provider.skill_catalog(["review"]) == [
+        {"skill_id": "review", "name": "review", "description": "输出审查报告"}
+    ]
+
+
+def test_skill_package_carries_whole_directory(tmp_path):
+    skills_root = tmp_path / "skills"
+    skill = skills_root / "review"
+    (skill / "references").mkdir(parents=True)
+    # write_bytes keeps the fixture byte-identical (write_text would add CRLF on Windows)
+    (skill / "SKILL.md").write_bytes(SKILL_MD.encode("utf-8"))
+    (skill / "references" / "guide.md").write_text("guide", encoding="utf-8")
+
+    package = LocalSkillProvider(skills_root).skill_package(["review"])
+
+    assert package[0]["skill_id"] == "review"
+    files = {entry["path"]: entry["content_b64"] for entry in package[0]["files"]}
+    assert set(files) == {"SKILL.md", "references/guide.md"}
+    assert base64.b64decode(files["references/guide.md"]) == b"guide"
+    assert base64.b64decode(files["SKILL.md"]).decode("utf-8") == SKILL_MD
+
+
+def test_install_requires_frontmatter(tmp_path):
+    provider = LocalSkillProvider(tmp_path / "skills")
+
+    with pytest.raises(ValueError):
+        provider.install_skill("review", {"SKILL.md": b"# no frontmatter\n"})
+    with pytest.raises(ValueError):
+        provider.install_skill(
+            "review", {"SKILL.md": b"---\nname: review\n---\n\n# Review\n"}
+        )
+
+    installed = provider.install_skill("review", {"SKILL.md": SKILL_MD.encode()})
+    assert len(installed["content_hash"]) == 64
 
 
 def test_local_workspace_storage_driver_creates_and_restores_versions(tmp_path):

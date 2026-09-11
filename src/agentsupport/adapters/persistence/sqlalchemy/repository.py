@@ -24,7 +24,6 @@ from ....domain import (
     ExecutionState,
     McpServer,
     OutboxNotification,
-    PresetSkill,
     ProjectConfig,
     RunProjection,
     Session,
@@ -486,11 +485,6 @@ class PostgresRepository:
                 ),
                 task=conversation.task,
                 mode=conversation.mode.value,
-                skills=(
-                    [skill.model_dump(mode="json") for skill in conversation.skills]
-                    if conversation.skills is not None
-                    else None
-                ),
                 mcp_refs=(
                     [dict(item) for item in conversation.mcp_refs]
                     if conversation.mcp_refs is not None
@@ -530,11 +524,6 @@ class PostgresRepository:
             ),
             task=row.task,
             mode=ConversationMode(row.mode) if row.mode else ConversationMode.DEFAULT,
-            skills=(
-                [PresetSkill.model_validate(item) for item in row.skills]
-                if row.skills is not None
-                else None
-            ),
             mcp_refs=(
                 [dict(item) for item in row.mcp_refs]
                 if row.mcp_refs is not None

@@ -132,7 +132,6 @@ class SkillGenerationOpsMixin:
             session_id,
             task,
             workspace_id=session.workspace_id,
-            skills=None,
             mode=ConversationMode.SILENT,
         )
         request.conversation_id = conversation.id

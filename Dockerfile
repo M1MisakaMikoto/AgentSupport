@@ -19,7 +19,8 @@ USER root
 RUN if ! getent group agent > /dev/null; then addgroup --system agent; fi \
     && if ! id agent > /dev/null 2>&1; then adduser --system --ingroup agent agent; fi \
     && mkdir -p /workspace-data \
-    && chown -R agent:agent /app /workspace-data
+    && mkdir -p /opt/agent-skills \
+    && chown -R agent:agent /app /workspace-data /opt/agent-skills
 ENV ALEMBIC_CONFIG=/app/alembic.ini
 WORKDIR /app/src
 USER agent

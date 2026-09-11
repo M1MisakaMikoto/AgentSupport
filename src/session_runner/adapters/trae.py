@@ -24,6 +24,7 @@ from agent_runner_contracts.tools import (
 )
 
 from ..security import BashCallGate
+from ..skills_materialize import materialize_skill_package
 
 EventEmitter = Callable[[str, dict[str, Any]], None]
 WaitingCallback = Callable[[dict[str, Any], ToolBatch, int], None]
@@ -293,36 +294,56 @@ def _resolve_system_prompt(settings: TraeRuntimeSettings, request: Any) -> str |
     return None
 
 
-def _context_skills(bundle: Any) -> list[dict[str, Any]]:
-    """Extract enabled skills from a request context bundle (dict or model)."""
+def _bundle_get(bundle: Any, key: str, default: Any = None) -> Any:
+    """Read one field from a request context bundle (dict or model)."""
 
     if isinstance(bundle, dict):
-        entries = bundle.get("skills") or bundle.get("skill_manifest") or []
-        return entries
-    entries = getattr(bundle, "skills", None) or getattr(bundle, "skill_manifest", None) or []
-    return entries
+        return bundle.get(key, default)
+    return getattr(bundle, key, default)
 
 
-def _skill_prompt_section(bundle: Any) -> str | None:
-    """Build the system-prompt section that makes enabled skills actionable."""
+def _context_catalog(bundle: Any) -> list[dict[str, Any]]:
+    """Extract the candidate-pool catalog from a request context bundle."""
 
-    entries = _context_skills(bundle)
-    if not entries:
-        return None
-    lines = [
-        "# 启用的 Skills",
-        "本次任务启用了以下 Skill，请严格按其 SKILL.md 的指引执行；每项以 `---` 分隔：",
-    ]
+    entries = _bundle_get(bundle, "skill_catalog") or []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _catalog_listing(entries: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
     for entry in entries:
-        skill_id = str(entry.get("skill_id", "unknown"))
-        mount_path = entry.get("mount_path")
-        content = str(entry.get("content") or "").strip()
-        lines.append(f"## Skill: {skill_id}")
-        if mount_path:
-            lines.append(f"路径: {mount_path}（如需读取附属文件可查看该目录）")
-        lines.append(content or "（SKILL.md 内容未随请求携带）")
-        lines.append("---")
-    return "\n\n".join(lines)
+        skill_id = str(entry.get("skill_id") or "unknown")
+        description = str(entry.get("description") or "").strip()
+        name = str(entry.get("name") or "").strip()
+        label = f"{skill_id}（{name}）" if name and name != skill_id else skill_id
+        lines.append(f"- {label}: {description}" if description else f"- {label}")
+    return "\n".join(lines)
+
+
+def _skill_prompt_section(bundle: Any, skill_root: str | None) -> str | None:
+    """Build the catalog section: what is available, and how to read it."""
+
+    entries = _context_catalog(bundle)
+    if not entries or not skill_root:
+        return None
+    return SKILL_CATALOG_PROMPT.format(
+        root=skill_root, catalog=_catalog_listing(entries)
+    )
+
+
+SKILL_CATALOG_PROMPT = """# 可用 Skills
+
+本次会话可用的 Skill 目录（只给名称与用途）。读取根目录：{root}
+
+规则：
+1. 任务与某个 Skill 的描述匹配时，**必须先读取它的 SKILL.md，再判断是否采用**。
+   不要求你一定采用它，但作出判断前必须确保信息充足；除非用户明确要求，否则不要跳过读取。
+2. 读取用 bash，例如：`cat {root}/<skill_id>/SKILL.md`。每条命令都要带 reason，
+   且只有只读命令、路径在该根目录或当前会话工作区内才会被放行。
+3. SKILL.md 较大时先用 `grep` 定位需要的部分，不要整篇读进来。
+
+目录：
+{catalog}"""
 
 
 FILE_REFERENCE_PROMPT = """# 文件引用格式
@@ -854,6 +875,7 @@ class TraeExecutionAdapter:
         )
         self.workspace: Path | None = None
         self.trajectory: Path | None = None
+        self.skill_root: Path | None = None
         self.agent: Any = None
         self.bridge: TraeToolGatewayBridge | None = None
         self.next_step = 1
@@ -873,9 +895,10 @@ class TraeExecutionAdapter:
 
         run_id = str(getattr(self.request, "run_id", "") or "")
         policy = getattr(self.request, "tool_policy", None) or {}
+        skill_root = self.skill_root or self.settings.skill_root(run_id)
         return BashCallGate(
             approver=self.command_approver,
-            allowed_prefixes=(str(self.workspace), str(self.settings.skill_root(run_id))),
+            allowed_prefixes=(str(self.workspace), str(skill_root)),
             cwd=str(self.workspace),
             mode=str(policy.get("mode") or "default"),
             policy=self.settings.command_policy(),
@@ -1132,9 +1155,17 @@ class TraeExecutionAdapter:
         trajectory_dir = self.workspace / ".agentsupport" / "trajectories"
         trajectory_dir.mkdir(parents=True, exist_ok=True)
         self.trajectory = trajectory_dir / f"{self.request.run_id}.json"
+        run_id = str(getattr(self.request, "run_id", "") or "")
+        self.skill_root = materialize_skill_package(
+            _bundle_get(self.request.context_bundle, "skill_package") or [],
+            self.settings.skill_root(run_id),
+        )
         self.agent = self.agent_factory(self.settings, self.request, self.trajectory)
         sections = []
-        skill_section = _skill_prompt_section(self.request.context_bundle)
+        skill_section = _skill_prompt_section(
+            self.request.context_bundle,
+            str(self.skill_root) if self.skill_root else None,
+        )
         if skill_section:
             sections.append(skill_section)
         ref_section = _file_reference_section(self.request.context_bundle)

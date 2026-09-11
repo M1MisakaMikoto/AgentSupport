@@ -682,11 +682,6 @@ def _run_round(n: int, task: str | None = None) -> None:
         assert STATE.session_id is not None
         task_text = task if task else ROUNDS[n][1]
         body: dict[str, Any] = {"task": task_text}
-        if STATE.active_skills:
-            body["skills"] = [
-                {"skill_id": skill_id, "enabled": True}
-                for skill_id in STATE.active_skills
-            ]
         if n > 0 and STATE.rounds and STATE.rounds[-1].get("conversation_id"):
             body["parent_conversation_id"] = STATE.rounds[-1]["conversation_id"]
         conv = _post(f"/sessions/{STATE.session_id}/conversations", body)
@@ -781,12 +776,25 @@ def _run_activation_case(label: str, file_name: str, skill_id: str | None) -> di
     _seed_sales_xlsx(workspace_root / file_name)
     session = _post(
         "/sessions",
-        {"workspace_id": workspace["id"], "tenant_id": TENANT, "name": label},
+        {
+            "workspace_id": workspace["id"],
+            "tenant_id": TENANT,
+            "name": label,
+            # The candidate pool lives on the session; per-conversation picking is gone.
+            **(
+                {
+                    "config": {
+                        "version": 1,
+                        "skills": [{"skill_id": skill_id, "enabled": True}],
+                    }
+                }
+                if skill_id
+                else {}
+            ),
+        },
         tenant=TENANT,
     )
     body = {"task": ACTIVATE_TASK.format(file=file_name)}
-    if skill_id:
-        body["skills"] = [{"skill_id": skill_id, "enabled": True}]
     conv = _post(f"/sessions/{session['id']}/conversations", body)
     _wait_terminal(conv["id"], timeout=1200)
     from openpyxl import load_workbook

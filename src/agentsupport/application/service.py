@@ -114,9 +114,6 @@ class AgentSupportService(
         self.event_notifier = event_notifier
         self.workspace_provider = workspace_provider
         self.skill_provider = skill_provider
-        self.enabled_skills = [
-            item.strip() for item in config.enabled_skills.split(",") if item.strip()
-        ]
         self.core_runtime = core_runtime
         self.idempotency: dict[tuple[str, str], IdempotencyRecord] = {}
         self.workspace_leases: dict[UUID, UUID] = {}
@@ -320,17 +317,11 @@ class AgentSupportService(
 
 
     def _skills_for_session(self, session: Session) -> list[str]:
-        if session.config and not session.config.is_empty():
-            return session.config.enabled_skill_ids()
-        return self.enabled_skills
+        """The candidate pool: what the session/project config declares, nothing else."""
 
-
-    def _skills_for_conversation(
-        self, conversation: Conversation, session: Session
-    ) -> list[str]:
-        if conversation.skills is not None:
-            return [skill.skill_id for skill in conversation.skills if skill.enabled]
-        return self._skills_for_session(session)
+        if session.config is None:
+            return []
+        return session.config.enabled_skill_ids()
 
 
     def _tool_policy_for_session(self, session: Session) -> dict[str, Any]:

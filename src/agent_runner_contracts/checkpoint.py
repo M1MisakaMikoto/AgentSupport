@@ -14,8 +14,7 @@ class ContextBundle(BaseModel):
     conversation_id: UUID
     workspace_ref: str
     recent_events: list[dict[str, Any]] = Field(default_factory=list)
-    skill_manifest: list[dict[str, Any]] = Field(default_factory=list)
-    skills: list[dict[str, Any]] = Field(default_factory=list)
+    skill_catalog: list[dict[str, Any]] = Field(default_factory=list)
     tool_policy: dict[str, Any] = Field(default_factory=dict)
     mcp_refs: list[Any] = Field(default_factory=list)
 

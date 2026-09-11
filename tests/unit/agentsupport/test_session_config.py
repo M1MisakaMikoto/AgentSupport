@@ -3,9 +3,11 @@
 from uuid import uuid4
 
 import pytest
+from _support import make_temporal_service as _make_service
 
 from agentsupport.domain import PresetSkill, PresetToolPolicy, ProjectConfig
-from _support import make_temporal_service as _make_service
+
+SKILL_MD = "---\nname: review\ndescription: 输出审查报告\n---\n\n# Review\n".encode()
 
 
 @pytest.fixture
@@ -14,9 +16,8 @@ def service(tmp_path):
         tmp_path,
         workspace_root=tmp_path / "workspaces",
         skills_root=tmp_path / "skills",
-        enabled_skills="debug",
     ).service
-    service.create_skill("review", filename="SKILL.md", payload=b"# Review\n")
+    service.create_skill("review", filename="SKILL.md", payload=SKILL_MD)
     return service
 
 
@@ -38,9 +39,9 @@ def test_session_config_drives_skills_and_tool_policy(service):
     assert "bash" in policy["approval_required_tools"]
 
 
-def test_session_without_config_uses_deployment_defaults(service):
+def test_session_without_config_has_an_empty_candidate_pool(service):
     session = service.create_session(uuid4())
-    assert service._skills_for_session(session) == ["debug"]
+    assert service._skills_for_session(session) == []
     assert service._tool_policy_for_session(session)["allowed_tools"] == [
         "bash",
         "str_replace_based_edit_tool",

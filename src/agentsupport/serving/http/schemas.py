@@ -85,7 +85,6 @@ class ConversationCreate(BaseModel):
     task: str = Field(min_length=1, max_length=MAX_TASK_CHARS)
     parent_conversation_id: UUID | None = None
     workspace_id: UUID | None = None
-    skills: list[ConfigSkillInput] | None = None
     mcp_refs: list[dict[str, Any]] | None = None
     mode: ConversationMode | None = None
 

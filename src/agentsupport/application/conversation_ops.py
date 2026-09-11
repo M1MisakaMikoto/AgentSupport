@@ -17,7 +17,6 @@ from ..domain import (
     Conversation,
     ConversationMode,
     ExecutionState,
-    PresetSkill,
     Session,
 )
 from ..observability import metrics as obs_metrics
@@ -64,7 +63,6 @@ class ConversationOpsMixin:
         idempotency_key: str | None = None,
         *,
         workspace_id: UUID | None = None,
-        skills: list[PresetSkill] | None = None,
         mcp_refs: list[dict[str, Any]] | None = None,
         auto_created: dict[str, Any] | None = None,
         mode: ConversationMode | None = None,
@@ -87,10 +85,6 @@ class ConversationOpsMixin:
                 session_id=session_id,
                 auto_created=auto_created,
             )
-        if skills is not None:
-            self._validate_skill_ids(
-                [skill.skill_id for skill in skills], tenant_id=session.tenant_id
-            )
         if parent_conversation_id:
             parent = None if self.temporal_mode else self.conversations.get(parent_conversation_id)
             if not parent and self.repository:
@@ -112,7 +106,6 @@ class ConversationOpsMixin:
             session_id=session_id,
             task=task,
             parent_conversation_id=parent_conversation_id,
-            skills=skills,
             mcp_refs=mcp_refs,
             mode=mode or ConversationMode.DEFAULT,
         )
@@ -137,7 +130,7 @@ class ConversationOpsMixin:
     def _temporal_run_request(self, conversation: Conversation, session: Session) -> dict:
         """Build the workflow input consumed by the temporal activities."""
 
-        skills = self._skills_for_conversation(conversation, session)
+        skills = self._skills_for_session(session)
         return {
             "run_id": str(conversation.run.run_id),
             "conversation_id": str(conversation.id),
@@ -203,7 +196,7 @@ class ConversationOpsMixin:
         if used_registered or (runner_endpoint and not self.config.core_runner_url):
             workspace_ref = "/workspace"
         tool_policy = self._tool_policy_for_conversation(conversation, session)
-        conversation_skills = self._skills_for_conversation(conversation, session)
+        conversation_skills = self._skills_for_session(session)
         request = {
             "run_id": str(conversation.run.run_id),
             "conversation_id": str(conversation.id),
@@ -217,10 +210,10 @@ class ConversationOpsMixin:
                 "conversation_id": str(conversation.id),
                 "workspace_ref": workspace_ref,
                 "recent_events": self._session_recent_events(session, conversation),
-                "skill_manifest": self.skill_provider.manifest(
+                "skill_catalog": self.skill_provider.skill_catalog(
                     conversation_skills, tenant_id=session.tenant_id
                 ),
-                "skills": self.skill_provider.skill_prompt_entries(
+                "skill_package": self.skill_provider.skill_package(
                     conversation_skills, tenant_id=session.tenant_id
                 ),
                 "tool_policy": tool_policy,

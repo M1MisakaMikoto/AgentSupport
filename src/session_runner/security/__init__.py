@@ -9,6 +9,7 @@ from .approval import (
     DenyAllApprover,
     LlmCommandApprover,
 )
+from .bash_call_gate import MISSING_REASON, BashCallGate, BashCallOutcome
 from .command_gate import (
     DEFAULT_POLICY,
     CommandPolicy,
@@ -16,11 +17,13 @@ from .command_gate import (
     CommandVerdict,
     classify_command,
 )
-from .bash_call_gate import MISSING_REASON, BashCallGate, BashCallOutcome
 
 __all__ = [
     "DEFAULT_POLICY",
+    "MISSING_REASON",
     "AllowAllApprover",
+    "BashCallGate",
+    "BashCallOutcome",
     "CachingApprover",
     "CommandApproval",
     "CommandApprovalRequest",
@@ -30,8 +33,5 @@ __all__ = [
     "CommandVerdict",
     "DenyAllApprover",
     "LlmCommandApprover",
-    "MISSING_REASON",
-    "BashCallGate",
-    "BashCallOutcome",
     "classify_command",
 ]

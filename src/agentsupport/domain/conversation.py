@@ -6,7 +6,6 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
 from .execution import RunProjection, utc_now
-from .project import PresetSkill
 
 
 class ConversationMode(StrEnum):
@@ -24,7 +23,6 @@ class Conversation(BaseModel):
     session_id: UUID
     parent_conversation_id: UUID | None = None
     task: str
-    skills: list[PresetSkill] | None = None
     mcp_refs: list[dict[str, Any]] | None = None
     mode: ConversationMode = ConversationMode.DEFAULT
     created_at: datetime = Field(default_factory=utc_now)

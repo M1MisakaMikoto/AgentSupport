@@ -45,7 +45,6 @@ class Settings(BaseSettings):
     health_check_interval_seconds: int = 5
     health_failure_threshold: int = 3
     skills_root: Path = Path("skills")
-    enabled_skills: str = ""
     # API authentication contract: this platform intentionally ships without
     # token-based authentication. Only "none" is implemented; any other value
     # fails fast so a half-baked auth mode cannot silently reach production.

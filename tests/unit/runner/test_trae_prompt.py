@@ -1,3 +1,4 @@
+import base64
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -6,8 +7,8 @@ import pytest
 from session_runner.adapters.trae import (
     TraeExecutionAdapter,
     TraeRuntimeSettings,
-    _first_real_assistant_text,
     _file_reference_section,
+    _first_real_assistant_text,
     _is_quick_talk,
     _looks_like_meta_apology,
     _resolve_system_prompt,
@@ -27,6 +28,8 @@ def make_settings(tmp_path, *, prompt_file=None):
         max_steps=3,
         workspace_roots=(tmp_path.resolve(),),
         system_prompt_file=prompt_file,
+        # Materialization must stay inside tmp_path; the container default is /opt.
+        skills_root=tmp_path / "agent-skills",
     )
 
 
@@ -54,34 +57,57 @@ def test_falls_back_to_builtin_when_no_override(tmp_path):
     assert _resolve_system_prompt(settings, _Request({})) is None
 
 
-def test_skill_prompt_section_builds_from_context_bundle():
+def test_skill_prompt_section_lists_the_catalog_with_the_read_root():
     section = _skill_prompt_section(
         {
-            "skills": [
-                {
-                    "skill_id": "review",
-                    "mount_path": "/opt/agent-skills/review",
-                    "content": "# Review\n输出审查报告。",
-                }
+            "skill_catalog": [
+                {"skill_id": "review", "name": "review", "description": "输出审查报告"},
+                {"skill_id": "docs", "name": "docs-writing", "description": "写文档"},
             ]
-        }
+        },
+        "/opt/agent-skills/run-1",
     )
     assert section is not None
-    assert "## Skill: review" in section
-    assert "/opt/agent-skills/review" in section
+    assert "review" in section and "docs-writing" in section
     assert "输出审查报告" in section
+    assert "/opt/agent-skills/run-1" in section
 
 
-def test_skill_prompt_section_falls_back_to_manifest():
+def test_skill_prompt_section_demands_reading_before_deciding():
     section = _skill_prompt_section(
-        {"skill_manifest": [{"skill_id": "review", "mount_path": "/opt/agent-skills/review"}]}
+        {"skill_catalog": [{"skill_id": "review", "name": "review", "description": "x"}]},
+        "/opt/agent-skills/run-1",
     )
     assert section is not None
-    assert "内容未随请求携带" in section
+    assert "必须先读取它的 SKILL.md" in section
+    assert "不要求你一定采用" in section
+    assert "grep" in section
 
 
-def test_skill_prompt_section_none_without_skills():
-    assert _skill_prompt_section({"task": "hi"}) is None
+def test_skill_prompt_section_omits_the_body_and_the_old_header():
+    section = _skill_prompt_section(
+        {
+            "skill_catalog": [
+                {"skill_id": "review", "name": "review", "description": "输出审查报告"}
+            ]
+        },
+        "/opt/agent-skills/run-1",
+    )
+    assert section is not None
+    assert "# 启用的 Skills" not in section
+    assert "SKILL.md 内容未随请求携带" not in section
+
+
+def test_skill_prompt_section_none_without_catalog_or_root():
+    assert _skill_prompt_section({"task": "hi"}, "/opt/agent-skills/run-1") is None
+    assert _skill_prompt_section({"skill_catalog": []}, "/opt/agent-skills/run-1") is None
+    assert (
+        _skill_prompt_section(
+            {"skill_catalog": [{"skill_id": "review", "name": "review", "description": "x"}]},
+            None,
+        )
+        is None
+    )
 
 
 def test_file_reference_section_uses_real_workspace_ref_example():
@@ -235,11 +261,20 @@ async def test_initialize_agent_injects_skills_into_system_prompt(tmp_path):
         workspace_ref=str(workspace),
         context_bundle={
             "task": "review the code",
-            "skills": [
+            "skill_catalog": [
+                {"skill_id": "review", "name": "review", "description": "输出审查报告"}
+            ],
+            "skill_package": [
                 {
                     "skill_id": "review",
-                    "mount_path": "/opt/agent-skills/review",
-                    "content": "# Review\n输出审查报告。",
+                    "files": [
+                        {
+                            "path": "SKILL.md",
+                            "content_b64": base64.b64encode(
+                                "# Review\n输出审查报告。".encode()
+                            ).decode(),
+                        }
+                    ],
                 }
             ],
         },
@@ -257,7 +292,14 @@ async def test_initialize_agent_injects_skills_into_system_prompt(tmp_path):
 
     prompt = adapter.agent.agent._system_prompt
     assert prompt.startswith("base prompt")
-    assert "## Skill: review" in prompt
+    assert "# 可用 Skills" in prompt
+    assert "- review: 输出审查报告" in prompt
+    assert str(adapter.skill_root) in prompt
+    # The body never reaches the prompt; the agent must read it from disk.
+    assert "输出审查报告。" not in prompt
+    assert (adapter.skill_root / "review" / "SKILL.md").read_text(encoding="utf-8").startswith(
+        "# Review"
+    )
     assert "输出审查报告" in prompt
 
 

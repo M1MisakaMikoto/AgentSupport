@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from session_runner.security import CommandPolicy, CommandTier, classify_command
+from session_runner.security import (
+    DEFAULT_POLICY,
+    CommandPolicy,
+    CommandTier,
+    classify_command,
+)
 
 
 @pytest.fixture
@@ -21,7 +26,7 @@ def roots(tmp_path: Path):
     return workspace, skills
 
 
-def _classify(command: str, roots, policy: CommandPolicy = CommandPolicy()):
+def _classify(command: str, roots, policy: CommandPolicy = DEFAULT_POLICY):
     workspace, skills = roots
     return classify_command(
         command,
@@ -32,7 +37,7 @@ def _classify(command: str, roots, policy: CommandPolicy = CommandPolicy()):
 
 
 def test_reads_inside_allowed_prefixes_are_safe(roots):
-    workspace, skills = roots
+    _, skills = roots
     assert _classify(f"cat {skills / 'review' / 'SKILL.md'}", roots).tier == CommandTier.SAFE
     assert _classify("cat report.txt", roots).tier == CommandTier.SAFE
     assert _classify("grep -n title report.txt", roots).tier == CommandTier.SAFE

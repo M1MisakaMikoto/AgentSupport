@@ -201,10 +201,10 @@ def _build_run_request(
             "conversation_id": str(conversation.id),
             "workspace_ref": workspace_ref,
             "recent_events": recent_events,
-            "skill_manifest": ctx.skill_provider.manifest(
+            "skill_catalog": ctx.skill_provider.skill_catalog(
                 skills, tenant_id=session.tenant_id
             ),
-            "skills": ctx.skill_provider.skill_prompt_entries(
+            "skill_package": ctx.skill_provider.skill_package(
                 skills, tenant_id=session.tenant_id
             ),
             "tool_policy": tool_policy,

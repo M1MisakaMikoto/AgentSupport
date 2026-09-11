@@ -1,15 +1,18 @@
 """Skill self-service API and provider tests."""
 
+import base64
 import io
 import zipfile
 
 import pytest
+from _support import make_temporal_service as _make_service
 from httpx import ASGITransport, AsyncClient
 
 from agentsupport.api import create_app
 from agentsupport.application.service import ServiceError
 from agentsupport.skills import LocalSkillProvider
-from _support import make_temporal_service as _make_service
+
+SKILL_MD = "---\nname: review\ndescription: 输出审查报告\n---\n\n# Review\n".encode()
 
 
 def _zip(payload: dict[str, bytes]) -> bytes:
@@ -25,17 +28,15 @@ def _service(tmp_path):
         tmp_path,
         workspace_root=tmp_path / "workspaces",
         skills_root=tmp_path / "skills",
-        enabled_skills="",
     ).service
 
 
 def test_provider_install_list_describe_remove(tmp_path):
     provider = LocalSkillProvider(tmp_path / "skills")
     installed = provider.install_skill(
-        "review", {"SKILL.md": b"# Review\n", "references/guide.md": b"guide"}
+        "review", {"SKILL.md": SKILL_MD, "references/guide.md": b"guide"}
     )
     assert installed["skill_id"] == "review"
-    assert installed["mount_path"] == "/opt/agent-skills/review"
     assert len(installed["content_hash"]) == 64
 
     listed = provider.list_skills()
@@ -51,23 +52,24 @@ def test_provider_install_list_describe_remove(tmp_path):
 
 def test_provider_overwrite_updates_content_hash(tmp_path):
     provider = LocalSkillProvider(tmp_path / "skills")
-    first = provider.install_skill("review", {"SKILL.md": b"v1"})
-    second = provider.install_skill("review", {"SKILL.md": b"v2"})
+    first = provider.install_skill("review", {"SKILL.md": SKILL_MD + b"v1"})
+    second = provider.install_skill("review", {"SKILL.md": SKILL_MD + b"v2"})
     assert first["content_hash"] != second["content_hash"]
 
 
-def test_provider_skill_prompt_entries_carries_full_content_without_truncation(tmp_path):
+def test_provider_catalog_has_no_body_and_no_truncation(tmp_path):
     provider = LocalSkillProvider(tmp_path / "skills")
-    long_skill = "# Review\n" + ("x" * 5000)
-    provider.install_skill("review", {"SKILL.md": long_skill.encode()})
+    long_skill = SKILL_MD + (b"x" * 5000)
+    provider.install_skill("review", {"SKILL.md": long_skill})
 
-    entries = provider.skill_prompt_entries(["review"])
+    catalog = provider.skill_catalog(["review"])
+    package = provider.skill_package(["review"])
 
-    assert len(entries) == 1
-    assert entries[0]["skill_id"] == "review"
-    assert entries[0]["mount_path"] == "/opt/agent-skills/review"
-    assert entries[0]["content"] == long_skill
-    assert "truncated" not in entries[0]
+    assert catalog == [
+        {"skill_id": "review", "name": "review", "description": "输出审查报告"}
+    ]
+    body = base64.b64decode(package[0]["files"][0]["content_b64"])
+    assert body == long_skill
 
 
 @pytest.mark.parametrize(
@@ -93,7 +95,7 @@ async def test_skills_api_upload_list_detail_delete(tmp_path):
         created = await client.post(
             "/skills",
             data={"skill_id": "review"},
-            files={"file": ("SKILL.md", b"# Review\n", "text/markdown")},
+            files={"file": ("SKILL.md", SKILL_MD, "text/markdown")},
         )
         assert created.status_code == 201, created.text
         assert created.json()["skill_id"] == "review"
@@ -123,7 +125,7 @@ async def test_skills_api_accepts_zip_and_rejects_bad_packages(tmp_path):
             files={
                 "file": (
                     "review.zip",
-                    _zip({"SKILL.md": b"# Review", "guide.md": b"guide"}),
+                    _zip({"SKILL.md": SKILL_MD, "guide.md": b"guide"}),
                     "application/zip",
                 )
             },
@@ -161,7 +163,7 @@ async def test_skills_api_accepts_zip_and_rejects_bad_packages(tmp_path):
 
 def test_session_create_validates_skill_references(tmp_path):
     service = _service(tmp_path)
-    service.create_skill("review", filename="SKILL.md", payload=b"# Review\n")
+    service.create_skill("review", filename="SKILL.md", payload=SKILL_MD)
     from agentsupport.domain import PresetSkill, ProjectConfig
 
     workspace = service.create_workspace("skills")

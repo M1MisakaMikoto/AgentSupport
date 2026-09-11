@@ -4,20 +4,20 @@ from typing import Any, Protocol
 
 
 class SkillProvider(Protocol):
-    def manifest(
-        self, skill_ids: list[str], *, tenant_id: str | None = None
-    ) -> list[dict[str, Any]]: ...
 
-    def skill_prompt_entries(
+    def skill_catalog(
         self,
         skill_ids: list[str],
         *,
         tenant_id: str | None = None,
     ) -> list[dict[str, Any]]: ...
 
-    def read_only_mounts(
-        self, skill_ids: list[str], *, tenant_id: str | None = None
-    ) -> list[tuple[str, str]]: ...
+    def skill_package(
+        self,
+        skill_ids: list[str],
+        *,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]: ...
 
     def list_skills(self, *, tenant_id: str | None = None) -> list[dict[str, Any]]: ...
 

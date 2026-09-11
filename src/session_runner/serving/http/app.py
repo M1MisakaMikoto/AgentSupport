@@ -51,6 +51,7 @@ from ...registration import (
     RunnerRegistrationClient,
     runner_registration_client_from_env,
 )
+from ...skills_materialize import cleanup_skill_package
 from ...tools import ToolGatewayExecutor
 
 
@@ -233,6 +234,9 @@ def create_runner_app(
                 record_llm_usage(usage)
             state.emit("run.completed", {"result": result})
         finally:
+            execution = state.trae_execution
+            if execution is not None and execution.skill_root is not None:
+                cleanup_skill_package(execution.skill_root)
             state.status_changed.set()
 
     @app.get("/live")
@@ -406,8 +410,7 @@ def create_runner_app(
             conversation_id=state.request.conversation_id,
             workspace_ref=state.request.workspace_ref,
             recent_events=recent_events,
-            skill_manifest=list(state.request.context_bundle.get("skill_manifest", [])),
-            skills=list(state.request.context_bundle.get("skills", [])),
+            skill_catalog=list(state.request.context_bundle.get("skill_catalog", [])),
             mcp_refs=list(state.request.context_bundle.get("mcp_refs", [])),
             tool_policy=tool_policy,
         )

@@ -176,8 +176,10 @@ WSL 文件系统，避免 DrvFS 元数据限制。
 本地开发默认 `AGENTSUPPORT_SKILLS_ROOT=skills`，启动后即可在控制台勾选；Docker Compose
 使用独立的 `skills-data` 命名卷，需要先通过 `POST /skills`（multipart，`SKILL.md` 或 zip）
 上传一次，之后控制台与任务调试页的勾选列表会显示可用 Skill。启用的 Skill 会随运行请求
-把 `SKILL.md` 内容注入 Trae agent 的 system prompt（超出约 20K 字符截断），并只读挂载
-`skills-data` 到 Runner，供 agent 按指引执行或读取附属文件。
+构成会话的**候选池**：运行请求只携带 name + description 目录与整目录包，Runner 把它落到
+`/opt/agent-skills/<run_id>/`（只读，run 结束清理）。`SKILL.md` 正文**不进** system prompt——
+提示词要求 agent 在任务与某条描述匹配时先读取该 SKILL.md，再自行决定是否采用；
+读取走受命令门禁约束的 bash。
 
 ## Docker Compose
 

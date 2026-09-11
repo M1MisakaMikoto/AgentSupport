@@ -171,11 +171,12 @@ def classify_command(
     if executable in policy.denied:
         return CommandVerdict(CommandTier.BLOCKED, f"{executable} is on the denied list")
 
-    if "/" in raw_executable or "\\" in raw_executable:
-        if not _is_trusted_executable_path(raw_executable):
-            return CommandVerdict(
-                CommandTier.RISKY, f"executable path is not trusted: {raw_executable}"
-            )
+    if ("/" in raw_executable or "\\" in raw_executable) and not _is_trusted_executable_path(
+        raw_executable
+    ):
+        return CommandVerdict(
+            CommandTier.RISKY, f"executable path is not trusted: {raw_executable}"
+        )
 
     if executable not in policy.safe:
         return CommandVerdict(

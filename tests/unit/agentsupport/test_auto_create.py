@@ -16,7 +16,6 @@ def service(tmp_path):
     return _make_service(
         tmp_path,
         workspace_root=tmp_path / "workspaces",
-        enabled_skills="review",
     ).service
 
 

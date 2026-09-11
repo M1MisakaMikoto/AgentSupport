@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 
 from session_runner.security import (
+    MISSING_REASON,
     BashCallGate,
     CommandApproval,
     CommandTier,
-    MISSING_REASON,
 )
 
 

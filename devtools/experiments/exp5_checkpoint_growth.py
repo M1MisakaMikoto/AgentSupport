@@ -44,7 +44,7 @@ def _run_request(batch_size: int) -> RunRequest:
             "conversation_id": str(uuid4()),
             "workspace_ref": "/workspace",
             "recent_events": [],
-            "skill_manifest": [],
+            "skill_catalog": [],
             "skills": [],
             "mcp_refs": [],
             "tool_policy": tool_policy,

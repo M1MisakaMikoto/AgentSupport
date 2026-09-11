@@ -26,8 +26,8 @@ def _stub_context(
         list_session_events=lambda session_id: events,
     )
     skill_provider = SimpleNamespace(
-        manifest=lambda skills, tenant_id=None: [],
-        skill_prompt_entries=lambda skills, tenant_id=None: [],
+        skill_catalog=lambda skills, tenant_id=None: [],
+        skill_package=lambda skills, tenant_id=None: [],
     )
     return ExecutionContext(
         config=SimpleNamespace(

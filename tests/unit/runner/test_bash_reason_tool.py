@@ -6,10 +6,10 @@ from session_runner.adapters.trae import _ensure_vendored_trae_path
 
 _ensure_vendored_trae_path()
 
-from trae_agent.tools import tools_registry  # noqa: E402
-from trae_agent.tools.bash_tool import BashTool  # noqa: E402
+from trae_agent.tools import tools_registry
+from trae_agent.tools.bash_tool import BashTool
 
-from session_runner.tools.bash_reason_tool import (  # noqa: E402
+from session_runner.tools.bash_reason_tool import (
     SupportBashTool,
     register_bash_tool,
 )
