@@ -11,6 +11,8 @@ from agentsupport.domain import ConversationMode
 from _support import make_temporal_service
 
 SILENT_TOOLS = [
+    # bash is allowed in silent mode but every call must pass the command gate.
+    "bash",
     "str_replace_based_edit_tool",
     "json_edit_tool",
     "word_edit_tool",

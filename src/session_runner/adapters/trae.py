@@ -23,6 +23,8 @@ from agent_runner_contracts.tools import (
     ToolGatewayPolicy,
 )
 
+from ..security import BashCallGate
+
 EventEmitter = Callable[[str, dict[str, Any]], None]
 WaitingCallback = Callable[[dict[str, Any], ToolBatch, int], None]
 AgentFactory = Callable[["TraeRuntimeSettings", Any, Path], Any]
@@ -139,6 +141,12 @@ def _first_real_assistant_text(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _split_env(value: str) -> tuple[str, ...]:
+    """Comma-separated env var -> tuple (empty entries dropped)."""
+
+    return tuple(item.strip() for item in (value or "").split(",") if item.strip())
+
+
 @dataclass(frozen=True)
 class TraeRuntimeSettings:
     config_path: Path
@@ -149,6 +157,18 @@ class TraeRuntimeSettings:
     max_steps: int
     workspace_roots: tuple[Path, ...]
     system_prompt_file: Path | None = None
+    #: Run-scoped skill materialization root: ``<skills_root>/<run_id>``.
+    skills_root: Path = Path("/opt/agent-skills")
+    #: ``llm`` (default) | ``deny`` | ``off`` for risky commands in silent mode.
+    command_approval_mode: str = "llm"
+    command_approval_timeout_seconds: float = 20.0
+    judge_provider: str | None = None
+    judge_model: str | None = None
+    judge_base_url: str | None = None
+    judge_api_key: str | None = None
+    #: Deployment can only tighten the command lists, never widen them.
+    denied_commands: tuple[str, ...] = ()
+    disabled_safe_commands: tuple[str, ...] = ()
 
     @classmethod
     def from_environment(cls) -> TraeRuntimeSettings:
@@ -162,6 +182,10 @@ class TraeRuntimeSettings:
             if value.strip()
         )
         prompt_file = os.getenv("SESSION_RUNNER_TRAE_PROMPT_FILE")
+        judge_provider = os.getenv("SESSION_RUNNER_JUDGE_PROVIDER") or provider
+        judge_model = os.getenv("SESSION_RUNNER_JUDGE_MODEL") or os.getenv(
+            "TRAE_MODEL", "claude-sonnet-4-20250514"
+        )
         default_config = Path(__file__).resolve().parents[1] / "trae_config.yaml"
         return cls(
             config_path=Path(os.getenv("SESSION_RUNNER_TRAE_CONFIG", str(default_config))),
@@ -172,6 +196,45 @@ class TraeRuntimeSettings:
             max_steps=int(os.getenv("TRAE_MAX_STEPS", "8")),
             workspace_roots=roots,
             system_prompt_file=Path(prompt_file) if prompt_file else None,
+            skills_root=Path(
+                os.getenv("SESSION_RUNNER_SKILLS_ROOT", "/opt/agent-skills")
+            ),
+            command_approval_mode=os.getenv("SESSION_RUNNER_COMMAND_APPROVAL", "llm"),
+            command_approval_timeout_seconds=float(
+                os.getenv("SESSION_RUNNER_COMMAND_APPROVAL_TIMEOUT_SECONDS", "20")
+            ),
+            judge_provider=judge_provider,
+            judge_model=judge_model,
+            judge_base_url=os.getenv("SESSION_RUNNER_JUDGE_MODEL_BASE_URL")
+            or os.getenv("TRAE_MODEL_BASE_URL")
+            or None,
+            judge_api_key=os.getenv("SESSION_RUNNER_JUDGE_API_KEY") or api_key,
+            denied_commands=_split_env(os.getenv("SESSION_RUNNER_DENIED_COMMANDS", "")),
+            disabled_safe_commands=_split_env(
+                os.getenv("SESSION_RUNNER_DISABLED_SAFE_COMMANDS", "")
+            ),
+        )
+
+    def skill_root(self, run_id: str) -> Path:
+        return self.skills_root / run_id
+
+    def command_policy(self):
+        from session_runner.security import DEFAULT_POLICY
+
+        return DEFAULT_POLICY.tightened(
+            disable_safe=self.disabled_safe_commands, deny_more=self.denied_commands
+        )
+
+    def judge_settings(self):
+        from session_runner.security.judge import JudgeSettings
+
+        return JudgeSettings(
+            config_path=self.config_path,
+            provider=self.judge_provider or self.provider,
+            model=self.judge_model or self.model,
+            model_base_url=self.judge_base_url or self.model_base_url,
+            api_key=self.judge_api_key or self.api_key,
+            timeout_seconds=self.command_approval_timeout_seconds,
         )
 
     def validate(self) -> None:
@@ -289,9 +352,11 @@ def _file_reference_section(bundle: Any) -> str | None:
 
 def _default_agent_factory(settings: TraeRuntimeSettings, request: Any, trajectory: Path) -> Any:
     _ensure_vendored_trae_path()
+    from session_runner.tools.bash_reason_tool import register_bash_tool
     from session_runner.tools.document_tools import register_document_tools
     from session_runner.tools.question_tool import register_question_tool
 
+    register_bash_tool()
     register_document_tools()
     register_question_tool()
     from trae_agent.agent.agent import Agent
@@ -363,6 +428,9 @@ class TraeToolGatewayBridge:
         on_waiting: WaitingCallback,
         next_step: Callable[[], int],
         workspace_root: Path | None = None,
+        bash_gate: BashCallGate | None = None,
+        run_id: str = "",
+        conversation_id: str = "",
     ) -> None:
         self.delegate = delegate
         self.emit = emit
@@ -370,6 +438,9 @@ class TraeToolGatewayBridge:
         self.next_step = next_step
         self.mode = str(raw_policy.get("mode") or "default")
         self.workspace_root = workspace_root
+        self.bash_gate = bash_gate
+        self.run_id = run_id
+        self.conversation_id = conversation_id
         configured = {
             item["name"]: ToolDescriptor.model_validate(item)
             for item in raw_policy.get("tools", [])
@@ -510,34 +581,70 @@ class TraeToolGatewayBridge:
                     "要固化的口径/规范/方法与边界发给用户确认；用户回复后才能继续。已拦截："
                     + names,
                 )
+        return await self._dispatch(calls, method)
+
+    async def _dispatch(self, calls: list[Any], method: str) -> list[Any]:
+        """Apply the silent sandbox and the command gate, then run the survivors."""
+
+        blocked: dict[str, str] = {}
+        for call in calls:
+            problem = await self._call_problem(call)
+            if problem is not None:
+                blocked[call.call_id] = problem
+
+        executed: dict[str, Any] = {}
+        remaining = [call for call in calls if call.call_id not in blocked]
+        if remaining:
+            for result in await getattr(self.delegate, method)(remaining):
+                executed[result.call_id] = result
+
+        ordered: list[Any] = []
+        for call in calls:
+            problem = blocked.get(call.call_id)
+            ordered.append(self._rejection(call, problem) if problem else executed[call.call_id])
+        return self._store_results(ordered)
+
+    async def _call_problem(self, call: Any) -> str | None:
+        """Return a rejection reason for one call, or ``None`` to let it run."""
+
         if self.mode == "silent":
-            sandboxed = {
-                call.call_id: problem
-                for call in batch.calls
-                if (problem := self._sandbox_problem(call)) is not None
-            }
-            if sandboxed:
-                results: list[Any] = []
-                for call in batch.calls:
-                    problem = sandboxed.get(call.call_id)
-                    if problem is not None:
-                        self._warn_sandbox(call, problem)
-                        results.append(
-                            _trae_tool_result(
-                                call_id=call.call_id,
-                                tool_id=getattr(call, "id", None),
-                                name=call.name,
-                                success=False,
-                                error=f"silent mode sandbox: {problem}",
-                            )
-                        )
-                    else:
-                        results.extend(
-                            await getattr(self.delegate, method)([call])
-                        )
-                return self._store_results(results)
-        results = await getattr(self.delegate, method)(calls)
-        return self._store_results(results)
+            problem = self._sandbox_problem(call)
+            if problem is not None:
+                self._warn_sandbox(call, problem)
+                return f"silent mode sandbox: {problem}"
+
+        if call.name != "bash" or self.bash_gate is None:
+            return None
+
+        arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        outcome = await self.bash_gate.check(
+            command=str(arguments.get("command") or ""),
+            reason=str(arguments.get("reason") or ""),
+            run_id=self.run_id,
+            conversation_id=self.conversation_id,
+        )
+        self.emit(
+            "command.gate",
+            {
+                "call_id": call.call_id,
+                "tier": outcome.tier.value if outcome.tier else None,
+                "allowed": outcome.allowed,
+                "source": outcome.source,
+                "reason": outcome.reason,
+            },
+        )
+        if outcome.allowed:
+            return None
+        return f"命令被拒绝（{outcome.source}）：{outcome.reason}"
+
+    def _rejection(self, call: Any, reason: str) -> Any:
+        return _trae_tool_result(
+            call_id=call.call_id,
+            tool_id=getattr(call, "id", None),
+            name=call.name,
+            success=False,
+            error=reason,
+        )
 
     def _blocked_before_ask(self, call: Any) -> bool:
         """Whether a call must wait until the user answered the ask_user gate."""
@@ -739,6 +846,12 @@ class TraeExecutionAdapter:
         self.settings = settings or TraeRuntimeSettings.from_environment()
         self.agent_factory = agent_factory or _default_agent_factory
         self.mcp_servers_config = dict(mcp_servers_config or {})
+        from ..security.judge import build_command_approver
+
+        self.command_approver = build_command_approver(
+            self.settings.command_approval_mode,
+            self.settings.judge_settings(),
+        )
         self.workspace: Path | None = None
         self.trajectory: Path | None = None
         self.agent: Any = None
@@ -754,6 +867,19 @@ class TraeExecutionAdapter:
         if self.bridge is None:
             raise RuntimeError("Trae tool gateway is not initialized")
         self.bridge.submit_answer(answer)
+
+    def _bash_gate(self) -> BashCallGate:
+        """Gate bash calls against the session workspace and the run's skill root."""
+
+        run_id = str(getattr(self.request, "run_id", "") or "")
+        policy = getattr(self.request, "tool_policy", None) or {}
+        return BashCallGate(
+            approver=self.command_approver,
+            allowed_prefixes=(str(self.workspace), str(self.settings.skill_root(run_id))),
+            cwd=str(self.workspace),
+            mode=str(policy.get("mode") or "default"),
+            policy=self.settings.command_policy(),
+        )
 
     def checkpoint_policy(self) -> dict[str, Any]:
         return {
@@ -1036,6 +1162,9 @@ class TraeExecutionAdapter:
             self._waiting,
             self._next_step,
             workspace_root=self.workspace,
+            bash_gate=self._bash_gate(),
+            run_id=str(getattr(self.request, "run_id", "") or ""),
+            conversation_id=str(getattr(self.request, "conversation_id", "") or ""),
         )
         logger.info(
             "bridge ready: ask_tool_available=%s ask_gate=%s allowed=%s",

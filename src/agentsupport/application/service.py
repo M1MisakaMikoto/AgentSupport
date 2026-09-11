@@ -55,8 +55,9 @@ from .workspace_ops import WorkspaceOpsMixin
 
 logger = logging.getLogger(__name__)
 
-#: 静默模式工作区白名单：仅工作区文件/文档工具，不含 bash。
+#: 静默模式白名单：工作区文件/文档工具，外加受命令门禁约束的 bash（读取 skill 目录的通道）。
 SILENT_MODE_TOOLS = (
+    "bash",
     "str_replace_based_edit_tool",
     "json_edit_tool",
     "word_edit_tool",
