@@ -40,6 +40,18 @@
 `trajectory.*` 事件与 Trae 特有文件强相关：评估规则不得依赖其 payload，仅可在单指纹
 调试时查看。
 
+### 流式过程事件（非 canonical）
+
+增量事件只服务于实时呈现，**不进评估主链路**，其 payload 变化不算契约破坏：
+
+| 事件类型 | 用途 | payload 要点 |
+| --- | --- | --- |
+| `message.delta` | 逐块转发模型输出，供前端做打字效果 | `delta` |
+| `message.reset` | 某次模型调用因读超时重试、输出重新开始——消费方应丢弃已累积的文本 | `reason`（`stream_retry`）、`attempt` |
+
+重试由 `retry_utils.retry_with` 整段重跑，所以 `message.reset` 之前的 `message.delta`
+属于被丢弃的那次尝试；canonical 的 `message` 才是权威结果。
+
 ## 3. 归一化 usage 契约
 
 `run.completed.result.usage`：

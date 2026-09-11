@@ -665,6 +665,10 @@ def _live_relay(run_id: str, conversation_id: str) -> None:
                         delta = payload.get("delta") or ""
                         if delta:
                             live["text"] = live.get("text", "") + delta
+                    elif etype == "message.reset":
+                        # A retried model call restarts its stream: drop the text
+                        # of the attempt that was discarded.
+                        live["text"] = ""
                     elif etype == "message":
                         content = payload.get("content") or ""
                         if not live.get("text") or len(live.get("text", "")) < len(content) * 0.6:

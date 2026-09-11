@@ -308,6 +308,47 @@ def _bundle_get(bundle: Any, key: str, default: Any = None) -> Any:
     return getattr(bundle, key, default)
 
 
+def install_retry_delta_guard(client: Any, emit: EventEmitter) -> bool:
+    """Emit ``message.reset`` when a retried model call restarts its stream.
+
+    ``retry_with`` re-runs the whole call after a read timeout, and every delta
+    of every attempt is forwarded. Without this guard the discarded attempt's
+    text stays in the stream, so a viewer sees the answer cut off mid-sentence
+    and then repeated from the start.
+
+    The attempt counter is reset per ``chat()`` call, so a normal next-step call
+    is not mistaken for a retry. Returns ``True`` when the guard was installed;
+    clients without the Anthropic streaming hook (openai-compatible providers)
+    are left untouched.
+    """
+
+    if getattr(client, "_agentsupport_retry_guard", False):
+        return False
+    original_chat = getattr(client, "chat", None)
+    original_stream = getattr(client, "_create_anthropic_response_stream", None)
+    if original_chat is None or original_stream is None:
+        return False
+    attempts = {"count": 0}
+
+    def chat(*args: Any, **kwargs: Any) -> Any:
+        attempts["count"] = 0
+        return original_chat(*args, **kwargs)
+
+    def stream(*args: Any, **kwargs: Any) -> Any:
+        attempts["count"] += 1
+        if attempts["count"] > 1:
+            emit(
+                "message.reset",
+                {"reason": "stream_retry", "attempt": attempts["count"]},
+            )
+        return original_stream(*args, **kwargs)
+
+    client.chat = chat
+    client._create_anthropic_response_stream = stream
+    client._agentsupport_retry_guard = True
+    return True
+
+
 def _context_catalog(bundle: Any) -> list[dict[str, Any]]:
     """Extract the candidate-pool catalog from a request context bundle."""
 
@@ -1287,6 +1328,8 @@ class TraeExecutionAdapter:
             inner = getattr(llm_client, "client", llm_client)
             if getattr(inner, "on_text_delta", None) is None:
                 inner.on_text_delta = self._emit_message_delta
+            if install_retry_delta_guard(inner, self.emit):
+                logger.info("retry delta guard installed: a retried stream resets instead of appending")
 
     def _emit_message_delta(self, delta: str) -> None:
         """Forward one streamed text delta into the runner's in-memory event stream."""
