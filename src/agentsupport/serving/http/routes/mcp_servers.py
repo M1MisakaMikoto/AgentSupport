@@ -17,6 +17,10 @@ def create_mcp_server(request: Request, body: McpServerCreate):
         http_url=body.http_url,
         sse_url=body.sse_url,
         headers=body.headers,
+        command=body.command,
+        args=body.args,
+        env=body.env,
+        cwd=body.cwd,
         description=body.description,
         enabled=body.enabled,
     ).model_dump(mode="json")
@@ -43,6 +47,10 @@ def update_mcp_server(request: Request, server_id: str, body: McpServerUpdate):
         http_url=body.http_url,
         sse_url=body.sse_url,
         headers=body.headers,
+        command=body.command,
+        args=body.args,
+        env=body.env,
+        cwd=body.cwd,
         description=body.description,
         enabled=body.enabled,
     ).model_dump(mode="json")

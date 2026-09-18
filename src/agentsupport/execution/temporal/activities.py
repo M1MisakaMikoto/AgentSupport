@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
+import httpx
 from temporalio import activity
 
 from agent_runner_contracts.events import EventEnvelope
@@ -28,23 +30,120 @@ from ...bootstrap.container import (
     build_skill_provider,
 )
 from ...bootstrap.settings import Settings, settings
-from ...domain import TERMINAL_STATES, Conversation, ConversationMode, ExecutionState
+from ...domain import (
+    TERMINAL_STATES,
+    BuildStatus,
+    Conversation,
+    ConversationMode,
+    ExecutionState,
+)
 
 ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
+logger = logging.getLogger(__name__)
 
-def _select_runner_url(ctx: ExecutionContext) -> str:
-    """Pick the least-loaded ready runner from the registry, else the static URL."""
 
-    if ctx.repository is not None:
-        ready = [
-            entry
-            for entry in ctx.repository.list_ready_runner_registrations()
-            if "run" in (entry.capabilities or [])
-        ]
-        if ready:
-            return min(ready, key=lambda entry: entry.load).endpoint
-    return ctx.config.core_runner_url if ctx.config else None or "http://runner"
+def _runner_tenant(entry: Any) -> str:
+    return str((entry.metadata or {}).get("tenant_id") or "")
+
+
+def _runner_matches_tenant(entry: Any, tenant_id: str | None) -> bool:
+    """A tenant-specific runner only serves its own tenant."""
+
+    return _runner_tenant(entry) == (tenant_id or "")
+
+
+def _tenant_has_image(ctx: ExecutionContext, tenant_id: str | None) -> bool:
+    """Whether this tenant has a READY preset image of its own."""
+
+    if ctx.repository is None or not tenant_id or tenant_id == "default":
+        return False
+    return bool(
+        ctx.repository.list_preset_builds(
+            tenant_id=tenant_id, status=BuildStatus.READY, limit=1
+        )
+    )
+
+
+def _registered_runner_url(ctx: ExecutionContext, tenant_id: str | None) -> str | None:
+    """The least-loaded ready runner of this tenant, if one is registered."""
+
+    if ctx.repository is None:
+        return None
+    ready = [
+        entry
+        for entry in ctx.repository.list_ready_runner_registrations()
+        if "run" in (entry.capabilities or [])
+    ]
+    matched = [entry for entry in ready if _runner_matches_tenant(entry, tenant_id)]
+    if matched:
+        return min(matched, key=lambda entry: entry.load).endpoint
+    if not _tenant_has_image(ctx, tenant_id):
+        # No tenant image (yet): a shared runner is the right host for this
+        # session, which keeps pre-tenant deployments working unchanged.
+        shared = [entry for entry in ready if not _runner_tenant(entry) or _runner_tenant(entry) == "default"]
+        if shared:
+            return min(shared, key=lambda entry: entry.load).endpoint
+    return None
+
+
+def _static_runner_url(ctx: ExecutionContext) -> str:
+    return (ctx.config.core_runner_url if ctx.config else None) or "http://runner"
+
+
+def _select_runner_url(ctx: ExecutionContext, tenant_id: str | None = None) -> str:
+    """Pick the least-loaded ready runner of this tenant, else the static URL."""
+
+    return _registered_runner_url(ctx, tenant_id) or _static_runner_url(ctx)
+
+
+async def _runner_url_for(ctx: ExecutionContext, tenant_id: str | None) -> str:
+    """Registered tenant runner, else a freshly ensured one, else the static URL."""
+
+    registered = _registered_runner_url(ctx, tenant_id)
+    if registered:
+        return registered
+    ensured = await _ensure_runner_url(ctx, tenant_id)
+    if ensured:
+        return ensured
+    return _static_runner_url(ctx)
+
+
+async def _ensure_runner_url(ctx: ExecutionContext, tenant_id: str | None) -> str | None:
+    """Ask the host-side runner manager for a ready runner of this tenant."""
+
+    manager_url = str(getattr(ctx.config, "runner_manager_url", "") or "").strip()
+    if not manager_url:
+        return None
+    image_tag = None
+    if ctx.repository is not None and tenant_id:
+        builds = ctx.repository.list_preset_builds(
+            tenant_id=tenant_id, status=BuildStatus.READY, limit=1
+        )
+        if builds and builds[0].image_tag:
+            image_tag = builds[0].image_tag
+    if image_tag is None:
+        image_tag = str(
+            getattr(ctx.config, "default_runner_image", "agentsupport-api")
+        )
+    token = str(getattr(ctx.config, "runner_manager_token", "") or "")
+    headers = {"X-Runner-Manager-Token": token} if token else {}
+    try:
+        async with httpx.AsyncClient(
+            timeout=float(getattr(ctx.config, "runner_manager_timeout_seconds", 120.0))
+        ) as client:
+            response = await client.post(
+                f"{manager_url.rstrip('/')}/ensure-runner",
+                json={"tenant_id": tenant_id or "default", "image_tag": image_tag},
+                headers=headers,
+            )
+            response.raise_for_status()
+            body = response.json()
+    except Exception as exc:  # noqa: BLE001 - manager outages fall back to the static URL
+        logger.warning("runner manager ensure-runner failed: %s", exc)
+        return None
+    endpoint = body.get("endpoint")
+    return str(endpoint) if endpoint else None
 
 
 async def _heartbeat_until(stop: asyncio.Event, details: dict[str, Any]) -> None:
@@ -146,11 +245,13 @@ def _build_run_request(
     session,
     workspace,
     ctx: ExecutionContext,
+    *,
+    runner_url: str | None = None,
 ) -> dict:
     """Build the runner request, mirroring the inline execution path."""
 
     skills = request.get("skills") or []
-    runner_url = _select_runner_url(ctx)
+    runner_url = runner_url or _select_runner_url(ctx, session.tenant_id)
     workspace_ref = build_workspace_ref(
         ctx.config.core_runner_workspace_root if ctx.config else None,
         workspace.root_path,
@@ -208,6 +309,7 @@ def _build_run_request(
                 skills, tenant_id=session.tenant_id
             ),
             "tool_policy": tool_policy,
+            "cli_policy": request.get("cli_policy") or {},
             "file_ref_format": bool(
                 getattr(session.config, "file_ref_format", False)
             ),
@@ -236,6 +338,14 @@ def _resolve_mcp_refs(refs: list[dict], ctx: ExecutionContext) -> list[dict]:
                 "http_url": server.http_url,
                 "sse_url": server.sse_url,
                 "headers": dict(server.headers),
+                #: stdio 专用字段：少了它们，runner 拿到的就是"没有 command 的 stdio 配置"，
+                #: vendored 客户端会抛 ValueError，而 discover_mcp_tools 把它**静默吞掉**
+                #: ——表现就是"模型看不到任何 MCP 工具"。这条路径与
+                #: skill_mcp_ops._resolve_mcp_refs 必须保持一致。
+                "command": server.command,
+                "args": list(server.args),
+                "env": dict(server.env),
+                "cwd": server.cwd,
                 "description": server.description,
             }
         )
@@ -325,7 +435,10 @@ async def execute_run(request: dict) -> dict:
         workspace = repository.get_workspace(UUID(request["workspace_id"]))
         if conversation is None or session is None or workspace is None:
             raise RuntimeError("temporal run resources not found")
-        run_request = _build_run_request(request, conversation, session, workspace, ctx)
+        runner_url = await _runner_url_for(ctx, session.tenant_id)
+        run_request = _build_run_request(
+            request, conversation, session, workspace, ctx, runner_url=runner_url
+        )
         await core_runtime.run(run_request, _make_sink(repository, conversation))
         return await _after_segment(repository, core_runtime, conversation)
     finally:

@@ -5,7 +5,9 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -166,6 +168,10 @@ class TraeRuntimeSettings:
     system_prompt_file: Path | None = None
     #: Run-scoped skill materialization root: ``<skills_root>/<run_id>``.
     skills_root: Path = Path("/opt/agent-skills")
+    #: Run-scoped scratch space: ``<run_tmp_root>/<run_id>``. It is created for
+    #: the run and exposed to the command gate as an allowed path prefix so a
+    #: CLI can use it for temporary files without leaving the sandbox.
+    run_tmp_root: Path = Path(tempfile.gettempdir()) / "agentsupport-runs"
     #: ``llm`` (default) | ``deny`` | ``off`` for risky commands in silent mode.
     command_approval_mode: str = "llm"
     command_approval_timeout_seconds: float = 20.0
@@ -205,6 +211,12 @@ class TraeRuntimeSettings:
             system_prompt_file=Path(prompt_file) if prompt_file else None,
             skills_root=Path(
                 os.getenv("SESSION_RUNNER_SKILLS_ROOT", "/opt/agent-skills")
+            ),
+            run_tmp_root=Path(
+                os.getenv(
+                    "SESSION_RUNNER_RUN_TMP_ROOT",
+                    str(Path(tempfile.gettempdir()) / "agentsupport-runs"),
+                )
             ),
             command_approval_mode=os.getenv("SESSION_RUNNER_COMMAND_APPROVAL", "llm"),
             command_approval_timeout_seconds=float(
@@ -442,6 +454,31 @@ def _default_agent_factory(settings: TraeRuntimeSettings, request: Any, trajecto
     if system_prompt is not None:
         agent.agent._system_prompt = system_prompt
     return agent
+
+
+def prepare_run_tmp(settings: TraeRuntimeSettings, run_id: str) -> Path | None:
+    """Create the run-scoped scratch directory ``<run_tmp_root>/<run_id>``."""
+
+    if not run_id:
+        return None
+    root = Path(settings.run_tmp_root).resolve() / run_id
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:  # pragma: no cover - filesystem dependent
+        logger.warning("failed to create run tmp dir %s: %s", root, exc)
+        return None
+    return root
+
+
+def cleanup_run_tmp(path: Path | None) -> None:
+    """Remove a run-scoped scratch directory (best effort, never raises)."""
+
+    if path is None:
+        return
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except OSError as exc:  # pragma: no cover - filesystem dependent
+        logger.warning("failed to clean up run tmp dir %s: %s", path, exc)
 
 
 def _trae_tool_result(
@@ -992,6 +1029,7 @@ class TraeExecutionAdapter:
         self.workspace: Path | None = None
         self.trajectory: Path | None = None
         self.skill_root: Path | None = None
+        self.tmp_dir: Path | None = None
         self.agent: Any = None
         self.bridge: TraeToolGatewayBridge | None = None
         self.next_step = 1
@@ -1007,18 +1045,33 @@ class TraeExecutionAdapter:
         self.bridge.submit_answer(answer)
 
     def _bash_gate(self) -> BashCallGate:
-        """Gate bash calls against the session workspace and the run's skill root."""
+        """Gate bash calls against the session workspace, skill root and run tmp.
+
+        Tenant presets may declare sub-command prefixes that are safe to run
+        without approval; those arrive in ``context_bundle.cli_policy``.
+        """
 
         run_id = str(getattr(self.request, "run_id", "") or "")
         policy = getattr(self.request, "tool_policy", None) or {}
         skill_root = self.skill_root or self.settings.skill_root(run_id)
+        allowed = [str(self.workspace), str(skill_root)]
+        if self.tmp_dir is not None:
+            allowed.append(str(self.tmp_dir))
         return BashCallGate(
             approver=self.command_approver,
-            allowed_prefixes=(str(self.workspace), str(skill_root)),
+            allowed_prefixes=tuple(allowed),
             cwd=str(self.workspace),
             mode=str(policy.get("mode") or "default"),
             policy=self.settings.command_policy(),
+            declared_safe_prefixes=tuple(self._cli_policy().get("allowed_safe_prefixes") or ()),
         )
+
+    def _cli_policy(self) -> dict[str, Any]:
+        """The tenant preset's runtime CLI policy, if the platform sent one."""
+
+        bundle = getattr(self.request, "context_bundle", None)
+        policy = _bundle_get(bundle, "cli_policy") if bundle is not None else None
+        return dict(policy) if isinstance(policy, dict) else {}
 
     def checkpoint_policy(self) -> dict[str, Any]:
         return {
@@ -1265,6 +1318,30 @@ class TraeExecutionAdapter:
             result["usage"] = usage
         return result
 
+    def _mcp_configs(self) -> dict[str, Any]:
+        """把两条来源的 MCP 配置统一成 ``MCPServerConfig``。
+
+        两条来源：
+          1. runner 静态配置（``trae_config.yaml`` 的 ``mcp_servers``，本来就是对象）；
+          2. **每轮下发**的 ``mcp_servers_config``（来自会话/对话的 ``mcp_refs``，
+             到这里还是 dict）。
+
+        为什么必须转换：vendored 客户端对配置做的是**属性访问**
+        （``mcp_server_config.http_url`` / ``command`` …），dict 会直接
+        ``AttributeError``，而 ``discover_mcp_tools`` 用 ``except Exception: continue``
+        把它吞掉——表现就是"模型看不到任何 MCP 工具"且日志无痕。
+        """
+
+        from trae_agent.utils.config import MCPServerConfig
+
+        merged: dict[str, Any] = {}
+        existing = getattr(self.agent.agent, "mcp_servers_config", None) or {}
+        for name, value in existing.items():
+            merged[name] = value if isinstance(value, MCPServerConfig) else MCPServerConfig(**value)
+        for name, value in (self.mcp_servers_config or {}).items():
+            merged[name] = value if isinstance(value, MCPServerConfig) else MCPServerConfig(**value)
+        return merged
+
     async def _initialize_agent(self) -> None:
         self.settings.validate()
         self.workspace = self.settings.workspace(self.request.workspace_ref)
@@ -1276,6 +1353,7 @@ class TraeExecutionAdapter:
             _bundle_get(self.request.context_bundle, "skill_package") or [],
             self.settings.skill_root(run_id),
         )
+        self.tmp_dir = prepare_run_tmp(self.settings, run_id)
         self.agent = self.agent_factory(self.settings, self.request, self.trajectory)
         sections = []
         skill_section = _skill_prompt_section(
@@ -1293,9 +1371,10 @@ class TraeExecutionAdapter:
             current = getter() if callable(getter) else getattr(trae_agent, "_system_prompt", None)
             extra = "\n\n".join(sections)
             trae_agent._system_prompt = f"{current or ''}\n\n{extra}".strip()
-        if self.mcp_servers_config:
-            self.agent.agent.mcp_servers_config = dict(self.mcp_servers_config)
-            self.agent.agent.allow_mcp_servers = list(self.mcp_servers_config)
+        mcp_configs = self._mcp_configs()
+        if mcp_configs:
+            self.agent.agent.mcp_servers_config = mcp_configs
+            self.agent.agent.allow_mcp_servers = list(mcp_configs)
             await self.agent.agent.initialise_mcp()
             # The base Agent.run would re-initialise MCP; discovery already ran.
             self.agent.agent.allow_mcp_servers = []

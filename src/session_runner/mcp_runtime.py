@@ -36,10 +36,20 @@ def _resolve_headers(raw: dict[str, str] | None) -> dict[str, str]:
     return {key: _resolve_header_value(value) for key, value in (raw or {}).items()}
 
 
+def _resolve_env_values(raw: dict[str, str] | None) -> dict[str, str]:
+    """stdio 的 env 与 headers 用同一套 ``$VAR`` 占位规则（密钥不写进注册表）。"""
+    return _resolve_headers(raw)
+
+
 def build_mcp_server_configs(
     mcp_refs: list[dict[str, Any]] | None,
 ) -> dict[str, dict[str, Any]]:
-    """Convert resolved references into vendored ``MCPServerConfig``-shaped dicts."""
+    """Convert resolved references into vendored ``MCPServerConfig``-shaped dicts.
+
+    三种 transport 都要能表达，尤其是 **stdio**：trae 模式的 vendored 客户端只有
+    stdio 实现（http/url 是 ``NotImplementedError``，而且被静默吞掉），
+    所以"按会话下发 MCP"这条路必须先支持 stdio。
+    """
 
     configs: dict[str, dict[str, Any]] = {}
     for ref in mcp_refs or []:
@@ -54,6 +64,13 @@ def build_mcp_server_configs(
             configs[server_id] = {"http_url": ref.get("http_url"), "headers": headers}
         elif transport == "sse":
             configs[server_id] = {"url": ref.get("sse_url"), "headers": headers}
+        elif transport == "stdio":
+            configs[server_id] = {
+                "command": ref.get("command"),
+                "args": list(ref.get("args") or []),
+                "env": _resolve_env_values(ref.get("env")),
+                "cwd": ref.get("cwd"),
+            }
     return configs
 
 

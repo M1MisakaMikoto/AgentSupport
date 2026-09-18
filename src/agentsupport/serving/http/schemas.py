@@ -92,10 +92,15 @@ class ConversationCreate(BaseModel):
 class McpServerCreate(BaseModel):
     server_id: str = Field(min_length=1, max_length=120)
     name: str = Field(min_length=1, max_length=120)
-    transport: Literal["http", "sse"]
+    transport: Literal["http", "sse", "stdio"]
     http_url: str | None = None
     sse_url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
+    #: stdio transport：runner 以子进程方式拉起（trae 模式只支持这条路）
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    cwd: str | None = None
     description: str = ""
     enabled: bool = True
 
@@ -105,6 +110,10 @@ class McpServerUpdate(BaseModel):
     http_url: str | None = None
     sse_url: str | None = None
     headers: dict[str, str] | None = None
+    command: str | None = None
+    args: list[str] | None = None
+    env: dict[str, str] | None = None
+    cwd: str | None = None
     description: str | None = None
     enabled: bool | None = None
 

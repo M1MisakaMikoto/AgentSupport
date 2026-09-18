@@ -52,6 +52,39 @@ def test_mcp_server_crud_and_validation(tmp_path):
     assert exc.value.code == "MCP_TRANSPORT_UNSUPPORTED"
 
 
+def test_stdio_mcp_server_round_trip(tmp_path):
+    """stdio 注册：command/args/env/cwd 要能存、能读、能在会话解析里带出来。"""
+    service = _service(tmp_path)
+    server = service.create_mcp_server(
+        server_id="document-assistant",
+        name="Document-Assistant 文档工具",
+        transport="stdio",
+        command="python",
+        args=["/app/da-mcp-server/main.py", "--transport", "stdio"],
+        env={"DOC_HOST_TOKEN": "$DOC_HOST_TOKEN"},
+        cwd="/app/da-mcp-server",
+    )
+    assert server.endpoint() == "python"
+    assert service.get_mcp_server("document-assistant").args[1] == "--transport"
+
+    workspace = service.create_workspace("ws-stdio")
+    session = service.create_session(
+        workspace.id,
+        config=ProjectConfig(
+            resources=PresetResources(mcp_refs=[{"server_id": "document-assistant"}]),
+        ),
+    )
+    resolved = service._resolve_mcp_refs([{"server_id": "document-assistant"}], session)
+    assert resolved[0]["transport"] == "stdio"
+    assert resolved[0]["command"] == "python"
+    assert resolved[0]["env"] == {"DOC_HOST_TOKEN": "$DOC_HOST_TOKEN"}
+    assert resolved[0]["cwd"] == "/app/da-mcp-server"
+
+    with pytest.raises(ServiceError) as exc:
+        service.create_mcp_server(server_id="no-cmd", name="x", transport="stdio")
+    assert "requires command" in exc.value.message
+
+
 def test_session_create_validates_mcp_refs(tmp_path):
     service = _service(tmp_path)
     service.create_mcp_server(

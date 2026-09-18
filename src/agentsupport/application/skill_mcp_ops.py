@@ -19,31 +19,44 @@ from .common import (
 
 class SkillMcpOpsMixin:
 
-    def list_skills(self) -> list[dict[str, Any]]:
-        return self.skill_provider.list_skills()
+    def list_skills(self, *, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        """Skills a namespace can use: its own tenant directory, then the shared one."""
+
+        return self.skill_provider.list_skills(tenant_id=tenant_id)
 
 
-    def get_skill(self, skill_id: str) -> dict[str, Any]:
+    def get_skill(self, skill_id: str, *, tenant_id: str | None = None) -> dict[str, Any]:
         try:
-            return self.skill_provider.describe_skill(skill_id)
+            return self.skill_provider.describe_skill(skill_id, tenant_id=tenant_id)
         except (FileNotFoundError, ValueError) as exc:
             raise ServiceError("SKILL_NOT_FOUND", str(exc), 404) from exc
 
 
     def create_skill(
-        self, skill_id: str, *, filename: str, payload: bytes
+        self,
+        skill_id: str,
+        *,
+        filename: str,
+        payload: bytes,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
+        """Install a skill into the tenant namespace (or the shared one when None)."""
+
         try:
             if filename.lower().endswith(".zip"):
-                return self.skill_provider.install_zip(skill_id, payload)
-            return self.skill_provider.install_skill(skill_id, {"SKILL.md": payload})
+                return self.skill_provider.install_zip(
+                    skill_id, payload, tenant_id=tenant_id
+                )
+            return self.skill_provider.install_skill(
+                skill_id, {"SKILL.md": payload}, tenant_id=tenant_id
+            )
         except ValueError as exc:
             raise ServiceError("SKILL_INVALID_PAYLOAD", str(exc), 422) from exc
 
 
-    def delete_skill(self, skill_id: str) -> None:
+    def delete_skill(self, skill_id: str, *, tenant_id: str | None = None) -> None:
         try:
-            removed = self.skill_provider.remove_skill(skill_id)
+            removed = self.skill_provider.remove_skill(skill_id, tenant_id=tenant_id)
         except ValueError as exc:
             raise ServiceError("SKILL_INVALID_PAYLOAD", str(exc), 422) from exc
         if not removed:
@@ -110,6 +123,10 @@ class SkillMcpOpsMixin:
         http_url: str | None = None,
         sse_url: str | None = None,
         headers: dict[str, str] | None = None,
+        command: str | None = None,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
         description: str = "",
         enabled: bool = True,
     ) -> McpServer:
@@ -125,6 +142,10 @@ class SkillMcpOpsMixin:
             raise ServiceError("MCP_SERVER_INVALID", "http transport requires http_url", 422)
         if transport == "sse" and not sse_url:
             raise ServiceError("MCP_SERVER_INVALID", "sse transport requires sse_url", 422)
+        if transport == "stdio" and not command:
+            raise ServiceError(
+                "MCP_SERVER_INVALID", "stdio transport requires command", 422
+            )
         server = McpServer(
             server_id=server_id,
             name=name,
@@ -132,6 +153,10 @@ class SkillMcpOpsMixin:
             http_url=http_url,
             sse_url=sse_url,
             headers=dict(headers or {}),
+            command=command,
+            args=list(args or []),
+            env=dict(env or {}),
+            cwd=cwd,
             description=description,
             enabled=enabled,
         )
@@ -149,6 +174,10 @@ class SkillMcpOpsMixin:
         http_url: str | None = None,
         sse_url: str | None = None,
         headers: dict[str, str] | None = None,
+        command: str | None = None,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
         description: str | None = None,
         enabled: bool | None = None,
     ) -> McpServer:
@@ -159,6 +188,10 @@ class SkillMcpOpsMixin:
                 "http_url": http_url if http_url is not None else current.http_url,
                 "sse_url": sse_url if sse_url is not None else current.sse_url,
                 "headers": dict(headers) if headers is not None else dict(current.headers),
+                "command": command if command is not None else current.command,
+                "args": list(args) if args is not None else list(current.args),
+                "env": dict(env) if env is not None else dict(current.env),
+                "cwd": cwd if cwd is not None else current.cwd,
                 "description": description if description is not None else current.description,
                 "enabled": enabled if enabled is not None else current.enabled,
             }
@@ -198,6 +231,11 @@ class SkillMcpOpsMixin:
                     "http_url": server.http_url,
                     "sse_url": server.sse_url,
                     "headers": dict(server.headers),
+                    #: stdio 专用：runner 用这些字段把 MCP 服务拉成子进程
+                    "command": server.command,
+                    "args": list(server.args),
+                    "env": dict(server.env),
+                    "cwd": server.cwd,
                     "description": server.description,
                 }
             )

@@ -5,6 +5,25 @@ import mcp
 from .base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
 
 
+def _schema_type(prop: dict) -> str:
+    """Resolve a JSON-schema property type, tolerating ``anyOf`` (Optional) schemas.
+
+    Vendor patch: the upstream code indexes ``prop["type"]`` directly, so any
+    optional parameter (``str | None`` -> ``anyOf: [{type: string}, {type: null}]``)
+    or any property without a description raises ``KeyError`` and **kills the whole
+    tool list build** (the run then fails with a bare ``'type'`` / ``'description'``
+    message). MCP servers are third-party; we do not get to require their schemas be
+    flat.
+    """
+
+    if "type" in prop:
+        return prop["type"]
+    for item in prop.get("anyOf", []) or []:
+        if item.get("type") and item["type"] != "null":
+            return item["type"]
+    return "string"
+
+
 class MCPTool(Tool):
     def __init__(self, client, tool: mcp.types.Tool, model_provider: str | None = None):
         super().__init__(model_provider)
@@ -35,9 +54,9 @@ class MCPTool(Tool):
             for name, prop in properties.items():
                 tool_para = ToolParameter(
                     name=name,
-                    type=prop["type"],
+                    type=_schema_type(prop),
                     items=prop.get("items", None),
-                    description=prop["description"],
+                    description=prop.get("description", ""),
                     required=name in required,
                 )
                 parameters.append(tool_para)

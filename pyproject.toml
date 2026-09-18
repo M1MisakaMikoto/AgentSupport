@@ -77,7 +77,9 @@ session_runner = ["trae_config.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+#: ``vendor/trae-agent-src`` 与容器里的 PYTHONPATH 保持一致（Dockerfile 有同样的条目）：
+#: 适配器需要 import trae_agent 的类型（MCPServerConfig 等），测试环境也得能看到。
+pythonpath = ["src", ".", "vendor/trae-agent-src"]
 asyncio_mode = "auto"
 
 [tool.ruff]

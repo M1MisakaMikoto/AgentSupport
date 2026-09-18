@@ -24,6 +24,7 @@ def _stub_context(
         list_ready_runner_registrations=lambda: [],
         list_conversations=lambda session_id=None: conversations,
         list_session_events=lambda session_id: events,
+        list_preset_builds=lambda tenant_id=None, status=None, limit=100: [],
     )
     skill_provider = SimpleNamespace(
         skill_catalog=lambda skills, tenant_id=None: [],

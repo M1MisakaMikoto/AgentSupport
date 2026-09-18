@@ -34,6 +34,38 @@ def test_build_mcp_server_configs_resolves_headers(monkeypatch):
         )
 
 
+def test_build_mcp_server_configs_supports_stdio(monkeypatch):
+    """stdio：runner 把 MCP 服务拉成子进程（trae 模式唯一可用的 transport）。"""
+    monkeypatch.setenv("DOC_HOST_TOKEN", "svc-token")
+    configs = mcp_runtime.build_mcp_server_configs(
+        [
+            {
+                "server_id": "document-assistant",
+                "transport": "stdio",
+                "command": "python",
+                "args": ["/app/da-mcp-server/main.py", "--transport", "stdio"],
+                "env": {"DOC_HOST_TOKEN": "$DOC_HOST_TOKEN", "LANG": "C.UTF-8"},
+                "cwd": "/app/da-mcp-server",
+            }
+        ]
+    )
+    assert configs["document-assistant"] == {
+        "command": "python",
+        "args": ["/app/da-mcp-server/main.py", "--transport", "stdio"],
+        "env": {"DOC_HOST_TOKEN": "svc-token", "LANG": "C.UTF-8"},
+        "cwd": "/app/da-mcp-server",
+    }
+
+
+def test_stdio_env_placeholder_must_be_set(monkeypatch):
+    monkeypatch.delenv("MISSING_TOKEN", raising=False)
+    with pytest.raises(RuntimeError, match="not set"):
+        mcp_runtime.build_mcp_server_configs(
+            [{"server_id": "x", "transport": "stdio", "command": "python",
+              "env": {"TOKEN": "$MISSING_TOKEN"}}]
+        )
+
+
 class _FakeClientCtx:
     def __init__(self):
         self.closed = False
