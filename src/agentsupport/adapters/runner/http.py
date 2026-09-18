@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from typing import Any
 from uuid import UUID
 
@@ -22,6 +23,9 @@ READY_PROBE_TIMEOUT_SECONDS = 5.0
 RUN_EVENT_DRAIN_SECONDS = 5.0
 #: 事件订阅未建立（run 还没注册上 → 404）或断线后的续订间隔。
 RUN_EVENT_SUBSCRIBE_RETRY_SECONDS = 0.2
+#: 订阅刚发出的这段时间里，runner 还没注册上 run 是正常的（404 可重试）；
+#: 超过这个窗口还是 404，就说明这个 run 在 runner 侧根本不存在，别再空转。
+RUN_EVENT_SUBSCRIBE_GRACE_SECONDS = 3.0
 
 
 class TraeCoreRunnerRuntime:
@@ -108,28 +112,30 @@ class TraeCoreRunnerRuntime:
         subscription = asyncio.ensure_future(
             self._stream_run_events(run_id, event_sink, progress, stopped)
         )
-        response = await post_task
-        response.raise_for_status()
-        result = response.json()
-        # POST 返回即 run 已终态：runner 的订阅会自己收尾。等它把剩余事件搬完，
-        # 再补 POST 返回体里"订阅没来得及搬"的尾巴 —— 两者都按 seq 递增，不重复落库。
         try:
-            await asyncio.wait_for(subscription, timeout=RUN_EVENT_DRAIN_SECONDS)
-        except asyncio.CancelledError:
+            response = await post_task
+            response.raise_for_status()
+            result = response.json()
+            # POST 返回即 run 已终态：runner 的订阅会自己收尾。等它把剩余事件搬完，
+            # 再补 POST 返回体里"订阅没来得及搬"的尾巴 —— 两者都按 seq 递增，不重复落库。
+            try:
+                await asyncio.wait_for(subscription, timeout=RUN_EVENT_DRAIN_SECONDS)
+            except asyncio.TimeoutError:
+                logger.warning("run %s 的事件订阅 %ss 内没收尾，改用 POST 返回体补齐",
+                               run_id, RUN_EVENT_DRAIN_SECONDS)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - 订阅彻底失败不算 run 失败，返回体里仍有完整事件
+                logger.warning("run %s 的事件订阅中断，改用 POST 返回体补齐", run_id,
+                               exc_info=True)
+        finally:
+            # **一定要收掉订阅**：POST 失败（runner 重启/连接被断）时若不收，
+            # 这个协程会一直重试，留下"404 空转"的后台任务（2026-09-18 实测踩到）。
             stopped.set()
-            subscription.cancel()
-            raise
-        except asyncio.TimeoutError:
-            logger.warning("run %s 的事件订阅 %ss 内没收尾，取消后按 POST 返回体补齐",
-                           run_id, RUN_EVENT_DRAIN_SECONDS)
-            stopped.set()
-            subscription.cancel()
+            if not subscription.done():
+                subscription.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await subscription
-        except Exception:  # noqa: BLE001 - 订阅彻底失败不算 run 失败，返回体里仍有完整事件
-            logger.warning("run %s 的事件订阅中断，改用 POST 返回体补齐", run_id, exc_info=True)
-        else:
-            stopped.set()
         seen = progress[0]
         for event in result.get("events", []):
             seq = int(event.get("seq") or 0)
@@ -156,6 +162,7 @@ class TraeCoreRunnerRuntime:
         """
 
         url = self._url(run_id, f"/runs/{run_id}/events/stream")
+        give_up_at = time.monotonic() + RUN_EVENT_SUBSCRIBE_GRACE_SECONDS
         while not stopped.is_set():
             try:
                 async with self._client().stream(
@@ -178,6 +185,18 @@ class TraeCoreRunnerRuntime:
                 return              # 流正常收尾 = run 已终态且事件已推完
             except asyncio.CancelledError:
                 raise
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    if time.monotonic() >= give_up_at:
+                        # runner 里根本没有这个 run（不是"还没注册上"）：再重试也是空转
+                        logger.warning("run %s 的事件订阅一直被 404 拒绝（runner 侧没有该 run），"
+                                       "停止订阅，改用 POST 返回体", run_id)
+                        return
+                else:
+                    logger.info("run %s 的事件订阅返回 %s，%.1fs 后续订",
+                                run_id, exc.response.status_code,
+                                RUN_EVENT_SUBSCRIBE_RETRY_SECONDS)
+                await asyncio.sleep(RUN_EVENT_SUBSCRIBE_RETRY_SECONDS)
             except Exception as exc:  # noqa: BLE001  404/断线：稍后续订，不静默丢事件
                 logger.info("run %s 的事件订阅未建立/中断（after_seq=%s），%.1fs 后续订：%s",
                             run_id, progress[0], RUN_EVENT_SUBSCRIBE_RETRY_SECONDS, exc)
