@@ -98,6 +98,46 @@ def test_session_history_messages_maps_dialogue_and_skips_noise() -> None:
     assert "/close" in messages[1].content
 
 
+def test_failed_turn_is_part_of_the_context() -> None:
+    """失败的那一轮也要进上下文：模型必须知道"上一轮失败了、文档可能只改了一半"。
+
+    失败时那一轮没有 `message` 事件（run 死在半路），只认 message 的话上下文里就是
+    两条相邻的 user 任务 —— 模型会以为上一轮没发生过，重头再来一遍。
+    """
+    events = [
+        {"type": "message", "payload": {"role": "user", "content": "把标题改成企业知识库"}},
+        {"type": "tool.call", "payload": {"name": "write_at"}},
+        {"type": "run.failed", "payload": {"code": "WORKFLOW_FAILED",
+                                           "message": "Activity task failed"}},
+    ]
+    request = MagicMock()
+    request.context_bundle = {"task": "继续", "recent_events": events}
+    adapter = _adapter(request, FakeTraeAgent(initial=[object()]))
+
+    messages = adapter._session_history_messages()
+
+    assert [m.role for m in messages] == ["user", "assistant"]
+    assert "上一轮运行失败" in messages[1].content
+    assert "Activity task failed" in messages[1].content
+    assert "文档可能只改了一部分" in messages[1].content
+
+
+def test_cancelled_turn_is_part_of_the_context() -> None:
+    """用户主动停止的那一轮同理（否则模型不知道文档是"改到一半"的状态）。"""
+    events = [
+        {"type": "message", "payload": {"role": "user", "content": "改标题"}},
+        {"type": "run.cancelled", "payload": {"reason": "user_cancelled"}},
+    ]
+    request = MagicMock()
+    request.context_bundle = {"task": "继续", "recent_events": events}
+    adapter = _adapter(request, FakeTraeAgent(initial=[object()]))
+
+    messages = adapter._session_history_messages()
+
+    assert [m.role for m in messages] == ["user", "assistant"]
+    assert "上一轮被用户停止" in messages[1].content
+
+
 def test_fallback_recovers_last_nonempty_assistant_text(tmp_path) -> None:
     traj = tmp_path / "traj.json"
     traj.write_text(

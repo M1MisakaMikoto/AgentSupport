@@ -1173,6 +1173,12 @@ class TraeExecutionAdapter:
         The control plane aggregates earlier conversations' instructions and
         assistant replies into ``context_bundle.recent_events``; without this,
         the agent would only ever see the current task.
+
+        **失败/中止的那一轮也要进上下文**（2026-09-18）：失败时这一轮没有
+        ``message`` 事件，只按 ``message`` 过滤的话，模型会以为上一轮根本不存在
+        （上下文里直接是两条相邻的 user 任务），于是"再试一次"会重头再来、
+        甚至把已经写了一半的文档当成新任务。失败也是信息，这里补一条 assistant
+        说明，让模型知道上一轮干到哪、为什么停。
         """
         bundle = getattr(self.request, "context_bundle", None)
         if isinstance(bundle, dict):
@@ -1187,14 +1193,28 @@ class TraeExecutionAdapter:
 
         messages: list[Any] = []
         for event in events:
-            if not isinstance(event, dict) or event.get("type") != "message":
+            if not isinstance(event, dict):
                 continue
+            kind = event.get("type")
             payload = event.get("payload") or {}
-            role = payload.get("role") or "assistant"
-            content = payload.get("content")
-            if role not in ("user", "assistant") or not content:
+            if kind == "message":
+                role = payload.get("role") or "assistant"
+                content = payload.get("content")
+                if role in ("user", "assistant") and content:
+                    messages.append(LLMMessage(role=role, content=str(content)))
                 continue
-            messages.append(LLMMessage(role=role, content=str(content)))
+            if kind == "run.failed":
+                reason = payload.get("error") or payload.get("message") or "未知原因"
+                messages.append(LLMMessage(
+                    role="assistant",
+                    content=f"[上一轮运行失败] {reason}（这一轮没有完成，文档可能只改了一部分；"
+                            f"继续之前先确认文档当前状态，不要假设上一轮没发生过）",
+                ))
+            elif kind == "run.cancelled":
+                messages.append(LLMMessage(
+                    role="assistant",
+                    content="[上一轮被用户停止] 未完成，文档可能只改了一部分。",
+                ))
         return messages
 
     async def resume(
