@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from agent_runner_contracts.checkpoint import (
     Checkpoint,
@@ -35,8 +35,14 @@ from agent_runner_contracts.tools import (
 )
 
 from ...adapters.mcp import ControlledMcpProvider
-from ...adapters.trae import AgentFactory, TraeExecutionAdapter, TraeRuntimeSettings
+from ...adapters.trae import (
+    AgentFactory,
+    TraeExecutionAdapter,
+    TraeRuntimeSettings,
+    cleanup_run_tmp,
+)
 from ...application import RunRegistry
+from ...application.run_registry import TERMINAL_STATUSES
 from ...diagnostics import run_model_connectivity
 from ...domain import RunState
 from ...mcp_runtime import build_mcp_provider, build_mcp_server_configs
@@ -53,6 +59,10 @@ from ...registration import (
 )
 from ...skills_materialize import cleanup_skill_package
 from ...tools import ToolGatewayExecutor
+
+
+#: SSE 事件流空闲多久发一次 keepalive 注释帧（防止代理掐掉静默连接）。
+EVENT_STREAM_KEEPALIVE_SECONDS = 15.0
 
 
 def _validate_container_fence(request: RunRequest) -> None:
@@ -242,6 +252,8 @@ def create_runner_app(
             execution = state.trae_execution
             if execution is not None and execution.skill_root is not None:
                 cleanup_skill_package(execution.skill_root)
+            if execution is not None:
+                cleanup_run_tmp(execution.tmp_dir)
             state.status_changed.set()
 
     @app.get("/live")
@@ -617,6 +629,47 @@ def create_runner_app(
         if not state:
             raise HTTPException(404, "run not found")
         return [event for event in state.events if event.seq > after_seq]
+
+    @app.get("/runs/{run_id}/events/stream")
+    async def stream_events(run_id: UUID, after_seq: int = 0):
+        """把 run **正在产生**的事件实时推出去（SSE）。
+
+        没有这个端点时，调用方只能等 `POST /runs` 返回（run 暂停或结束）才拿到事件；
+        "中途没有暂停点"的 run 在调用方看起来就是整轮没有任何进展（2026-09-17 实测：
+        2,154 条事件全在 run 结束时一次性入库，调用方比 run 真实结束晚 36s 才看到结果）。
+        """
+
+        state = runs.get(run_id)
+        if not state:
+            raise HTTPException(404, "run not found")
+
+        async def body():
+            cursor = after_seq
+            while True:
+                # 先清再扫：扫描之后 emit 到的任何事件都会置位 → 下面的 wait 立刻返回。
+                state.events_wake.clear()
+                for event in list(state.events):
+                    if event.seq <= cursor:
+                        continue
+                    cursor = event.seq
+                    yield (
+                        f"id: {event.seq}\n"
+                        f"data: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                    )
+                if state.status in TERMINAL_STATUSES and cursor >= len(state.events):
+                    break
+                try:
+                    await asyncio.wait_for(
+                        state.events_wake.wait(), timeout=EVENT_STREAM_KEEPALIVE_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"      # 空闲也要保活（代理会掐静默连接）
+
+        return StreamingResponse(
+            body(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return app
 
