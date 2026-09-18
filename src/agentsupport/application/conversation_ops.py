@@ -139,6 +139,7 @@ class ConversationOpsMixin:
             "task": conversation.task,
             "skills": skills,
             "tool_policy": self._tool_policy_for_conversation(conversation, session),
+            "cli_policy": self.cli_policy_for_session(session),
             "mcp_refs": (
                 [dict(item) for item in conversation.mcp_refs]
                 if conversation.mcp_refs is not None
@@ -217,6 +218,7 @@ class ConversationOpsMixin:
                     conversation_skills, tenant_id=session.tenant_id
                 ),
                 "tool_policy": tool_policy,
+                "cli_policy": self.cli_policy_for_session(session),
                 "file_ref_format": bool(
                     getattr(session.config, "file_ref_format", False)
                 ),

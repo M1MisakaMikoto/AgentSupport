@@ -128,10 +128,50 @@ class McpServerRow(Base):
     http_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     sse_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     headers: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
+    #: stdio transport：runner 以子进程方式拉起 MCP 服务用的字段
+    command: Mapped[str | None] = mapped_column(Text, nullable=True)
+    args: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    env: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
+    cwd: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TenantPresetRow(Base):
+    """Tenant preset: the configuration half of a tenant (CLI apps, skills, env)."""
+
+    __tablename__ = "tenant_presets"
+    tenant_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    cli_apps: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    skills: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    env: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TenantPresetBuildRow(Base):
+    """Asynchronous runner image build triggered by a preset upload."""
+
+    __tablename__ = "tenant_preset_builds"
+    build_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    tenant_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    image_tag: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    log_tail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ConversationCheckpointRow(Base):
@@ -348,6 +388,24 @@ def create_schema(database_url: str) -> None:
     if "mcp_refs" not in conversation_columns:
         with engine.begin() as connection:
             connection.execute(text("ALTER TABLE conversations ADD COLUMN mcp_refs JSON"))
+    mcp_columns = {
+        column["name"] for column in inspect(engine).get_columns("mcp_servers")
+    }
+    for name, sql_type, default in {
+        # stdio transport 的四个字段（老的 http/sse 注册行留空即可）
+        "command": ("TEXT", None),
+        "args": ("JSON", "'[]'"),
+        "env": ("JSON", "'{}'"),
+        "cwd": ("TEXT", None),
+    }.items():
+        if name not in mcp_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE mcp_servers ADD COLUMN {name} {sql_type}"
+                        + (f" NOT NULL DEFAULT {default}" if default else "")
+                    )
+                )
     if "created_at" not in {
         column["name"] for column in inspect(engine).get_columns("idempotency_keys")
     }:

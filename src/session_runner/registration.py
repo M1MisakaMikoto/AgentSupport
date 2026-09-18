@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from typing import Any
 
 import httpx
 
@@ -34,6 +35,7 @@ class RunnerRegistrationClient:
         provider: str,
         version: str = "0.1.0",
         capabilities: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
         heartbeat_seconds: float = 10.0,
         timeout_seconds: float = 10.0,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -44,6 +46,7 @@ class RunnerRegistrationClient:
         self.provider = provider
         self.version = version
         self.capabilities = list(capabilities or RUNNER_CAPABILITIES)
+        self.metadata = dict(metadata or {})
         self.heartbeat_seconds = heartbeat_seconds
         self.timeout = timeout_seconds
         self.transport = transport
@@ -67,6 +70,7 @@ class RunnerRegistrationClient:
             endpoint=self.endpoint,
             version=self.version,
             capabilities=self.capabilities,
+            metadata=self.metadata,
         )
         try:
             async with self._client() as client:
@@ -166,6 +170,7 @@ def runner_registration_client_from_env(
         endpoint=endpoint or _env("SESSION_RUNNER_ENDPOINT") or "http://127.0.0.1:8080",
         provider=_env("SESSION_RUNNER_PROVIDER") or mode,
         version=_env("SESSION_RUNNER_VERSION") or "0.1.0",
+        metadata={"tenant_id": _optional_tenant_id()},
         heartbeat_seconds=heartbeat_seconds
         or _float_env("SESSION_RUNNER_HEARTBEAT_SECONDS", 10.0),
         transport=transport,
@@ -177,6 +182,12 @@ def _env(name: str) -> str | None:
 
     value = os.getenv(name)
     return value.strip() if value else None
+
+
+def _optional_tenant_id() -> str:
+    """The tenant this runner was launched for (empty for a shared runner)."""
+
+    return _env("SESSION_RUNNER_TENANT_ID") or ""
 
 
 def _float_env(name: str, default: float) -> float:

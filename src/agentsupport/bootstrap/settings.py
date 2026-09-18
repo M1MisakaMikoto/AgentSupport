@@ -45,6 +45,17 @@ class Settings(BaseSettings):
     health_check_interval_seconds: int = 5
     health_failure_threshold: int = 3
     skills_root: Path = Path("skills")
+    #: Tenant preset storage: uploaded CLI packages land under
+    #: ``<presets_root>/<tenant_id>/<cli_id>/`` and are copied into the tenant's
+    #: runner image by the host-side runner manager.
+    presets_root: Path = Path("presets")
+    #: Image used by sessions without a tenant (or whose tenant has no READY build).
+    default_runner_image: str = "agentsupport-api"
+    #: Host-side runner manager: builds tenant images and launches runners on
+    #: demand. Empty disables both the /internal endpoints and ensure-runner.
+    runner_manager_url: str = ""
+    runner_manager_token: str = ""
+    runner_manager_timeout_seconds: float = 120.0
     # API authentication contract: this platform intentionally ships without
     # token-based authentication. Only "none" is implemented; any other value
     # fails fast so a half-baked auth mode cannot silently reach production.

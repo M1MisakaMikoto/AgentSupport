@@ -19,9 +19,11 @@ from ..domain import (
     Conversation,
     ConversationMode,
     McpServer,
+    PresetBuild,
     Session,
     SkillDraft,
     SkillGenerationRequest,
+    TenantPreset,
     Workspace,
 )
 from .checkpoint_ops import CheckpointOpsMixin
@@ -42,6 +44,7 @@ from .ports import (
     SkillProvider,
     WorkspaceProvider,
 )
+from .preset_ops import PresetOpsMixin
 from .runner_ops import RunnerOpsMixin
 from .runner_registry import InMemoryRunnerRegistry
 from .session_ops import SessionOpsMixin
@@ -76,6 +79,7 @@ MAX_PUBLISH_TASKS = 200
 class AgentSupportService(
     WorkspaceOpsMixin,
     SkillMcpOpsMixin,
+    PresetOpsMixin,
     SessionOpsMixin,
     ConversationOpsMixin,
     InteractionOpsMixin,
@@ -123,6 +127,9 @@ class AgentSupportService(
         self.repository = repository
         self.runner_registry = runner_registry or InMemoryRunnerRegistry()
         self.mcp_servers: dict[str, McpServer] = {}
+        self.tenant_presets: dict[str, TenantPreset] = {}
+        self.preset_builds: dict[UUID, PresetBuild] = {}
+        self.preset_hashes: dict[str, str] = {}
         if self.temporal_mode and self.repository is None:
             raise ValueError(
                 "temporal execution requires a shared persistence backend"
@@ -317,11 +324,19 @@ class AgentSupportService(
 
 
     def _skills_for_session(self, session: Session) -> list[str]:
-        """The candidate pool: what the session/project config declares, nothing else."""
+        """The candidate pool: what the session declares, else its tenant preset.
 
-        if session.config is None:
-            return []
-        return session.config.enabled_skill_ids()
+        The session config always wins. When it declares no skill at all, the
+        tenant preset's skill list is used (part-wise fallback to the default
+        preset happens inside ``preset_skills_for_session``).
+        """
+
+        declared = (
+            session.config.enabled_skill_ids() if session.config is not None else []
+        )
+        if declared:
+            return declared
+        return self.preset_skills_for_session(session)
 
 
     def _tool_policy_for_session(self, session: Session) -> dict[str, Any]:

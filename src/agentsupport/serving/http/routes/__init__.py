@@ -8,6 +8,7 @@ from .registrations import router as registrations_router
 from .resources import router as resources_router
 from .skill_generations import router as skill_generations_router
 from .skills import router as skills_router
+from .tenant_presets import router as tenant_presets_router
 
 __all__ = [
     "diagnostics_router",
@@ -20,5 +21,6 @@ __all__ = [
     "resources_router",
     "skill_generations_router",
     "skills_router",
+    "tenant_presets_router",
 ]
 

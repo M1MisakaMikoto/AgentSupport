@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import create_engine, delete, func, inspect, or_, select, text
+from sqlalchemy import create_engine, delete, func, inspect, or_, select, text, update
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
@@ -17,6 +17,7 @@ from agent_runner_contracts.registration import RunnerRegistration
 from ....application.ports.persistence import RepositoryConflict, StaleClaim
 from ....domain import (
     TERMINAL_STATES,
+    BuildStatus,
     Checkpoint,
     ContextBundle,
     Conversation,
@@ -24,11 +25,13 @@ from ....domain import (
     ExecutionState,
     McpServer,
     OutboxNotification,
+    PresetBuild,
     ProjectConfig,
     RunProjection,
     Session,
     SkillDraft,
     SkillGenerationRequest,
+    TenantPreset,
     Workspace,
 )
 from .models import (
@@ -45,6 +48,8 @@ from .models import (
     SessionRow,
     SkillDraftRow,
     SkillGenerationRequestRow,
+    TenantPresetBuildRow,
+    TenantPresetRow,
     WorkspaceRow,
     WorkspaceWriteLeaseRow,
 )
@@ -1114,6 +1119,10 @@ class PostgresRepository:
                         http_url=server.http_url,
                         sse_url=server.sse_url,
                         headers=dict(server.headers),
+                        command=server.command,
+                        args=list(server.args),
+                        env=dict(server.env),
+                        cwd=server.cwd,
                         description=server.description,
                         enabled=server.enabled,
                         created_at=server.created_at,
@@ -1126,6 +1135,10 @@ class PostgresRepository:
             row.http_url = server.http_url
             row.sse_url = server.sse_url
             row.headers = dict(server.headers)
+            row.command = server.command
+            row.args = list(server.args)
+            row.env = dict(server.env)
+            row.cwd = server.cwd
             row.description = server.description
             row.enabled = server.enabled
             row.updated_at = server.updated_at
@@ -1157,6 +1170,10 @@ class PostgresRepository:
             http_url=row.http_url,
             sse_url=row.sse_url,
             headers=dict(row.headers),
+            command=row.command,
+            args=list(row.args or []),
+            env=dict(row.env or {}),
+            cwd=row.cwd,
             description=row.description,
             enabled=row.enabled,
             created_at=_as_utc(row.created_at),
@@ -1176,6 +1193,169 @@ class PostgresRepository:
 
 
 
+
+    # ------------------------------------------------------------------
+    # Tenant presets and their runner image builds
+    # ------------------------------------------------------------------
+
+    def save_tenant_preset(self, preset: TenantPreset, content_hash: str) -> None:
+        with self.transaction() as db:
+            row = db.get(TenantPresetRow, preset.tenant_id)
+            cli_apps = [app.model_dump(mode="json") for app in preset.cli_apps]
+            if row is None:
+                db.add(
+                    TenantPresetRow(
+                        tenant_id=preset.tenant_id,
+                        name=preset.name,
+                        description=preset.description,
+                        cli_apps=cli_apps,
+                        skills=list(preset.skills),
+                        env=list(preset.env),
+                        content_hash=content_hash,
+                        created_at=preset.created_at,
+                        updated_at=preset.updated_at,
+                    )
+                )
+                return
+            row.name = preset.name
+            row.description = preset.description
+            row.cli_apps = cli_apps
+            row.skills = list(preset.skills)
+            row.env = list(preset.env)
+            row.content_hash = content_hash
+            row.updated_at = preset.updated_at
+
+    def get_tenant_preset(self, tenant_id: str) -> TenantPreset | None:
+        with self.transaction() as db:
+            row = db.get(TenantPresetRow, tenant_id)
+            return self._tenant_preset_from_row(row) if row is not None else None
+
+    def list_tenant_presets(self) -> list[TenantPreset]:
+        with self.transaction() as db:
+            rows = db.execute(
+                select(TenantPresetRow).order_by(TenantPresetRow.tenant_id)
+            ).scalars()
+            return [self._tenant_preset_from_row(row) for row in rows]
+
+    def delete_tenant_preset(self, tenant_id: str) -> bool:
+        with self.transaction() as db:
+            row = db.get(TenantPresetRow, tenant_id)
+            if row is None:
+                return False
+            db.delete(row)
+            return True
+
+    def save_preset_build(self, build: PresetBuild) -> None:
+        with self.transaction() as db:
+            row = db.get(TenantPresetBuildRow, str(build.build_id))
+            if row is None:
+                db.add(
+                    TenantPresetBuildRow(
+                        build_id=str(build.build_id),
+                        tenant_id=build.tenant_id,
+                        status=build.status.value,
+                        content_hash=build.content_hash,
+                        image_tag=build.image_tag,
+                        error=build.error,
+                        log_tail=build.log_tail,
+                        created_at=build.created_at,
+                        started_at=build.started_at,
+                        finished_at=build.finished_at,
+                    )
+                )
+                return
+            row.status = build.status.value
+            row.content_hash = build.content_hash
+            row.image_tag = build.image_tag
+            row.error = build.error
+            row.log_tail = build.log_tail
+            row.started_at = build.started_at
+            row.finished_at = build.finished_at
+
+    def get_preset_build(self, build_id: UUID) -> PresetBuild | None:
+        with self.transaction() as db:
+            row = db.get(TenantPresetBuildRow, str(build_id))
+            return self._preset_build_from_row(row) if row is not None else None
+
+    def list_preset_builds(
+        self,
+        *,
+        tenant_id: str | None = None,
+        status: BuildStatus | None = None,
+        limit: int = 100,
+    ) -> list[PresetBuild]:
+        statement = select(TenantPresetBuildRow)
+        if tenant_id is not None:
+            statement = statement.where(TenantPresetBuildRow.tenant_id == tenant_id)
+        if status is not None:
+            statement = statement.where(TenantPresetBuildRow.status == status.value)
+        statement = statement.order_by(TenantPresetBuildRow.created_at.desc()).limit(limit)
+        with self.transaction() as db:
+            rows = db.execute(statement).scalars()
+            return [self._preset_build_from_row(row) for row in rows]
+
+    def claim_preset_build(self, *, now: datetime | None = None) -> PresetBuild | None:
+        """Atomically move the oldest PENDING build to RUNNING."""
+
+        claimed_at = now or _now()
+        with self.transaction() as db:
+            row = (
+                db.execute(
+                    select(TenantPresetBuildRow)
+                    .where(TenantPresetBuildRow.status == BuildStatus.PENDING.value)
+                    .order_by(TenantPresetBuildRow.created_at)
+                    .limit(1)
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                return None
+            result = db.execute(
+                update(TenantPresetBuildRow)
+                .where(
+                    TenantPresetBuildRow.build_id == row.build_id,
+                    TenantPresetBuildRow.status == BuildStatus.PENDING.value,
+                )
+                .values(status=BuildStatus.RUNNING.value, started_at=claimed_at)
+            )
+            if result.rowcount != 1:
+                return None
+            row.status = BuildStatus.RUNNING.value
+            row.started_at = claimed_at
+            return self._preset_build_from_row(row)
+
+    def latest_ready_build(self, tenant_id: str) -> PresetBuild | None:
+        builds = self.list_preset_builds(tenant_id=tenant_id, status=BuildStatus.READY, limit=1)
+        return builds[0] if builds else None
+
+    @staticmethod
+    def _tenant_preset_from_row(row: TenantPresetRow) -> TenantPreset:
+        return TenantPreset(
+            tenant_id=row.tenant_id,
+            name=row.name,
+            description=row.description,
+            cli_apps=[dict(item) for item in (row.cli_apps or [])],
+            skills=list(row.skills or []),
+            env=list(row.env or []),
+            created_at=_as_utc(row.created_at),
+            updated_at=_as_utc(row.updated_at),
+        )
+
+    @staticmethod
+    def _preset_build_from_row(row: TenantPresetBuildRow) -> PresetBuild:
+        return PresetBuild(
+            build_id=UUID(row.build_id),
+            tenant_id=row.tenant_id,
+            status=BuildStatus(row.status),
+            content_hash=row.content_hash,
+            image_tag=row.image_tag,
+            error=row.error,
+            log_tail=row.log_tail,
+            created_at=_as_utc(row.created_at),
+            started_at=_as_utc(row.started_at),
+            finished_at=_as_utc(row.finished_at),
+        )
 
     def claim_outbox(
         self,

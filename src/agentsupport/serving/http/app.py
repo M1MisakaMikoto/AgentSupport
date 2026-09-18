@@ -28,6 +28,7 @@ from .routes import (
     resources_router,
     skill_generations_router,
     skills_router,
+    tenant_presets_router,
 )
 
 
@@ -120,6 +121,7 @@ def create_app(
     app.include_router(registrations_router)
     app.include_router(skill_generations_router)
     app.include_router(skills_router)
+    app.include_router(tenant_presets_router)
     app.mount(
         "/debug",
         StaticFiles(directory=Path(__file__).parent / "static" / "debug", html=True),
