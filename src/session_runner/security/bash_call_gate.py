@@ -33,6 +33,8 @@ class BashCallGate:
     cwd: str
     mode: str = "default"
     policy: CommandPolicy = DEFAULT_POLICY
+    #: Sub-command prefixes the tenant preset declared safe (second SAFE source).
+    declared_safe_prefixes: tuple[str, ...] = ()
 
     async def check(
         self,
@@ -53,6 +55,7 @@ class BashCallGate:
             allowed_prefixes=self.allowed_prefixes,
             cwd=self.cwd,
             policy=self.policy,
+            declared_safe_prefixes=self.declared_safe_prefixes,
         )
 
         if verdict.tier is CommandTier.SAFE:

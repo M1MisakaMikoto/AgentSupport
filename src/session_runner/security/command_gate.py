@@ -59,7 +59,6 @@ DENIED_COMMANDS: frozenset[str] = frozenset(
         "chmod",
         "chown",
         "cp",
-        "curl",
         "dd",
         "docker",
         "kill",
@@ -88,11 +87,15 @@ DENIED_COMMANDS: frozenset[str] = frozenset(
         "tee",
         "touch",
         "truncate",
-        "wget",
         "xargs",
         "zsh",
     }
 )
+
+#: Default (deployment) read-only whitelist. ``curl``/``wget`` are deliberately
+#: NOT denied: a tenant preset may declare safe prefixes for download-style
+#: CLIs, and everything else stays RISKY (``default`` mode asks a human,
+#: ``silent`` mode asks the LLM judge).
 
 #: Flags that turn an otherwise read-only command into a writer.
 UNSAFE_FLAGS: dict[str, tuple[str, ...]] = {
@@ -145,8 +148,15 @@ def classify_command(
     allowed_prefixes: Sequence[str],
     cwd: str | Path,
     policy: CommandPolicy = DEFAULT_POLICY,
+    declared_safe_prefixes: Sequence[str] = (),
 ) -> CommandVerdict:
-    """Classify one bash command into SAFE / RISKY / BLOCKED."""
+    """Classify one bash command into SAFE / RISKY / BLOCKED.
+
+    ``declared_safe_prefixes`` are sub-command prefixes a tenant preset marked
+    as safe (e.g. ``mytool list``). They are the *second* source of SAFE
+    verdicts; the deployment lists still win: a denied executable stays denied
+    and composition characters never auto-approve.
+    """
 
     text = (command or "").strip()
     if not text:
@@ -170,6 +180,12 @@ def classify_command(
 
     if executable in policy.denied:
         return CommandVerdict(CommandTier.BLOCKED, f"{executable} is on the denied list")
+
+    declared = _match_declared_prefix(tokens, declared_safe_prefixes)
+    if declared is not None:
+        return CommandVerdict(
+            CommandTier.SAFE, f"declared safe prefix (tenant preset): {declared}"
+        )
 
     if ("/" in raw_executable or "\\" in raw_executable) and not _is_trusted_executable_path(
         raw_executable
@@ -211,6 +227,20 @@ def _is_trusted_executable_path(raw_executable: str) -> bool:
     return any(
         normalized.startswith(f"{directory}/") for directory in TRUSTED_EXECUTABLE_DIRS
     )
+
+
+def _match_declared_prefix(
+    tokens: Sequence[str], declared_safe_prefixes: Sequence[str]
+) -> str | None:
+    """Return the declared prefix a command matches, if any."""
+
+    for declared in declared_safe_prefixes:
+        parts = (declared or "").split()
+        if not parts:
+            continue
+        if len(tokens) >= len(parts) and list(tokens[: len(parts)]) == parts:
+            return declared
+    return None
 
 
 def _is_unsafe_flag(executable: str, token: str) -> bool:
